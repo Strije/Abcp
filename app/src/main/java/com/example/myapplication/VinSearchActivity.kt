@@ -141,8 +141,9 @@ fun parseVehicleContext(raw: String): LaximoVehicleContext {
     val arr = JsonParser.parseString(raw).asJsonArray
     val o = arr[0].asJsonObject
     return LaximoVehicleContext(
-        catalog = o["catalog"].asString,
-        brand = o["brand"].asString,
+        catalog = o["catalog"].asString,git pull
+
+                brand = o["brand"].asString,
         name = o["name"].asString,
         vehicleId = o["vehicleId"].asString,
         ssd = o["ssd"].asString
