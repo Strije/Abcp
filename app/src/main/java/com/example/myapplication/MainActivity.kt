@@ -48,6 +48,10 @@ class MainActivity : ComponentActivity() {
                                 autoLoginError = prettifyAbcpError(raw)
                                 checkingAutoLogin = false
                             }
+                        } catch (_: TimeoutCancellationException) {
+                            session.clear()
+                            autoLoginError = "Сервер долго не отвечает. Попробуйте ещё раз."
+                            checkingAutoLogin = false
                         } catch (_: Exception) {
                             session.clear()
                             autoLoginError = "Не удалось подключиться к серверу."
@@ -164,6 +168,8 @@ fun LoginScreen(
                             val raw = resp.errorBody()?.string()
                             error = prettifyAbcpError(raw)
                     }
+                    } catch (_: TimeoutCancellationException) {
+                        error = "Сервер долго не отвечает. Попробуйте ещё раз."
                     } catch (_: Exception) {
                         error = "Не удалось подключиться к серверу."
                     } finally {
