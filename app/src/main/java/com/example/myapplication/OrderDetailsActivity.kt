@@ -42,12 +42,14 @@ class OrderDetailsActivity : ComponentActivity() {
                     details = null
 
                     try {
-                        val resp = api.orderDetails(
-                            userlogin = session.login(),
-                            userpsw = session.passMd5(),
-                            number = orderNumber,
-                            format = "p"
-                        )
+                        val resp = performRequestWithRetry {
+                            api.orderDetails(
+                                userlogin = session.login(),
+                                userpsw = session.passMd5(),
+                                number = orderNumber,
+                                format = "p"
+                            )
+                        }
 
                         if (resp.isSuccessful) {
                             // ✅ ответ = Map<String, OrderDetailsDto>
