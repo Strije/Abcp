@@ -37,10 +37,12 @@ class OrdersActivity : ComponentActivity() {
                     orders = emptyList()
 
                     try {
-                        val resp = api.orders(
-                            userlogin = session.login(),
-                            userpsw = session.passMd5()
-                        )
+                        val resp = performRequestWithRetry {
+                            api.orders(
+                                userlogin = session.login(),
+                                userpsw = session.passMd5()
+                            )
+                        }
 
                         if (resp.isSuccessful) {
                             val body = resp.body()
