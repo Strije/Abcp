@@ -16,7 +16,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 class MainActivity : ComponentActivity() {
 
@@ -36,7 +38,9 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     if (session.isLoggedIn()) {
                         try {
-                            val resp = api.userInfo(session.login(), session.passMd5())
+                            val resp = withTimeout(15_000) {
+                                api.userInfo(session.login(), session.passMd5())
+                            }
                             if (resp.isSuccessful && resp.body() != null) {
                                 startActivity(Intent(this@MainActivity, CabinetActivity::class.java))
                                 finish()
@@ -46,6 +50,10 @@ class MainActivity : ComponentActivity() {
                                 autoLoginError = prettifyAbcpError(raw)
                                 checkingAutoLogin = false
                             }
+                        } catch (_: TimeoutCancellationException) {
+                            session.clear()
+                            autoLoginError = "Сервер долго не отвечает. Попробуйте ещё раз."
+                            checkingAutoLogin = false
                         } catch (_: Exception) {
                             session.clear()
                             autoLoginError = "Не удалось подключиться к серверу."
@@ -153,7 +161,9 @@ fun LoginScreen(
                 scope.launch {
                     try {
                         val passMd5 = md5(p)
-                        val resp = api.userInfo(l, passMd5)
+                        val resp = withTimeout(15_000) {
+                            api.userInfo(l, passMd5)
+                        }
 
                         if (resp.isSuccessful && resp.body() != null) {
                             session.save(l, passMd5)
@@ -162,6 +172,8 @@ fun LoginScreen(
                             val raw = resp.errorBody()?.string()
                             error = prettifyAbcpError(raw)
                     }
+                    } catch (_: TimeoutCancellationException) {
+                        error = "Сервер долго не отвечает. Попробуйте ещё раз."
                     } catch (_: Exception) {
                         error = "Не удалось подключиться к серверу."
                     } finally {
