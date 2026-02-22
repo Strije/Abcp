@@ -5,6 +5,7 @@ import com.example.myapplication.laximo.model.*
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -16,18 +17,42 @@ class LaximoRepository(
 ) {
 
     suspend fun findVehicle(identString: String): List<LaximoVehicleContext> = withContext(Dispatchers.IO) {
-        val raw = client.post("findVehicle", mapOf("identString" to identString))
-        val arr = JsonParser.parseString(raw).asJsonArray
-        arr.map { el: JsonElement ->
-            val o = el.asJsonObject
-            LaximoVehicleContext(
-                catalog = o["catalog"].asString,
-                vehicleId = o["vehicleId"].asString,
-                ssd = o["ssd"].asString,
-                brand = o.get("brand")?.asString,
-                name = o.get("name")?.asString
-            )
+        val query = identString.trim()
+        require(query.isNotBlank()) { "Идентификатор авто не указан" }
+
+        val attempts = buildList {
+            // Новый рекомендованный метод из USS (одинаково работает для VIN/FRAME/кузовного номера).
+            add("uss/autoInfo/findByIdentString" to mapOf("identString" to query))
+            // Исторически использовавшийся метод в CAT API.
+            add("cat/FindVehicle" to mapOf("identString" to query))
+
+            // Дополнительные методы для случаев, когда интегратор ограничил CAT-методы по типу идентификатора.
+            val looksLikeVin = query.length == 17 && query.uppercase(Locale.ROOT).all { it.isDigit() || it in 'A'..'Z' }
+            if (looksLikeVin) {
+                add("cat/FindVehicleByFrame" to mapOf("frame" to query))
+            } else {
+                add("cat/FindVehicleByFrame" to mapOf("frame" to query))
+                add("cat/FindVehicleByFrameNo" to mapOf("frameNo" to query))
+            }
         }
+
+        val errors = mutableListOf<String>()
+        for ((path, params) in attempts) {
+            runCatching {
+                val raw = client.post(path, params)
+                parseVehicleContexts(raw)
+            }.onSuccess { result ->
+                if (result.isNotEmpty()) return@withContext result
+            }.onFailure { ex ->
+                errors += "$path: ${ex.message ?: ex.javaClass.simpleName}"
+            }
+        }
+
+        if (errors.isNotEmpty()) {
+            throw IllegalStateException("Не удалось расшифровать VIN/FRAME. Попытки: ${errors.joinToString(" | ")}")
+        }
+
+        emptyList()
     }
 
     suspend fun listCategories(ctx: LaximoVehicleContext): List<LaximoCategory> = withContext(Dispatchers.IO) {
@@ -186,10 +211,51 @@ class LaximoRepository(
     }
 }
 
+private fun parseVehicleContexts(raw: String): List<LaximoVehicleContext> {
+    val root = JsonParser.parseString(raw)
+    val array = when {
+        root.isJsonArray -> root.asJsonArray
+        root.isJsonObject -> {
+            val o = root.asJsonObject
+            when {
+                o.get("rows")?.isJsonArray == true -> o.getAsJsonArray("rows")
+                o.get("result")?.isJsonArray == true -> o.getAsJsonArray("result")
+                o.get("vehicles")?.isJsonArray == true -> o.getAsJsonArray("vehicles")
+                o.get("data")?.isJsonArray == true -> o.getAsJsonArray("data")
+                else -> return emptyList()
+            }
+        }
+        else -> return emptyList()
+    }
+
+    return array.mapNotNull { el: JsonElement ->
+        val o = el.asJsonObject
+        val catalog = o.stringOrNullAny("catalog", "Catalog") ?: return@mapNotNull null
+        val vehicleId = o.stringOrNullAny("vehicleId", "vehicleid", "VehicleId") ?: return@mapNotNull null
+        val ssd = o.stringOrNullAny("ssd", "SSD") ?: return@mapNotNull null
+
+        LaximoVehicleContext(
+            catalog = catalog,
+            vehicleId = vehicleId,
+            ssd = ssd,
+            brand = o.stringOrNullAny("brand", "Brand", "manufacturer"),
+            name = o.stringOrNullAny("name", "Name", "model", "vehicle")
+        )
+    }
+}
+
 private fun JsonObject.stringOrNull(name: String): String? {
     val value = get(name) ?: return null
     if (value.isJsonNull) return null
     return value.asString
+}
+
+private fun JsonObject.stringOrNullAny(vararg names: String): String? {
+    for (name in names) {
+        val value = stringOrNull(name)
+        if (!value.isNullOrBlank()) return value
+    }
+    return null
 }
 
 private fun JsonObject.booleanOrFalse(name: String): Boolean {
