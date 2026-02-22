@@ -85,6 +85,14 @@ class CabinetActivity : ComponentActivity() {
                                 ) {
                                     Text("Поиск по VIN или гос. номер Вашего авто")
                                 }
+                                Button(
+                                    onClick = {
+                                        startActivity(Intent(this@CabinetActivity, GarageActivity::class.java))
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Мой гараж")
+                                }
                             }
                         }
                     }

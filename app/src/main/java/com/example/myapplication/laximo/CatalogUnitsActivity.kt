@@ -1,5 +1,8 @@
-package com.example.myapplication
+package com.example.myapplication.laximo
 
+import com.example.myapplication.laximo.resolveLaximoImage
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -10,57 +13,85 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.myapplication.laximo.LaximoApiException
-import com.example.myapplication.laximo.LaximoClient
-import com.example.myapplication.laximo.LaximoRepository
-import com.google.gson.JsonParser
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-
-data class LaximoUnitUi(val id: String, val name: String)
+import coil.ImageLoader
+import coil.compose.SubcomposeAsyncImage
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
+import coil.request.ImageRequest
+import com.example.myapplication.BuildConfig
+import com.example.myapplication.UnitDetailsActivity
+import com.example.myapplication.laximo.model.LaximoCategory
+import com.example.myapplication.laximo.model.LaximoUnit
+import com.example.myapplication.laximo.model.LaximoVehicleContext
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 class CatalogUnitsActivity : ComponentActivity() {
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val catalog = intent.getStringExtra("catalog").orEmpty()
-        val vehicleId = intent.getStringExtra("vehicleId").orEmpty()
-        val ssd = intent.getStringExtra("ssd").orEmpty()
-        val categoryId = intent.getStringExtra("categoryId").orEmpty()
-        val categoryName = intent.getStringExtra("categoryName").orEmpty()
-
-        val repo = LaximoRepository(
+    private val repo: LaximoRepository by lazy {
+        LaximoRepository(
             LaximoClient(
                 username = BuildConfig.LAXIMO_USER,
                 password = BuildConfig.LAXIMO_PASS,
                 language = "ru_RU"
             )
         )
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val catalog = intent.getStringExtra("catalog").orEmpty()
+        val vehicleId = intent.getStringExtra("vehicleId").orEmpty()
+        val ssd = intent.getStringExtra("ssd").orEmpty() // SSD категории!
+        val categoryId = intent.getStringExtra("categoryId").orEmpty()
+        val categoryName = intent.getStringExtra("categoryName").orEmpty()
+
+        val ctx = LaximoVehicleContext(catalog = catalog, vehicleId = vehicleId, ssd = ssd)
+        val category = LaximoCategory(
+            categoryId = categoryId,
+            name = categoryName,
+            ssd = ssd,
+            childrens = false
+        )
 
         setContent {
             MaterialTheme {
+                val context = LocalContext.current
+
+                // ✅ ImageLoader с поддержкой GIF
+                val imageLoader = remember {
+                    ImageLoader.Builder(context)
+                        .components {
+                            if (Build.VERSION.SDK_INT >= 28) {
+                                add(ImageDecoderDecoder.Factory())
+                            } else {
+                                add(GifDecoder.Factory())
+                            }
+                        }
+                        .build()
+                }
+
+                val scope = rememberCoroutineScope()
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
-                var units by remember { mutableStateOf<List<LaximoUnitUi>>(emptyList()) }
+                var units by remember { mutableStateOf<List<LaximoUnit>>(emptyList()) }
 
-                LaunchedEffect(Unit) {
-                    try {
-                        val raw = withContext(Dispatchers.IO) {
-                            repo.listUnits(catalog, vehicleId, ssd, categoryId)
+                LaunchedEffect(categoryId, ssd) {
+                    loading = true
+                    error = null
+                    scope.launch {
+                        try {
+                            units = repo.listUnits(ctx, category)
+                        } catch (e: Exception) {
+                            error = e.message ?: e.javaClass.simpleName
+                        } finally {
+                            loading = false
                         }
-                        Log.d("LAXIMO_CAT", "units raw=$raw")
-                        units = parseUnits(raw)
-                    } catch (e: LaximoApiException) {
-                        error = e.pretty
-                    } catch (e: Exception) {
-                        Log.e("LAXIMO_CAT", "EX=${e.message}", e)
-                        error = "Ошибка загрузки узлов."
-                    } finally {
-                        loading = false
                     }
                 }
 
@@ -69,23 +100,106 @@ class CatalogUnitsActivity : ComponentActivity() {
                 ) { padding ->
                     Box(Modifier.fillMaxSize().padding(padding)) {
                         when {
-                            loading -> CircularProgressIndicator(Modifier.padding(24.dp))
-                            error != null -> Text(error!!, Modifier.padding(24.dp))
-                            else -> LazyColumn(
-                                contentPadding = PaddingValues(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                items(units) { u ->
-                                    ElevatedCard(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                // Следующий шаг: UnitDetailsActivity (схема + OEM)
-                                                // Пока просто лог:
-                                                Log.d("LAXIMO_CAT", "open unit id=${u.id}")
+                            loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                            error != null -> Text(error!!, Modifier.padding(16.dp))
+                            else -> {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(units) { u ->
+                                        val url = remember(u.imageUrl) {
+                                            u.imageUrl.resolveLaximoImage(240)
+                                        }
+
+                                        ElevatedCard(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    val i = Intent(
+                                                        this@CatalogUnitsActivity,
+                                                        UnitDetailsActivity::class.java
+                                                    )
+                                                    i.putExtra("catalog", catalog)
+                                                    i.putExtra("vehicleId", vehicleId)
+
+                                                    // ⚠️ ВАЖНО: SSD УЗЛА
+                                                    i.putExtra("unitSsd", u.ssd)
+
+                                                    i.putExtra("unitId", u.unitId)
+                                                    i.putExtra("unitName", u.name)
+
+                                                    // Лучше передавать уже "починенный" url
+                                                    i.putExtra("imageUrl", url)
+
+                                                    startActivity(i)
+                                                }
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(12.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                // ✅ SubcomposeAsyncImage покажет лоадер/ошибку
+                                                SubcomposeAsyncImage(
+                                                    model = ImageRequest.Builder(context)
+                                                        .data(url)
+                                                        .crossfade(true)
+                                                        .listener(
+                                                            onError = { _, result ->
+                                                                Log.e(
+                                                                    "LAXIMO_IMG",
+                                                                    "Image load error url=$url, unitId=${u.unitId}",
+                                                                    result.throwable
+                                                                )
+                                                            }
+                                                        )
+                                                        .build(),
+                                                    imageLoader = imageLoader,
+                                                    contentDescription = u.name,
+                                                    modifier = Modifier.size(72.dp),
+                                                    loading = {
+                                                        Box(
+                                                            Modifier.size(72.dp),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            CircularProgressIndicator(
+                                                                modifier = Modifier.size(20.dp),
+                                                                strokeWidth = 2.dp
+                                                            )
+                                                        }
+                                                    },
+                                                    error = {
+                                                        Box(
+                                                            Modifier.size(72.dp),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text("X", style = MaterialTheme.typography.titleMedium)
+                                                        }
+                                                    }
+                                                )
+
+                                                Spacer(Modifier.width(12.dp))
+
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = u.name,
+                                                        style = MaterialTheme.typography.titleSmall
+                                                    )
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text(
+                                                        text = "Код: ${u.code ?: "—"}",
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                    Text(
+                                                        text = "unitId: ${u.unitId}",
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                }
                                             }
-                                    ) {
-                                        Text(u.name, Modifier.padding(16.dp))
+                                        }
                                     }
                                 }
                             }
@@ -97,37 +211,7 @@ class CatalogUnitsActivity : ComponentActivity() {
     }
 }
 
-fun parseUnits(raw: String): List<LaximoUnitUi> {
-    val root = JsonParser.parseString(raw)
-    val list = mutableListOf<LaximoUnitUi>()
-
-    fun addFromArray(arrName: String): Boolean {
-        val obj = root.asJsonObject
-        if (!obj.has(arrName)) return false
-        val arr = obj.getAsJsonArray(arrName)
-        arr.forEach { el ->
-            val o = el.asJsonObject
-            val id = (o["unitId"] ?: o["id"])?.asString ?: return@forEach
-            val name = (o["name"] ?: o["title"])?.asString ?: id
-            list += LaximoUnitUi(id, name)
-        }
-        return list.isNotEmpty()
-    }
-
-    if (root.isJsonObject) {
-        if (addFromArray("units")) return list
-        if (addFromArray("unit")) return list
-        if (addFromArray("data")) return list
-    }
-
-    if (root.isJsonArray) {
-        root.asJsonArray.forEach { el ->
-            val o = el.asJsonObject
-            val id = (o["unitId"] ?: o["id"])?.asString ?: return@forEach
-            val name = (o["name"] ?: o["title"])?.asString ?: id
-            list += LaximoUnitUi(id, name)
-        }
-    }
-
-    return list
-}
+/**
+ * Laximo отдаёт ссылки с плейсхолдером %size% — его нужно заменить.
+ * Пример: .../%size%/... -> .../240/...
+ */

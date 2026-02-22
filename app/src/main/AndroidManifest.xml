@@ -21,6 +21,10 @@
         <activity android:name=".VinSearchActivity" />
         <activity android:name=".CatalogCategoriesActivity" />
         <activity android:name=".CatalogUnitsActivity" />
+        <activity android:name=".laximo.CatalogCategoriesActivity" />
+        <activity android:name=".laximo.CatalogUnitsActivity" />
+        <activity android:name=".UnitDetailsActivity" />
+        <activity android:name=".GarageActivity" />
 
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

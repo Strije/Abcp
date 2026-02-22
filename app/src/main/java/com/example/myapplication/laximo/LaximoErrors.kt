@@ -25,19 +25,9 @@ fun prettifyLaximoError(message: String): String {
         "E_UNKNOWNCOMMAND" -> withInfo("Неизвестная операция")
         "E_ACCESSDENIED" -> withInfo("Доступ запрещён")
         "E_NOTSUPPORTED" -> withInfo("Операция не поддерживается каталогом")
-        "E_GROUP_IS_NOT_SEARCHABLE" -> withInfo("Поиск по группе запрещён")
         "E_TOO_MANY_REQUESTS" -> withInfo("Превышен лимит запросов. Попробуйте позже")
-        "E_STANDARD_PART_SEARCH" -> withInfo("Стандартная деталь, поиск ограничен")
-        "E_ACCESSLIMITREACHED" -> "Достигнут лимит доступа."
-        "E_CATALOG_FEATURE_NOT_SUPPORTED" -> withInfo("Функция features не поддерживается")
-        "E_OPERATION_NOT_FOUND" -> withInfo("Операция не найдена")
-        "E_TEMPORARY_UNAVAILABLE" -> withInfo("Сервис временно недоступен")
         "E_TIMEOUT" -> withInfo("Превышено время ожидания")
         "E_UNEXPECTED_PROBLEM" -> "Сбой сервиса Laximo."
         else -> message
     }
-}
-
-class LaximoApiException(val rawMessage: String) : Exception(rawMessage) {
-    val pretty: String get() = prettifyLaximoError(rawMessage)
 }

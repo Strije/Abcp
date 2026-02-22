@@ -1,51 +1,88 @@
 package com.example.myapplication.laximo
 
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 class LaximoClient(
     private val username: String,
     private val password: String,
     private val language: String = "ru_RU",
-    private val baseUrl: String = "https://ws.laximo.ru"
 ) {
+    // ✅ Таймауты, чтобы запрос не "висел" бесконечно
     private val http = OkHttpClient.Builder()
-        .addInterceptor { chain ->
-            val req = chain.request().newBuilder()
-                .header("Authorization", Credentials.basic(username, password))
-                .header("Accept-Language", language)
-                .header("accept", "application/json")
-                .build()
-            chain.proceed(req)
-        }
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    suspend fun post(operation: String, params: Map<String, String>): String = withContext(Dispatchers.IO) {
-        val urlBuilder = (baseUrl.trimEnd('/') + "/restApi/v1/$operation")
-            .toHttpUrl()
-            .newBuilder()
+    private val baseUrl = "https://ws.laximo.ru/restApi/v1/"
 
-        params.forEach { (k, v) -> urlBuilder.addQueryParameter(k, v) }
+    /**
+     * Laximo REST API: только HTTPS + POST.
+     * Параметры передаём в query string, body можно оставить пустым.
+     */
+    fun post(path: String, query: Map<String, String>): String {
+        val urlBuilder = (baseUrl + path.trimStart('/')).toHttpUrl().newBuilder()
+
+        query.forEach { (k, v) ->
+            // Не кодируй SSD руками — OkHttp сам правильно кодирует один раз.
+            urlBuilder.addQueryParameter(k, v)
+        }
+
         val url = urlBuilder.build()
+
+        val req = Request.Builder()
+            .url(url)
+            .post("".toRequestBody("application/json".toMediaType()))
+            .header("Authorization", Credentials.basic(username, password))
+            .header("accept-language", language)
+            .build()
 
         Log.d("LAXIMO_HTTP", "--> POST $url")
 
-        val request = Request.Builder()
-            .url(url)
-            // Laximo REST: POST, но параметры в query. Тело можно не отправлять.
-            .post(okhttp3.RequestBody.create(null, ByteArray(0)))
-            .build()
-
-        http.newCall(request).execute().use { resp ->
+        http.newCall(req).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
+
+            // ✅ Теперь ты увидишь, что реально вернул сервер
             Log.d("LAXIMO_HTTP", "<-- HTTP ${resp.code}")
-            if (!resp.isSuccessful) throw RuntimeException("Laximo HTTP ${resp.code}: $body")
-            body
+            Log.d("LAXIMO_HTTP", "BODY: $body")
+
+            // Если HTTP не 2xx — это уже ошибка
+            if (!resp.isSuccessful) {
+                throw RuntimeException("Laximo HTTP ${resp.code}: $body")
+            }
+
+            // Иногда Laximo шлёт ошибку даже с 200 — ловим {"message":"E_...:..."}
+            val parsed = LaximoErrorParser.tryParse(body)
+            if (parsed != null) throw parsed
+
+            return body
         }
+    }
+}
+
+private object LaximoErrorParser {
+    fun tryParse(body: String): LaximoApiException? {
+        // минимальный парсер: ловим {"message":"E_...:..."}
+        val m = Regex("\"message\"\\s*:\\s*\"([^\"]+)\"")
+            .find(body)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return null
+
+        if (!m.startsWith("E_")) return null
+
+        val parts = m.split(":", limit = 2)
+        val code = parts[0]
+        val extra = parts.getOrNull(1)
+
+        return LaximoApiException(code = code, extra = extra)
     }
 }

@@ -5,19 +5,19 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.myapplication.laximo.LaximoApiException
 import com.example.myapplication.laximo.LaximoClient
 import com.example.myapplication.laximo.LaximoRepository
 import com.example.myapplication.laximo.model.LaximoVehicleContext
-import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,109 +25,142 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 class VinSearchActivity : ComponentActivity() {
 
+    private val repo: LaximoRepository by lazy {
+        LaximoRepository(
+            LaximoClient(
+                username = BuildConfig.LAXIMO_USER,
+                password = BuildConfig.LAXIMO_PASS,
+                language = "ru_RU"
+            )
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val laximoClient = LaximoClient(
-            username = BuildConfig.LAXIMO_USER,
-            password = BuildConfig.LAXIMO_PASS,
-            language = "ru_RU"
-        )
-        val repo = LaximoRepository(laximoClient)
+        // VIN может прийти из GarageActivity
+        val prefillVin = intent.getStringExtra("prefillVin").orEmpty()
 
         setContent {
             MaterialTheme {
+                val ctx = LocalContext.current
                 val scope = rememberCoroutineScope()
 
-                var query by remember { mutableStateOf("") }
+                var vinText by remember { mutableStateOf(prefillVin) }
                 var loading by remember { mutableStateOf(false) }
                 var error by remember { mutableStateOf<String?>(null) }
-                var rawResult by remember { mutableStateOf<String?>(null) }
+                var results by remember { mutableStateOf<List<LaximoVehicleContext>>(emptyList()) }
+
+                fun onSearchClick() {
+                    val vin = vinText.trim()
+                    if (vin.isBlank()) {
+                        error = "Введите VIN"
+                        return
+                    }
+
+                    loading = true
+                    error = null
+                    results = emptyList()
+
+                    scope.launch {
+                        try {
+                            val list = withContext(Dispatchers.IO) {
+                                repo.findVehicle(vin)
+                            }
+                            results = list
+                        } catch (e: Exception) {
+                            Log.e("VIN_SEARCH", "EX", e)
+                            error = e.message ?: e.javaClass.simpleName
+                        } finally {
+                            loading = false
+                        }
+                    }
+                }
+
+                // Автозапуск поиска, если VIN пришёл из "Мой гараж"
+                LaunchedEffect(prefillVin) {
+                    if (prefillVin.isNotBlank()) {
+                        onSearchClick()
+                    }
+                }
 
                 Scaffold(
-                    topBar = { TopAppBar(title = { Text("Каталог по VIN/номеру") }) }
+                    topBar = { TopAppBar(title = { Text("Поиск по VIN") }) }
                 ) { padding ->
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)
-                            .padding(16.dp),
+                            .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("Введите VIN или гос. номер", style = MaterialTheme.typography.titleMedium)
-
                         OutlinedTextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            modifier = Modifier.fillMaxWidth(),
+                            value = vinText,
+                            onValueChange = { vinText = it },
+                            label = { Text("VIN") },
                             singleLine = true,
-                            label = { Text("VIN или гос. номер") },
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Ascii,
-                                imeAction = ImeAction.Done
-                            )
+                            modifier = Modifier.fillMaxWidth()
                         )
 
-                        if (error != null) {
-                            Text(error!!, color = MaterialTheme.colorScheme.error)
-                        }
-
                         Button(
+                            onClick = { onSearchClick() },
                             enabled = !loading,
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                val q = query.trim()
-                                if (q.isBlank()) {
-                                    error = "Введите VIN или гос. номер."
-                                    return@Button
-                                }
-
-                                loading = true
-                                error = null
-                                rawResult = null
-
-                                scope.launch {
-                                    try {
-                                        val json = withContext(Dispatchers.IO) {
-                                            val isVin = q.length == 17
-                                            if (isVin) repo.findVehicle(q) else repo.findVehicleByPlateNumber(q)
-                                        }
-
-                                        val ctx = parseVehicleContext(json)
-
-                                        startActivity(
-                                            Intent(this@VinSearchActivity, CatalogCategoriesActivity::class.java).apply {
-                                                putExtra("catalog", ctx.catalog)
-                                                putExtra("vehicleId", ctx.vehicleId)
-                                                putExtra("ssd", ctx.ssd)
-                                                putExtra("brand", ctx.brand)
-                                                putExtra("name", ctx.name)
-                                            }
-                                        )
-
-                                        Log.d("LAXIMO", "result=$json")
-                                        rawResult = json
-                                    } catch (e: LaximoApiException) {
-                                        error = e.pretty
-                                    } catch (e: Exception) {
-                                        Log.e("LAXIMO", "EX class=${e::class.java.name} msg=${e.message}", e)
-                                        error = "Laximo: ${e::class.java.simpleName}: ${e.message ?: "no message"}"
-                                    } finally {
-                                        loading = false
-                                    }
-                                }
-                            }
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(if (loading) "Поиск..." else "Найти")
                         }
 
-                        if (rawResult != null) {
-                            ElevatedCard(Modifier.fillMaxWidth()) {
-                                Text(
-                                    text = rawResult!!,
-                                    modifier = Modifier.padding(12.dp),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                        if (error != null) {
+                            Text(
+                                text = "Ошибка: $error",
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        if (loading) {
+                            Box(Modifier.fillMaxWidth()) {
+                                CircularProgressIndicator(Modifier.align(Alignment.Center))
+                            }
+                        }
+
+                        if (!loading && error == null) {
+                            if (results.isEmpty()) {
+                                Text("Ничего не найдено")
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(results) { r ->
+                                        ElevatedCard(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    // Переход к категориям выбранного каталога
+                                                    val i = Intent(
+                                                        ctx,
+                                                        com.example.myapplication.laximo.CatalogCategoriesActivity::class.java
+                                                    )
+                                                    i.putExtra("catalog", r.catalog)
+                                                    i.putExtra("vehicleId", r.vehicleId)
+                                                    i.putExtra("ssd", r.ssd)
+                                                    i.putExtra("brand", r.brand ?: "")
+                                                    i.putExtra("name", r.name ?: "")
+                                                    startActivity(i)
+                                                }
+                                        ) {
+                                            Column(Modifier.padding(12.dp)) {
+                                                Text(
+                                                    text = "${r.brand ?: ""} ${r.name ?: ""}".trim().ifBlank { r.catalog },
+                                                    style = MaterialTheme.typography.titleMedium
+                                                )
+                                                Spacer(Modifier.height(4.dp))
+                                                Text("catalog: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
+                                                Text("vehicleId: ${r.vehicleId}", style = MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -135,17 +168,4 @@ class VinSearchActivity : ComponentActivity() {
             }
         }
     }
-}
-
-fun parseVehicleContext(raw: String): LaximoVehicleContext {
-    val arr = JsonParser.parseString(raw).asJsonArray
-    val o = arr[0].asJsonObject
-    return LaximoVehicleContext(
-        catalog = o["catalog"].asString,git pull
-
-                brand = o["brand"].asString,
-        name = o["name"].asString,
-        vehicleId = o["vehicleId"].asString,
-        ssd = o["ssd"].asString
-    )
 }
