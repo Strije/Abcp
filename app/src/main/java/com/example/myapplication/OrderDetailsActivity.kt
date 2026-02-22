@@ -1,7 +1,7 @@
 package com.example.myapplication
 
+import androidx.compose.material3.ExperimentalMaterial3Api
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-
 @OptIn(ExperimentalMaterial3Api::class)
 class OrderDetailsActivity : ComponentActivity() {
 
@@ -21,59 +20,46 @@ class OrderDetailsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ✅ Посмотрим, что реально пришло в intent
-        intent.extras?.keySet()?.forEach { k ->
-            Log.d("NAV", "OrderDetails extra: $k = ${intent.extras?.get(k)}")
-        }
-
         val session = SessionManager(this)
-        val orderNumber = intent.getStringExtra("order_number")?.trim().orEmpty()
-        Log.d("NAV", "OrderDetails order_number='$orderNumber'")
+
+        val orderNumber = intent.getStringExtra(EXTRA_ORDER_NUMBER)
+        if (orderNumber.isNullOrBlank()) {
+            finish()
+            return
+        }
 
         setContent {
             MaterialTheme {
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
-                var order by remember { mutableStateOf<OrderDetailsDto?>(null) }
+
+                // ✅ тут будет OrderDetailsDto
+                var details by remember { mutableStateOf<OrderDetailsDto?>(null) }
 
                 LaunchedEffect(orderNumber) {
-                    // ✅ НЕ дергаем API если номер пустой
-                    if (orderNumber.isBlank()) {
-                        Log.d("ORDER_LIST_API", "orderNumber is blank - skip request")
-                        error = "Не передан номер заказа."
-                        loading = false
-                        return@LaunchedEffect
-                    }
+                    loading = true
+                    error = null
+                    details = null
 
                     try {
-                        val params = mapOf(
-                            "userlogin" to session.login(),
-                            "userpsw" to session.passMd5(),
-                            "orders[0]" to orderNumber
+                        val resp = api.orderDetails(
+                            userlogin = session.login(),
+                            userpsw = session.passMd5(),
+                            number = orderNumber,
+                            format = "p"
                         )
 
-                        Log.d("ORDER_LIST_API", "orders[0]='${params["orders[0]"]}'")
-
-                        val resp = api.ordersList(params)
-                        Log.d("ORDER_LIST_API", "HTTP=${resp.code()} order=$orderNumber")
-
                         if (resp.isSuccessful) {
-                            val body = resp.body()
-                            Log.d("ORDER_LIST_API", "map.size=${body?.size}")
-
-                            order = body?.values?.firstOrNull()
-
-                            Log.d(
-                                "ORDER_LIST_API",
-                                "loaded: number=${order?.number}, positions=${order?.positions?.size}"
-                            )
+                            // ✅ ответ = Map<String, OrderDetailsDto>
+                            details = resp.body()?.values?.firstOrNull()
+                            if (details == null) {
+                                error = "Пустой ответ от сервера."
+                            }
                         } else {
-                            val err = resp.errorBody()?.string()
-                            Log.d("ORDER_LIST_API", "ERROR=$err")
-                            error = prettifyAbcpError(err)
+                            val raw = resp.errorBody()?.string()
+                            error = prettifyAbcpError(raw)
                         }
-                    } catch (e: Exception) {
-                        Log.d("ORDER_LIST_API", "EX=${e.message}", e)
+                    } catch (_: Exception) {
                         error = "Не удалось подключиться к серверу."
                     } finally {
                         loading = false
@@ -81,50 +67,87 @@ class OrderDetailsActivity : ComponentActivity() {
                 }
 
                 Scaffold(
-                    topBar = { TopAppBar(title = { Text("Заказ № ${if (orderNumber.isBlank()) "—" else orderNumber}") }) }
+                    topBar = { TopAppBar(title = { Text("Заказ №$orderNumber") }) }
                 ) { padding ->
-                    Box(Modifier.fillMaxSize().padding(padding)) {
+                    Box(
+                        modifier = Modifier
+                            .padding(padding)
+                            .fillMaxSize()
+                    ) {
                         when {
                             loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                            error != null -> Text(error!!, Modifier.padding(24.dp))
-                            order == null -> Text("Заказ не найден", Modifier.padding(24.dp))
-                            else -> {
-                                val positions = order?.positions.orEmpty()
 
-                                LazyColumn(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    item {
-                                        ElevatedCard(Modifier.fillMaxWidth()) {
-                                            Column(Modifier.padding(16.dp)) {
-                                                Text("Статус: ${order?.status ?: "—"}")
-                                                Text("Сумма: ${order?.sum ?: "—"}")
-                                                Text("Дата: ${order?.date ?: "—"}")
-                                            }
-                                        }
-                                    }
+                            !error.isNullOrBlank() -> Text(
+                                text = error!!,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .padding(16.dp)
+                            )
 
-                                    item { Spacer(Modifier.height(8.dp)) }
-                                    item { Text("Позиции", style = MaterialTheme.typography.titleMedium) }
+                            details == null -> Text(
+                                "Данные заказа не найдены",
+                                modifier = Modifier.align(Alignment.Center)
+                            )
 
-                                    items(positions) { p: OrderPositionDto ->
-                                        ElevatedCard(Modifier.fillMaxWidth()) {
-                                            Column(Modifier.padding(16.dp)) {
-                                                Text(p.description ?: "—", style = MaterialTheme.typography.titleSmall)
-                                                Spacer(Modifier.height(6.dp))
-                                                Text("Бренд: ${p.brand ?: "—"}")
-                                                Text("Номер: ${p.number ?: "—"}")
-                                                Text("Кол-во: ${p.quantity ?: p.quantityOrdered ?: "—"}")
-                                                Text("Цена: ${p.priceInSiteCurrency ?: p.price ?: "—"}")
-                                                Text("Статус: ${p.status ?: "—"}")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            else -> OrderDetailsContent(details!!)
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    companion object {
+        const val EXTRA_ORDER_NUMBER = "extra_order_number"
+    }
+}
+
+@Composable
+private fun OrderDetailsContent(details: OrderDetailsDto) {
+    val positions = details.positions.orEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text("Статус: ${details.status ?: "-"}", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(6.dp))
+        Text("Дата: ${details.date ?: "-"}")
+        Spacer(Modifier.height(6.dp))
+        Text("Сумма: ${details.sum ?: "-"}")
+        Spacer(Modifier.height(6.dp))
+        Text("Доставка: ${details.deliveryAddress ?: "-"} / ${details.deliveryOffice ?: "-"}")
+        Spacer(Modifier.height(12.dp))
+        Divider()
+        Spacer(Modifier.height(12.dp))
+
+        Text("Позиции (${positions.size})", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(8.dp))
+
+        if (positions.isEmpty()) {
+            Text("Позиции отсутствуют")
+            return
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(positions) { p ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = "${p.brand ?: ""} ${p.number ?: ""}".trim().ifEmpty { "-" },
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(p.description ?: "-", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text("Кол-во: ${p.quantity ?: p.quantityOrdered ?: "-"}  Цена: ${p.price ?: "-"}")
+                        Spacer(Modifier.height(4.dp))
+                        Text("Статус: ${p.status ?: "-"}")
                     }
                 }
             }

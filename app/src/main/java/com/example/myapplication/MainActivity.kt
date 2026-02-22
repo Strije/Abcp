@@ -16,7 +16,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.google.gson.Gson
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 
@@ -31,31 +35,45 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                var checkingAutoLogin by remember { mutableStateOf(session.isLoggedIn()) }
+                var checkingAutoLogin by remember { mutableStateOf(true) }
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
+                var inFlight by remember { mutableStateOf(false) }
+
+                fun goToCabinet(user: UserInfoDto) {
+                    val json = Gson().toJson(user)
+                    startActivity(
+                        Intent(this@MainActivity, CabinetActivity::class.java)
+                            .putExtra(CabinetActivity.EXTRA_USER_JSON, json)
+                    )
+                    finish()
+                }
 
                 // Автологин
                 LaunchedEffect(Unit) {
-                    if (session.isLoggedIn()) {
+                    if (session.isLoggedIn() && !inFlight) {
+                        inFlight = true
                         try {
-                            val resp = requestUserInfoWithRetry(api, session.login(), session.passMd5())
-                            if (resp.isSuccessful && resp.body() != null) {
-                                startActivity(Intent(this@MainActivity, CabinetActivity::class.java))
-                                finish()
+                            val resp = requestUserInfoWithRetry(
+                                api = api,
+                                login = session.login(),
+                                passMd5 = session.passMd5()
+                            )
+
+                            val user = resp.body()
+                            if (resp.isSuccessful && user != null) {
+                                goToCabinet(user)
                             } else {
                                 val raw = resp.errorBody()?.string()
                                 session.clear()
                                 autoLoginError = prettifyAbcpError(raw)
                                 checkingAutoLogin = false
                             }
-                        } catch (_: TimeoutCancellationException) {
-                            session.clear()
-                            autoLoginError = "Сервер долго не отвечает. Попробуйте ещё раз."
-                            checkingAutoLogin = false
                         } catch (_: Exception) {
                             session.clear()
                             autoLoginError = "Не удалось подключиться к серверу."
                             checkingAutoLogin = false
+                        } finally {
+                            inFlight = false
                         }
                     } else {
                         checkingAutoLogin = false
@@ -71,9 +89,8 @@ class MainActivity : ComponentActivity() {
                         api = api,
                         session = session,
                         initialError = autoLoginError,
-                        onSuccess = {
-                            startActivity(Intent(this@MainActivity, CabinetActivity::class.java))
-                            finish()
+                        onSuccess = { user ->
+                            goToCabinet(user)
                         }
                     )
                 }
@@ -87,7 +104,7 @@ fun LoginScreen(
     api: AbcpApi,
     session: SessionManager,
     initialError: String? = null,
-    onSuccess: () -> Unit
+    onSuccess: (UserInfoDto) -> Unit
 ) {
     var login by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -161,15 +178,14 @@ fun LoginScreen(
                         val passMd5 = md5(p)
                         val resp = requestUserInfoWithRetry(api, l, passMd5)
 
-                        if (resp.isSuccessful && resp.body() != null) {
+                        val user = resp.body()
+                        if (resp.isSuccessful && user != null) {
                             session.save(l, passMd5)
-                            onSuccess()
+                            onSuccess(user)
                         } else {
                             val raw = resp.errorBody()?.string()
                             error = prettifyAbcpError(raw)
-                    }
-                    } catch (_: TimeoutCancellationException) {
-                        error = "Сервер долго не отвечает. Попробуйте ещё раз."
+                        }
                     } catch (_: Exception) {
                         error = "Не удалось подключиться к серверу."
                     } finally {
@@ -208,16 +224,18 @@ private suspend fun requestUserInfoWithRetry(
     passMd5: String,
     attempts: Int = 3
 ): retrofit2.Response<UserInfoDto> {
-    var lastError: IOException? = null
+    var lastError: Throwable? = null
 
     repeat(attempts) { index ->
         try {
             return api.userInfo(login, passMd5)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: IOException) {
             lastError = e
-            val canceledByClient = e.message?.contains("Canceled", ignoreCase = true) == true
+            if (!currentCoroutineContext().isActive) throw e
             val isLast = index == attempts - 1
-            if (isLast || !canceledByClient) throw e
+            if (isLast) throw e
             delay(700L * (index + 1))
         }
     }

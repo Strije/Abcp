@@ -1,30 +1,38 @@
+// ApiClient.kt
 package com.example.myapplication
 
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
-import java.util.concurrent.TimeUnit
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 object ApiClient {
+
+    // Поставь СВОЙ baseUrl (важно: должен заканчиваться на /)
+    // Например: https://id25202.public.api.abcp.ru/
     private const val BASE_URL = "https://id25202.public.api.abcp.ru/"
 
     fun create(): AbcpApi {
         val logging = HttpLoggingInterceptor().apply {
+            // Для диагностики лучше BODY, потом можно BASIC или NONE
             level = HttpLoggingInterceptor.Level.BASIC
         }
+
         val client = OkHttpClient.Builder()
-            .addInterceptor(logging)
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .writeTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .writeTimeout(25, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(logging)
             .build()
 
-        return Retrofit.Builder()
+        val retrofit = Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
             .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(AbcpApi::class.java)
+
+        return retrofit.create(AbcpApi::class.java)
     }
 }
