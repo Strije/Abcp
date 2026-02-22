@@ -32,8 +32,13 @@ class LaximoClient(
         val urlBuilder = (baseUrl + path.trimStart('/')).toHttpUrl().newBuilder()
 
         query.forEach { (k, v) ->
-            // Не кодируй SSD руками — OkHttp сам правильно кодирует один раз.
-            urlBuilder.addQueryParameter(k, v)
+            if (k.equals("ssd", ignoreCase = true) && looksEncoded(v)) {
+                // SSD иногда уже приходит URL-encoded (%24...%3D%3D%24).
+                // addEncodedQueryParameter не кодирует % повторно.
+                urlBuilder.addEncodedQueryParameter(k, v)
+            } else {
+                urlBuilder.addQueryParameter(k, v)
+            }
         }
 
         val url = urlBuilder.build()
@@ -66,6 +71,10 @@ class LaximoClient(
             return body
         }
     }
+}
+
+private fun looksEncoded(value: String): Boolean {
+    return Regex("%[0-9A-Fa-f]{2}").containsMatchIn(value)
 }
 
 private object LaximoErrorParser {

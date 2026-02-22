@@ -16,18 +16,38 @@ class LaximoRepository(
 ) {
 
     suspend fun findVehicle(identString: String): List<LaximoVehicleContext> = withContext(Dispatchers.IO) {
-        val raw = client.post("findVehicle", mapOf("identString" to identString))
-        val arr = JsonParser.parseString(raw).asJsonArray
-        arr.map { el: JsonElement ->
-            val o = el.asJsonObject
-            LaximoVehicleContext(
-                catalog = o["catalog"].asString,
-                vehicleId = o["vehicleId"].asString,
-                ssd = o["ssd"].asString,
-                brand = o.get("brand")?.asString,
-                name = o.get("name")?.asString
-            )
+        val query = identString.trim()
+        require(query.isNotBlank()) { "Идентификатор авто не указан" }
+
+        val attempts = listOf(
+            // В разных контурах Laximo встречаются различия по регистру имени команды и параметров.
+            "findVehicle" to mapOf("identString" to query),
+            "findVehicle" to mapOf("IdentString" to query),
+            "FindVehicle" to mapOf("identString" to query),
+            "FindVehicle" to mapOf("IdentString" to query),
+            "FindVehicleByFrame" to mapOf("frame" to query),
+            "FindVehicleByFrame" to mapOf("Frame" to query),
+            "FindVehicleByFrameNo" to mapOf("frameNo" to query),
+            "FindVehicleByFrameNo" to mapOf("FrameNo" to query)
+        )
+
+        val errors = mutableListOf<String>()
+        for ((path, params) in attempts) {
+            runCatching {
+                val raw = client.post(path, params)
+                parseVehicleContexts(raw)
+            }.onSuccess { result ->
+                if (result.isNotEmpty()) return@withContext result
+            }.onFailure { ex ->
+                errors += "$path: ${ex.message ?: ex.javaClass.simpleName}"
+            }
         }
+
+        if (errors.isNotEmpty()) {
+            throw IllegalStateException("Не удалось расшифровать VIN/FRAME. Попытки: ${errors.joinToString(" | ")}")
+        }
+
+        emptyList()
     }
 
     suspend fun listCategories(ctx: LaximoVehicleContext): List<LaximoCategory> = withContext(Dispatchers.IO) {
@@ -186,10 +206,57 @@ class LaximoRepository(
     }
 }
 
+private fun parseVehicleContexts(raw: String): List<LaximoVehicleContext> {
+    val root = JsonParser.parseString(raw)
+    val array = when {
+        root.isJsonArray -> root.asJsonArray
+        root.isJsonObject -> {
+            val o = root.asJsonObject
+            when {
+                o.get("catalog") != null && o.get("vehicleId") != null && o.get("ssd") != null -> {
+                    com.google.gson.JsonArray().apply { add(o) }
+                }
+                o.get("Catalog") != null && o.get("VehicleId") != null && o.get("SSD") != null -> {
+                    com.google.gson.JsonArray().apply { add(o) }
+                }
+                o.get("rows")?.isJsonArray == true -> o.getAsJsonArray("rows")
+                o.get("result")?.isJsonArray == true -> o.getAsJsonArray("result")
+                o.get("vehicles")?.isJsonArray == true -> o.getAsJsonArray("vehicles")
+                o.get("data")?.isJsonArray == true -> o.getAsJsonArray("data")
+                else -> return emptyList()
+            }
+        }
+        else -> return emptyList()
+    }
+
+    return array.mapNotNull { el: JsonElement ->
+        val o = el.asJsonObject
+        val catalog = o.stringOrNullAny("catalog", "Catalog") ?: return@mapNotNull null
+        val vehicleId = o.stringOrNullAny("vehicleId", "vehicleid", "VehicleId") ?: return@mapNotNull null
+        val ssd = o.stringOrNullAny("ssd", "SSD") ?: return@mapNotNull null
+
+        LaximoVehicleContext(
+            catalog = catalog,
+            vehicleId = vehicleId,
+            ssd = ssd,
+            brand = o.stringOrNullAny("brand", "Brand", "manufacturer"),
+            name = o.stringOrNullAny("name", "Name", "model", "vehicle")
+        )
+    }
+}
+
 private fun JsonObject.stringOrNull(name: String): String? {
     val value = get(name) ?: return null
     if (value.isJsonNull) return null
     return value.asString
+}
+
+private fun JsonObject.stringOrNullAny(vararg names: String): String? {
+    for (name in names) {
+        val value = stringOrNull(name)
+        if (!value.isNullOrBlank()) return value
+    }
+    return null
 }
 
 private fun JsonObject.booleanOrFalse(name: String): Boolean {
