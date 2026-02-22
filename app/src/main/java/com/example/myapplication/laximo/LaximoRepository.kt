@@ -21,7 +21,8 @@ class LaximoRepository(
         require(query.isNotBlank()) { "Идентификатор авто не указан" }
 
         val attempts = listOf(
-            // Swagger/REST v1: поддерживаем универсальный поиск по identString.
+            // В разных контурах Laximo встречаются оба варианта имени команды.
+            "findVehicle" to mapOf("identString" to query),
             "FindVehicle" to mapOf("identString" to query)
         )
 
