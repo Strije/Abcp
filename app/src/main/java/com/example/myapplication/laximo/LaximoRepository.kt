@@ -20,18 +20,10 @@ class LaximoRepository(
         val query = identString.trim()
         require(query.isNotBlank()) { "Идентификатор авто не указан" }
 
-        val looksLikeVin = query.length == 17 && query.uppercase(Locale.ROOT).all { it.isDigit() || it in 'A'..'Z' }
-
-        val attempts = buildList {
-            // Корректные команды CAT API (без префиксов cat/ или uss/ в REST path).
-            add("FindVehicle" to mapOf("identString" to query))
-            add("FindVehicleByFrame" to mapOf("frame" to query))
-
-            // Для frameNo / кузовных номеров пробуем отдельный метод.
-            if (!looksLikeVin) {
-                add("FindVehicleByFrameNo" to mapOf("frameNo" to query))
-            }
-        }
+        val attempts = listOf(
+            // Swagger/REST v1: поддерживаем универсальный поиск по identString.
+            "FindVehicle" to mapOf("identString" to query)
+        )
 
         val errors = mutableListOf<String>()
         for ((path, params) in attempts) {
