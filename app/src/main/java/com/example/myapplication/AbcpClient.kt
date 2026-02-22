@@ -13,26 +13,37 @@ object ApiClient {
     // Например: https://id25202.public.api.abcp.ru/
     private const val BASE_URL = "https://id25202.public.api.abcp.ru/"
 
-    fun create(): AbcpApi {
-        val logging = HttpLoggingInterceptor().apply {
-            // Для диагностики лучше BODY, потом можно BASIC или NONE
-            level = HttpLoggingInterceptor.Level.BASIC
+    private val loggingInterceptor by lazy {
+        HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
         }
+    }
 
-        val client = OkHttpClient.Builder()
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .writeTimeout(25, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(logging)
+            .addInterceptor(loggingInterceptor)
             .build()
+    }
 
-        val retrofit = Retrofit.Builder()
+    private val retrofit: Retrofit by lazy {
+        Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .client(client)
+            .client(httpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-
-        return retrofit.create(AbcpApi::class.java)
     }
+
+    private val api: AbcpApi by lazy {
+        retrofit.create(AbcpApi::class.java)
+    }
+
+    fun create(): AbcpApi = api
 }
