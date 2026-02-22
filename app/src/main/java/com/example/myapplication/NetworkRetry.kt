@@ -10,8 +10,8 @@ import retrofit2.Response
 import java.io.IOException
 
 suspend fun <T> performRequestWithRetry(
-    attempts: Int = 3,
-    initialDelayMs: Long = 700,
+    attempts: Int = 4,
+    initialDelayMs: Long = 500,
     request: suspend () -> Response<T>
 ): Response<T> {
     var lastError: Throwable? = null
@@ -25,7 +25,7 @@ suspend fun <T> performRequestWithRetry(
             lastError = e
             if (!currentCoroutineContext().isActive) throw e
             if (index == attempts - 1) throw e
-            delay(initialDelayMs * (index + 1))
+            delay(initialDelayMs * (index + 1) * (index + 1))
         }
     }
 
