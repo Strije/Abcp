@@ -20,19 +20,16 @@ class LaximoRepository(
         val query = identString.trim()
         require(query.isNotBlank()) { "Идентификатор авто не указан" }
 
-        val attempts = buildList {
-            // Новый рекомендованный метод из USS (одинаково работает для VIN/FRAME/кузовного номера).
-            add("uss/autoInfo/findByIdentString" to mapOf("identString" to query))
-            // Исторически использовавшийся метод в CAT API.
-            add("cat/FindVehicle" to mapOf("identString" to query))
+        val looksLikeVin = query.length == 17 && query.uppercase(Locale.ROOT).all { it.isDigit() || it in 'A'..'Z' }
 
-            // Дополнительные методы для случаев, когда интегратор ограничил CAT-методы по типу идентификатора.
-            val looksLikeVin = query.length == 17 && query.uppercase(Locale.ROOT).all { it.isDigit() || it in 'A'..'Z' }
-            if (looksLikeVin) {
-                add("cat/FindVehicleByFrame" to mapOf("frame" to query))
-            } else {
-                add("cat/FindVehicleByFrame" to mapOf("frame" to query))
-                add("cat/FindVehicleByFrameNo" to mapOf("frameNo" to query))
+        val attempts = buildList {
+            // Корректные команды CAT API (без префиксов cat/ или uss/ в REST path).
+            add("FindVehicle" to mapOf("identString" to query))
+            add("FindVehicleByFrame" to mapOf("frame" to query))
+
+            // Для frameNo / кузовных номеров пробуем отдельный метод.
+            if (!looksLikeVin) {
+                add("FindVehicleByFrameNo" to mapOf("frameNo" to query))
             }
         }
 
