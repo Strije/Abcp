@@ -16,7 +16,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 class MainActivity : ComponentActivity() {
 
@@ -36,7 +38,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     if (session.isLoggedIn()) {
                         try {
-                            val resp = api.userInfo(session.login(), session.passMd5())
+                            val resp = requestUserInfoWithRetry(api, session.login(), session.passMd5())
                             if (resp.isSuccessful && resp.body() != null) {
                                 startActivity(Intent(this@MainActivity, CabinetActivity::class.java))
                                 finish()
@@ -153,7 +155,7 @@ fun LoginScreen(
                 scope.launch {
                     try {
                         val passMd5 = md5(p)
-                        val resp = api.userInfo(l, passMd5)
+                        val resp = requestUserInfoWithRetry(api, l, passMd5)
 
                         if (resp.isSuccessful && resp.body() != null) {
                             session.save(l, passMd5)
@@ -192,4 +194,27 @@ fun LoginScreenPreview() {
             Text("Preview")
         }
     }
+}
+
+private suspend fun requestUserInfoWithRetry(
+    api: AbcpApi,
+    login: String,
+    passMd5: String,
+    attempts: Int = 2
+): retrofit2.Response<UserInfoDto> {
+    var lastError: IOException? = null
+
+    repeat(attempts) { index ->
+        try {
+            return api.userInfo(login, passMd5)
+        } catch (e: IOException) {
+            lastError = e
+            val canceledByClient = e.message?.contains("Canceled", ignoreCase = true) == true
+            val isLast = index == attempts - 1
+            if (isLast || !canceledByClient) throw e
+            delay(500)
+        }
+    }
+
+    throw lastError ?: IOException("Unknown network error")
 }
