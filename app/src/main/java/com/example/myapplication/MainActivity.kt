@@ -17,12 +17,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.google.gson.Gson
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.IOException
 
 class MainActivity : ComponentActivity() {
 
@@ -53,11 +48,12 @@ class MainActivity : ComponentActivity() {
                     if (session.isLoggedIn() && !inFlight) {
                         inFlight = true
                         try {
-                            val resp = requestUserInfoWithRetry(
-                                api = api,
-                                login = session.login(),
-                                passMd5 = session.passMd5()
-                            )
+                            val resp = performRequestWithRetry {
+                                api.userInfo(
+                                    userlogin = session.login(),
+                                    userpsw = session.passMd5()
+                                )
+                            }
 
                             val user = resp.body()
                             if (resp.isSuccessful && user != null) {
@@ -176,7 +172,9 @@ fun LoginScreen(
                 scope.launch {
                     try {
                         val passMd5 = md5(p)
-                        val resp = requestUserInfoWithRetry(api, l, passMd5)
+                        val resp = performRequestWithRetry {
+                            api.userInfo(l, passMd5)
+                        }
 
                         val user = resp.body()
                         if (resp.isSuccessful && user != null) {
@@ -216,29 +214,4 @@ fun LoginScreenPreview() {
             Text("Preview")
         }
     }
-}
-
-private suspend fun requestUserInfoWithRetry(
-    api: AbcpApi,
-    login: String,
-    passMd5: String,
-    attempts: Int = 3
-): retrofit2.Response<UserInfoDto> {
-    var lastError: Throwable? = null
-
-    repeat(attempts) { index ->
-        try {
-            return api.userInfo(login, passMd5)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: IOException) {
-            lastError = e
-            if (!currentCoroutineContext().isActive) throw e
-            val isLast = index == attempts - 1
-            if (isLast) throw e
-            delay(700L * (index + 1))
-        }
-    }
-
-    throw lastError ?: IOException("Unknown network error")
 }
