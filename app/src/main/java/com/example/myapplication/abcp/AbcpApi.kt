@@ -3,6 +3,7 @@ package com.example.myapplication.abcp
 import com.example.myapplication.OrderDetailsDto
 import com.example.myapplication.OrdersResponseDto
 import com.example.myapplication.UserInfoDto
+import com.google.gson.JsonElement
 import retrofit2.Response
 import retrofit2.http.GET
 import retrofit2.http.Query
@@ -27,6 +28,6 @@ interface AbcpApi {
     suspend fun orderDetails(
         @Query("userlogin") userlogin: String,
         @Query("userpsw") userpsw: String,
-        @Query("orders[0]") number: String,
-    ): Response<List<OrderDetailsDto>>
+        @Query(value = "orders[0]", encoded = true) number: String,
+    ): Response<JsonElement>
 }
