@@ -15,11 +15,15 @@ import androidx.compose.ui.unit.dp
 import com.example.myapplication.OrderDetailsDto
 import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
+import com.google.gson.Gson
+import com.google.gson.JsonElement
+import com.google.gson.reflect.TypeToken
 
 @OptIn(ExperimentalMaterial3Api::class)
 class OrderDetailsActivity : ComponentActivity() {
 
     private val api = ApiClient.create()
+    private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,7 +41,6 @@ class OrderDetailsActivity : ComponentActivity() {
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
 
-                // ✅ тут будет OrderDetailsDto
                 var details by remember { mutableStateOf<OrderDetailsDto?>(null) }
 
                 LaunchedEffect(orderNumber) {
@@ -50,14 +53,12 @@ class OrderDetailsActivity : ComponentActivity() {
                             api.orderDetails(
                                 userlogin = session.login(),
                                 userpsw = session.passMd5(),
-                                number = orderNumber,
-                                format = "p"
+                                number = orderNumber
                             )
                         }
 
                         if (resp.isSuccessful) {
-                            // ✅ ответ = Map<String, OrderDetailsDto>
-                            details = resp.body()?.values?.firstOrNull()
+                            details = parseOrderDetailsResponse(resp.body(), gson)
                             if (details == null) {
                                 error = "Пустой ответ от сервера."
                             }
@@ -106,6 +107,24 @@ class OrderDetailsActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_ORDER_NUMBER = "extra_order_number"
+    }
+}
+
+private fun parseOrderDetailsResponse(body: JsonElement?, gson: Gson): OrderDetailsDto? {
+    body ?: return null
+
+    return when {
+        body.isJsonArray -> {
+            val type = object : TypeToken<List<OrderDetailsDto>>() {}.type
+            gson.fromJson<List<OrderDetailsDto>>(body, type)?.firstOrNull()
+        }
+
+        body.isJsonObject -> {
+            val type = object : TypeToken<Map<String, OrderDetailsDto>>() {}.type
+            gson.fromJson<Map<String, OrderDetailsDto>>(body, type)?.values?.firstOrNull()
+        }
+
+        else -> null
     }
 }
 
