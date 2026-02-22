@@ -3,6 +3,7 @@ package com.example.myapplication.laximo
 import com.example.myapplication.BuildConfig
 import com.example.myapplication.laximo.model.*
 import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,18 +31,44 @@ class LaximoRepository(
     }
 
     suspend fun listCategories(ctx: LaximoVehicleContext): List<LaximoCategory> = withContext(Dispatchers.IO) {
+        val vehicleInfoRaw = client.post(
+            "GetVehicleInfo",
+            mapOf(
+                "Locale" to "ru_RU",
+                "Catalog" to ctx.catalog,
+                "VehicleId" to ctx.vehicleId,
+                "ssd" to ctx.ssd,
+                "Localized" to "true"
+            )
+        )
+
+        val vehicleInfo = JsonParser.parseString(vehicleInfoRaw).asJsonObject
+        val actualSsd = vehicleInfo.stringOrNull("ssd").orEmpty().ifBlank { ctx.ssd }
+
         val raw = client.post(
-            "listCategories",
-            mapOf("catalog" to ctx.catalog, "vehicleId" to ctx.vehicleId, "ssd" to ctx.ssd)
+            "ListQuickGroup",
+            mapOf(
+                "Locale" to "ru_RU",
+                "Catalog" to ctx.catalog,
+                "VehicleId" to ctx.vehicleId,
+                "ssd" to actualSsd
+            )
         )
         val arr = JsonParser.parseString(raw).asJsonArray
         arr.map { el: JsonElement ->
             val o = el.asJsonObject
             LaximoCategory(
-                categoryId = o["categoryId"].asString,
-                name = o["name"].asString,
-                ssd = o["ssd"].asString,
-                childrens = o["childrens"].asBoolean
+                categoryId = o.stringOrNull("quickGroupId")
+                    ?: o.stringOrNull("quickgroupid")
+                    ?: o.stringOrNull("categoryId")
+                    ?: o.stringOrNull("id")
+                    ?: "",
+                name = o.stringOrNull("name")
+                    ?: o.stringOrNull("quickGroupName")
+                    ?: o.stringOrNull("quickgroupname")
+                    ?: "Без названия",
+                ssd = o.stringOrNull("ssd") ?: actualSsd,
+                childrens = o.booleanOrFalse("childrens") || o.booleanOrFalse("hasChildren")
             )
         }
     }
@@ -157,4 +184,16 @@ class LaximoRepository(
             ssdModification = o.get("ssdmodification")?.asString
         )
     }
+}
+
+private fun JsonObject.stringOrNull(name: String): String? {
+    val value = get(name) ?: return null
+    if (value.isJsonNull) return null
+    return value.asString
+}
+
+private fun JsonObject.booleanOrFalse(name: String): Boolean {
+    val value = get(name) ?: return false
+    if (value.isJsonNull) return false
+    return runCatching { value.asBoolean }.getOrDefault(false)
 }
