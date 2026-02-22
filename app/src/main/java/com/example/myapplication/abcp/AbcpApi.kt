@@ -3,6 +3,7 @@ package com.example.myapplication.abcp
 import com.example.myapplication.OrderDetailsDto
 import com.example.myapplication.OrdersResponseDto
 import com.example.myapplication.UserInfoDto
+import com.google.gson.JsonElement
 import retrofit2.Response
 import retrofit2.http.GET
 import retrofit2.http.Query
@@ -22,12 +23,11 @@ interface AbcpApi {
         @Query("userpsw") userpsw: String
     ): Response<OrdersResponseDto>
 
-    // ✅ orders details (format=p возвращает positions)
-    @GET("orders")
+    // ✅ orders/list details (возвращает список заказов с positions)
+    @GET("orders/list")
     suspend fun orderDetails(
         @Query("userlogin") userlogin: String,
         @Query("userpsw") userpsw: String,
-        @Query("number") number: String,
-        @Query("format") format: String = "p"
-    ): Response<Map<String, OrderDetailsDto>>
+        @Query(value = "orders[0]", encoded = true) number: String,
+    ): Response<JsonElement>
 }
