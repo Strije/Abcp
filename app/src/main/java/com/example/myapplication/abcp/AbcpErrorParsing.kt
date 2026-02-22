@@ -1,5 +1,6 @@
-package com.example.myapplication
+package com.example.myapplication.abcp
 
+import com.example.myapplication.AbcpErrorDto
 import com.google.gson.Gson
 
 private fun parseAbcpError(rawBody: String?): AbcpErrorDto? {

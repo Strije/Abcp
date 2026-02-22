@@ -1,6 +1,7 @@
 // ApiClient.kt
-package com.example.myapplication
+package com.example.myapplication.abcp
 
+import com.example.myapplication.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit

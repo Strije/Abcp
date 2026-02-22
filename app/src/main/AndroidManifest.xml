@@ -14,9 +14,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
 
-        <activity android:name=".OrdersActivity" android:exported="false" />
+        <activity android:name=".abcp.OrdersActivity" android:exported="false" />
         <activity android:name=".CabinetActivity" android:exported="false" />
-        <activity android:name=".OrderDetailsActivity" android:exported="false" />
+        <activity android:name=".abcp.OrderDetailsActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />
         <activity android:name=".VinSearchActivity" />
         <activity android:name=".CatalogCategoriesActivity" />

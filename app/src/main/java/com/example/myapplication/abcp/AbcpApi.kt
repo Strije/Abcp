@@ -1,8 +1,12 @@
-package com.example.myapplication
+package com.example.myapplication.abcp
 
+import com.example.myapplication.OrderDetailsDto
+import com.example.myapplication.OrdersResponseDto
+import com.example.myapplication.UserInfoDto
 import retrofit2.Response
 import retrofit2.http.GET
 import retrofit2.http.Query
+
 interface AbcpApi {
     // ✅ user/info
     @GET("user/info")
