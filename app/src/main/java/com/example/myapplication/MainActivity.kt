@@ -200,7 +200,7 @@ private suspend fun requestUserInfoWithRetry(
     api: AbcpApi,
     login: String,
     passMd5: String,
-    attempts: Int = 2
+    attempts: Int = 3
 ): retrofit2.Response<UserInfoDto> {
     var lastError: IOException? = null
 
@@ -212,7 +212,7 @@ private suspend fun requestUserInfoWithRetry(
             val canceledByClient = e.message?.contains("Canceled", ignoreCase = true) == true
             val isLast = index == attempts - 1
             if (isLast || !canceledByClient) throw e
-            delay(500)
+            delay(700L * (index + 1))
         }
     }
 
