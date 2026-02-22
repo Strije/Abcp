@@ -21,9 +21,15 @@ class LaximoRepository(
         require(query.isNotBlank()) { "Идентификатор авто не указан" }
 
         val attempts = listOf(
-            // В разных контурах Laximo встречаются оба варианта имени команды.
+            // В разных контурах Laximo встречаются различия по регистру имени команды и параметров.
             "findVehicle" to mapOf("identString" to query),
-            "FindVehicle" to mapOf("identString" to query)
+            "findVehicle" to mapOf("IdentString" to query),
+            "FindVehicle" to mapOf("identString" to query),
+            "FindVehicle" to mapOf("IdentString" to query),
+            "FindVehicleByFrame" to mapOf("frame" to query),
+            "FindVehicleByFrame" to mapOf("Frame" to query),
+            "FindVehicleByFrameNo" to mapOf("frameNo" to query),
+            "FindVehicleByFrameNo" to mapOf("FrameNo" to query)
         )
 
         val errors = mutableListOf<String>()
@@ -208,6 +214,12 @@ private fun parseVehicleContexts(raw: String): List<LaximoVehicleContext> {
         root.isJsonObject -> {
             val o = root.asJsonObject
             when {
+                o.get("catalog") != null && o.get("vehicleId") != null && o.get("ssd") != null -> {
+                    com.google.gson.JsonArray().apply { add(o) }
+                }
+                o.get("Catalog") != null && o.get("VehicleId") != null && o.get("SSD") != null -> {
+                    com.google.gson.JsonArray().apply { add(o) }
+                }
                 o.get("rows")?.isJsonArray == true -> o.getAsJsonArray("rows")
                 o.get("result")?.isJsonArray == true -> o.getAsJsonArray("result")
                 o.get("vehicles")?.isJsonArray == true -> o.getAsJsonArray("vehicles")
