@@ -19,76 +19,40 @@ class LaximoRepository(
         val query = identString.trim()
         require(query.isNotBlank()) { "Идентификатор авто не указан" }
 
-        val attempts = listOf(
-            // В разных контурах Laximo встречаются различия по регистру имени команды и параметров.
-            "findVehicle" to mapOf("identString" to query),
-            "findVehicle" to mapOf("IdentString" to query),
-            "FindVehicle" to mapOf("identString" to query),
-            "FindVehicle" to mapOf("IdentString" to query),
-            "FindVehicleByFrame" to mapOf("frame" to query),
-            "FindVehicleByFrame" to mapOf("Frame" to query),
-            "FindVehicleByFrameNo" to mapOf("frameNo" to query),
-            "FindVehicleByFrameNo" to mapOf("FrameNo" to query)
-        )
-
-        val errors = mutableListOf<String>()
-        for ((path, params) in attempts) {
-            runCatching {
-                val raw = client.post(path, params)
-                parseVehicleContexts(raw)
-            }.onSuccess { result ->
-                if (result.isNotEmpty()) return@withContext result
-            }.onFailure { ex ->
-                errors += "$path: ${ex.message ?: ex.javaClass.simpleName}"
-            }
+        // ✅ По OpenAPI (Laximo.CAT REST API v1):
+        // POST /restApi/v1/findVehicle?identString=
+        val raw = client.post("findVehicle", mapOf("identString" to query))
+        val result = parseVehicleContexts(raw)
+        if (result.isEmpty()) {
+            throw IllegalStateException("Авто не найдено по идентификатору: $query")
         }
-
-        if (errors.isNotEmpty()) {
-            throw IllegalStateException("Не удалось расшифровать VIN/FRAME. Попытки: ${errors.joinToString(" | ")}")
-        }
-
-        emptyList()
+        result
     }
 
     suspend fun listCategories(ctx: LaximoVehicleContext): List<LaximoCategory> = withContext(Dispatchers.IO) {
-        val vehicleInfoRaw = client.post(
-            "getVehicleInfo",
-            mapOf(
-                "Locale" to "ru_RU",
-                "Catalog" to ctx.catalog,
-                "VehicleId" to ctx.vehicleId,
-                "ssd" to ctx.ssd,
-                "Localized" to "true"
-            )
-        )
-
-        val vehicleInfo = JsonParser.parseString(vehicleInfoRaw).asJsonObject
-        val actualSsd = vehicleInfo.stringOrNull("ssd").orEmpty().ifBlank { ctx.ssd }
-
+        // ✅ По OpenAPI (Laximo.CAT REST API v1):
+        // POST /restApi/v1/listCategories?catalog=&ssd=&vehicleId=&categoryId=
+        // Возвращает массив CategoryDto.
         val raw = client.post(
-            "ListQuickGroup",
+            "listCategories",
             mapOf(
-                "Locale" to "ru_RU",
-                "Catalog" to ctx.catalog,
-                "VehicleId" to ctx.vehicleId,
-                "ssd" to actualSsd
+                "catalog" to ctx.catalog,
+                "ssd" to ctx.ssd,
+                "vehicleId" to ctx.vehicleId,
+                // -1 = корневой уровень категорий
+                "categoryId" to "-1"
             )
         )
+
         val arr = JsonParser.parseString(raw).asJsonArray
         arr.map { el: JsonElement ->
             val o = el.asJsonObject
             LaximoCategory(
-                categoryId = o.stringOrNull("quickGroupId")
-                    ?: o.stringOrNull("quickgroupid")
-                    ?: o.stringOrNull("categoryId")
-                    ?: o.stringOrNull("id")
-                    ?: "",
-                name = o.stringOrNull("name")
-                    ?: o.stringOrNull("quickGroupName")
-                    ?: o.stringOrNull("quickgroupname")
-                    ?: "Без названия",
-                ssd = o.stringOrNull("ssd") ?: actualSsd,
-                childrens = o.booleanOrFalse("childrens") || o.booleanOrFalse("hasChildren")
+                categoryId = o.stringOrNullAny("categoryId", "id") ?: "",
+                name = o.stringOrNullAny("name") ?: "Без названия",
+                // Обычно ssd в категориях тот же, что и в контексте, но берём из ответа если есть
+                ssd = o.stringOrNullAny("ssd") ?: ctx.ssd,
+                childrens = o.booleanOrFalse("childrens")
             )
         }
     }
@@ -166,6 +130,93 @@ class LaximoRepository(
         }
     }
 
+
+    suspend fun listQuickGroup(ctx: LaximoVehicleContext): LaximoQuickGroupNode = withContext(Dispatchers.IO) {
+        // POST /restApi/v1/listQuickGroup?catalog=&ssd=&vehicleId=
+        val raw = client.post(
+            "listQuickGroup",
+            mapOf(
+                "catalog" to ctx.catalog,
+                "ssd" to ctx.ssd,
+                "vehicleId" to (ctx.vehicleId.ifBlank { "0" })
+            )
+        )
+
+        val root = JsonParser.parseString(raw).asJsonObject
+        parseQuickGroupNode(root)
+    }
+
+    suspend fun listQuickDetail(
+        ctx: LaximoVehicleContext,
+        quickGroupId: Long,
+        all: Boolean = false
+    ): List<LaximoPartsCategory> = withContext(Dispatchers.IO) {
+        // POST /restApi/v1/listQuickDetail?catalog=&ssd=&vehicleId=&quickGroupId=&all=
+        val raw = client.post(
+            "listQuickDetail",
+            mapOf(
+                "catalog" to ctx.catalog,
+                "ssd" to ctx.ssd,
+                "vehicleId" to (ctx.vehicleId.ifBlank { "0" }),
+                "quickGroupId" to quickGroupId.toString(),
+                "all" to all.toString()
+            )
+        )
+
+        val arr = JsonParser.parseString(raw).asJsonArray
+        arr.map { el -> parsePartsCategory(el.asJsonObject, ctx.ssd) }
+    }
+
+    private fun parseQuickGroupNode(o: JsonObject): LaximoQuickGroupNode {
+        val children = o.getAsJsonArray("children")?.map { ch ->
+            parseQuickGroupNode(ch.asJsonObject)
+        }.orEmpty()
+
+        return LaximoQuickGroupNode(
+            name = o.stringOrNullAny("name"),
+            quickGroupId = o.get("quickGroupId")?.let { runCatching { it.asLong }.getOrNull() },
+            synonyms = o.stringOrNullAny("synonyms"),
+            contains = o.stringOrNullAny("contains"),
+            link = o.booleanOrFalse("link"),
+            children = children
+        )
+    }
+
+    private fun parsePartsCategory(o: JsonObject, fallbackSsd: String): LaximoPartsCategory {
+        val units = o.getAsJsonArray("units")?.map { uEl ->
+            val u = uEl.asJsonObject
+            val details = u.getAsJsonArray("details")?.map { dEl ->
+                val d = dEl.asJsonObject
+                LaximoQDetail(
+                    name = d.stringOrNullAny("name"),
+                    codeOnImage = d.stringOrNullAny("codeOnImage"),
+                    oem = d.stringOrNullAny("oem"),
+                    match = d.get("match")?.let { runCatching { it.asBoolean }.getOrDefault(false) } ?: false
+                )
+            }.orEmpty()
+
+            LaximoPartsUnit(
+                unitId = u.stringOrNullAny("unitId") ?: "",
+                name = u.stringOrNullAny("name") ?: "",
+                code = u.stringOrNullAny("code"),
+                ssd = u.stringOrNullAny("ssd") ?: fallbackSsd,
+                imageUrl = u.stringOrNullAny("imageUrl"),
+                largeImageUrl = u.stringOrNullAny("largeImageUrl"),
+                filter = u.stringOrNullAny("filter"),
+                details = details
+            )
+        }.orEmpty()
+
+        return LaximoPartsCategory(
+            categoryId = o.stringOrNullAny("categoryId") ?: "",
+            code = o.stringOrNullAny("code"),
+            name = o.stringOrNullAny("name") ?: "",
+            parentCategoryId = o.stringOrNullAny("parentCategoryId"),
+            ssd = o.stringOrNullAny("ssd") ?: fallbackSsd,
+            childrens = o.booleanOrFalse("childrens"),
+            units = units
+        )
+    }
     suspend fun getFilterByDetail(
         catalog: String,
         unitId: String,
@@ -174,34 +225,45 @@ class LaximoRepository(
         locale: String = "ru_RU",
         detailId: String? = null
     ): LaximoFilterDef = withContext(Dispatchers.IO) {
+        // ✅ По OpenAPI (Laximo.CAT REST API v1):
+        // POST /restApi/v1/getFilterByDetail?catalog=&unitId=&detailId=&filter=&ssd=
+        // Ответ: массив FilterDto.
         val q = linkedMapOf(
-            "Locale" to locale,
-            "Catalog" to catalog,
-            "UnitId" to unitId,
-            "Filter" to filter,
+            "catalog" to catalog,
+            "unitId" to unitId,
+            "filter" to filter,
             "ssd" to ssd
         )
-        if (!detailId.isNullOrBlank()) q["DetailId"] = detailId
+        if (!detailId.isNullOrBlank()) q["detailId"] = detailId
 
         val raw = client.post("getFilterByDetail", q)
-        val o = JsonParser.parseString(raw).asJsonObject
+        val root = JsonParser.parseString(raw)
+
+        val first = when {
+            root.isJsonArray && root.asJsonArray.size() > 0 -> root.asJsonArray[0].asJsonObject
+            root.isJsonObject -> root.asJsonObject
+            else -> JsonObject()
+        }
 
         val values: List<LaximoFilterValue> =
-            o.getAsJsonArray("values")?.map { el: JsonElement ->
+            first.getAsJsonArray("values")?.map { el: JsonElement ->
                 val v = el.asJsonObject
                 LaximoFilterValue(
-                    name = v["name"].asString,
+                    name = v.get("name")?.asString ?: "",
                     note = v.get("note")?.asString,
-                    ssdModification = v.get("ssdmodification")?.asString
+                    // В Swagger поле называется ssdModification
+                    ssdModification = v.get("ssdModification")?.asString
+                        ?: v.get("ssdmodification")?.asString
                 )
             }.orEmpty()
 
         LaximoFilterDef(
-            name = o["name"].asString,
-            type = o["type"].asString,
+            name = first.get("name")?.asString ?: filter,
+            type = first.get("type")?.asString ?: "list",
             values = values,
-            regexp = o.get("regexp")?.asString,
-            ssdModification = o.get("ssdmodification")?.asString
+            regexp = first.get("regexp")?.asString,
+            ssdModification = first.get("ssdModification")?.asString
+                ?: first.get("ssdmodification")?.asString
         )
     }
 }

@@ -14,6 +14,7 @@ import coil.compose.AsyncImage
 import com.example.myapplication.laximo.LaximoApiException
 import com.example.myapplication.laximo.LaximoClient
 import com.example.myapplication.laximo.LaximoRepository
+import com.example.myapplication.laximo.LaximoImageSize
 import com.example.myapplication.laximo.resolveLaximoImage
 import com.example.myapplication.laximo.model.LaximoUnit
 import com.example.myapplication.laximo.model.LaximoVehicleContext
@@ -86,7 +87,7 @@ class UnitInfoActivity : ComponentActivity() {
                                     .padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                val big = imageUrl.resolveLaximoImage(800)
+                                val big = imageUrl.resolveLaximoImage(LaximoImageSize.SOURCE)
                                 if (!big.isNullOrBlank()) {
                                     AsyncImage(
                                         model = big,

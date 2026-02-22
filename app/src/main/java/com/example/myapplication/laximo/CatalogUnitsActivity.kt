@@ -1,5 +1,6 @@
 package com.example.myapplication.laximo
 
+import com.example.myapplication.laximo.LaximoImageSize
 import com.example.myapplication.laximo.resolveLaximoImage
 import android.content.Intent
 import android.os.Build
@@ -110,7 +111,7 @@ class CatalogUnitsActivity : ComponentActivity() {
                                 ) {
                                     items(units) { u ->
                                         val url = remember(u.imageUrl) {
-                                            u.imageUrl.resolveLaximoImage(240)
+                                            u.imageUrl.resolveLaximoImage(LaximoImageSize.PREVIEW_250)
                                         }
 
                                         ElevatedCard(
@@ -146,6 +147,7 @@ class CatalogUnitsActivity : ComponentActivity() {
                                                 SubcomposeAsyncImage(
                                                     model = ImageRequest.Builder(context)
                                                         .data(url)
+                                                        .laximoAuth(BuildConfig.LAXIMO_USER, BuildConfig.LAXIMO_PASS, "ru_RU")
                                                         .crossfade(true)
                                                         .listener(
                                                             onError = { _, result ->

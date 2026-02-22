@@ -23,6 +23,8 @@ import coil.compose.SubcomposeAsyncImageContent
 import com.example.myapplication.laximo.LaximoApiException
 import com.example.myapplication.laximo.LaximoClient
 import com.example.myapplication.laximo.LaximoRepository
+import com.example.myapplication.laximo.laximoAuth
+import com.example.myapplication.laximo.LaximoImageSize
 import com.example.myapplication.laximo.resolveLaximoImage
 import com.example.myapplication.laximo.model.*
 
@@ -97,7 +99,7 @@ class UnitDetailsActivity : ComponentActivity() {
                             else -> {
                                 Column(Modifier.fillMaxSize()) {
                                     UnitImageWithMap(
-                                        imageUrl = unit.imageUrl.resolveLaximoImage(900),
+                                        imageUrl = unit.imageUrl.resolveLaximoImage(LaximoImageSize.SOURCE),
                                         mapItems = mapItems,
                                         selectedCode = selectedCode,
                                         onSelectCode = { selectedCode = it }
@@ -169,7 +171,10 @@ private fun UnitImageWithMap(
     }
 
     SubcomposeAsyncImage(
-        model = imageUrl,
+        model = coil.request.ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+            .data(imageUrl)
+            .laximoAuth(BuildConfig.LAXIMO_USER, BuildConfig.LAXIMO_PASS, "ru_RU")
+            .build(),
         contentDescription = "Unit image",
         modifier = Modifier
             .fillMaxWidth()
