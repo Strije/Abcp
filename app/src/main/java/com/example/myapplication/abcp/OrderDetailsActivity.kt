@@ -37,7 +37,6 @@ class OrderDetailsActivity : ComponentActivity() {
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
 
-                // ✅ тут будет OrderDetailsDto
                 var details by remember { mutableStateOf<OrderDetailsDto?>(null) }
 
                 LaunchedEffect(orderNumber) {
@@ -50,14 +49,12 @@ class OrderDetailsActivity : ComponentActivity() {
                             api.orderDetails(
                                 userlogin = session.login(),
                                 userpsw = session.passMd5(),
-                                number = orderNumber,
-                                format = "p"
+                                number = orderNumber
                             )
                         }
 
                         if (resp.isSuccessful) {
-                            // ✅ ответ = Map<String, OrderDetailsDto>
-                            details = resp.body()?.values?.firstOrNull()
+                            details = resp.body()?.firstOrNull()
                             if (details == null) {
                                 error = "Пустой ответ от сервера."
                             }

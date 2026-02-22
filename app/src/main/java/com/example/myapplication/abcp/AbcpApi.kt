@@ -22,12 +22,11 @@ interface AbcpApi {
         @Query("userpsw") userpsw: String
     ): Response<OrdersResponseDto>
 
-    // ✅ orders details (format=p возвращает positions)
-    @GET("orders")
+    // ✅ orders/list details (возвращает список заказов с positions)
+    @GET("orders/list")
     suspend fun orderDetails(
         @Query("userlogin") userlogin: String,
         @Query("userpsw") userpsw: String,
-        @Query("number") number: String,
-        @Query("format") format: String = "p"
-    ): Response<Map<String, OrderDetailsDto>>
+        @Query("orders[0]") number: String,
+    ): Response<List<OrderDetailsDto>>
 }
