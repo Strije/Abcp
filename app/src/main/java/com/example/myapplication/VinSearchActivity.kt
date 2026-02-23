@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.laximo.LaximoClient
 import com.example.myapplication.laximo.LaximoRepository
+import com.example.myapplication.laximo.QuickGroupsActivity
 import com.example.myapplication.laximo.model.LaximoVehicleContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,7 +39,6 @@ class VinSearchActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // VIN может прийти из GarageActivity
         val prefillVin = intent.getStringExtra("prefillVin").orEmpty()
 
         setContent {
@@ -77,7 +77,6 @@ class VinSearchActivity : ComponentActivity() {
                     }
                 }
 
-                // Автозапуск поиска, если VIN пришёл из "Мой гараж"
                 LaunchedEffect(prefillVin) {
                     if (prefillVin.isNotBlank()) {
                         onSearchClick()
@@ -136,11 +135,8 @@ class VinSearchActivity : ComponentActivity() {
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    // Переход к категориям выбранного каталога
-                                                    val i = Intent(
-                                                        ctx,
-                                                        com.example.myapplication.laximo.CatalogCategoriesActivity::class.java
-                                                    )
+                                                    // Сразу открываем Быстрый подбор (QuickGroupsActivity)
+                                                    val i = Intent(ctx, QuickGroupsActivity::class.java)
                                                     i.putExtra("catalog", r.catalog)
                                                     i.putExtra("vehicleId", r.vehicleId)
                                                     i.putExtra("ssd", r.ssd)

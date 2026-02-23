@@ -1,6 +1,8 @@
 package com.example.myapplication.laximo
 
+import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -10,7 +12,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.SearchActivity
+import com.example.myapplication.laximo.model.LaximoDetail
+import com.example.myapplication.laximo.model.LaximoImageMapItem
 import com.example.myapplication.laximo.model.LaximoUnit
 import com.example.myapplication.laximo.model.LaximoVehicleContext
 import kotlinx.coroutines.launch
@@ -49,9 +55,10 @@ private fun UnitDetailsScreen(
     repo: LaximoRepository
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-    var details by remember { mutableStateOf(emptyList<com.example.myapplication.laximo.model.LaximoDetail>()) }
-    var mapItems by remember { mutableStateOf(emptyList<com.example.myapplication.laximo.model.LaximoImageMapItem>()) }
+    var details by remember { mutableStateOf<List<LaximoDetail>>(emptyList()) }
+    var mapItems by remember { mutableStateOf<List<LaximoImageMapItem>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedCode by remember { mutableStateOf<String?>(null) }
 
@@ -70,6 +77,26 @@ private fun UnitDetailsScreen(
         details.mapNotNull { it.codeOnImage?.trim() }
             .filter { it.isNotBlank() }
             .distinct()
+    }
+
+    fun onDetailClick(detail: LaximoDetail) {
+        detail.codeOnImage?.let { code ->
+            if (code.isNotBlank()) {
+                selectedCode = code
+            }
+        }
+    }
+
+    fun onCartClick(oem: String) {
+        // TODO: запуск поиска
+        Toast.makeText(context, "Поиск по OEM: $oem", Toast.LENGTH_SHORT).show()
+
+        context.startActivity(
+            Intent(context, SearchActivity::class.java).apply {
+                putExtra(SearchActivity.EXTRA_BRAND, "")
+                putExtra(SearchActivity.EXTRA_NUMBER, oem)
+            }
+        )
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -124,7 +151,12 @@ private fun UnitDetailsScreen(
             }
 
             items(details) { d ->
-                DetailCard(d, selected = !selectedCode.isNullOrBlank() && d.codeOnImage == selectedCode)
+                DetailCard(
+                    d = d,
+                    selected = !selectedCode.isNullOrBlank() && d.codeOnImage == selectedCode,
+                    onClick = { onDetailClick(d) },
+                    onCartClick = { onCartClick(it) }
+                )
             }
 
             if (error != null) {

@@ -98,13 +98,14 @@ class OrdersActivity : ComponentActivity() {
                                         OrderRow(
                                             order = order,
                                             onClick = {
-                                                val number = order.number ?: return@OrderRow
-                                                startActivity(
-                                                    Intent(
-                                                        this@OrdersActivity,
-                                                        OrderDetailsActivity::class.java
-                                                    ).putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, number)
-                                                )
+                                                order.number?.let { num ->
+                                                    startActivity(
+                                                        Intent(
+                                                            this@OrdersActivity,
+                                                            OrderDetailsActivity::class.java
+                                                        ).putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
+                                                    )
+                                                }
                                             }
                                         )
                                     }
