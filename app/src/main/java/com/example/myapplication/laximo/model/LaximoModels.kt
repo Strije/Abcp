@@ -63,41 +63,16 @@ data class LaximoFilterDef(
     val regexp: String? = null,
     val ssdModification: String? = null
 )
-// --- Quick каталог (listQuickGroup / listQuickDetail) ---
 
 data class LaximoQuickGroupNode(
-    val name: String? = null,
-    val quickGroupId: Long? = null,
-    val synonyms: String? = null,
-    val contains: String? = null,
-    val link: Boolean = false,
-    val children: List<LaximoQuickGroupNode> = emptyList()
-)
-
-data class LaximoQDetail(
-    val name: String? = null,
-    val codeOnImage: String? = null,
-    val oem: String? = null,
-    val match: Boolean = false,
-)
-
-data class LaximoPartsUnit(
-    val unitId: String,
     val name: String,
-    val code: String? = null,
-    val ssd: String,
-    val imageUrl: String? = null,
-    val largeImageUrl: String? = null,
-    val filter: String? = null,
-    val details: List<LaximoQDetail> = emptyList()
+    val quickGroupId: Long? = null,
+    val children: List<LaximoQuickGroupNode> = emptyList(),
+    val synonyms: String? = null
 )
 
 data class LaximoPartsCategory(
-    val categoryId: String,
-    val code: String? = null,
     val name: String,
-    val parentCategoryId: String? = null,
-    val ssd: String,
-    val childrens: Boolean = false,
-    val units: List<LaximoPartsUnit> = emptyList()
+    val units: List<LaximoUnit> = emptyList(),
+    val details: List<LaximoDetail> = emptyList()
 )

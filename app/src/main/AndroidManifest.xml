@@ -19,12 +19,13 @@
         <activity android:name=".abcp.OrderDetailsActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />
         <activity android:name=".VinSearchActivity" />
-        <activity android:name=".CatalogCategoriesActivity" />
-        <activity android:name=".CatalogUnitsActivity" />
+        <activity android:name=".GarageActivity" />
+
+        <!-- Laximo -->
+        <activity android:name=".laximo.QuickGroupsActivity" />
         <activity android:name=".laximo.CatalogCategoriesActivity" />
         <activity android:name=".laximo.CatalogUnitsActivity" />
-        <activity android:name=".UnitDetailsActivity" />
-        <activity android:name=".GarageActivity" />
+        <activity android:name=".laximo.UnitDetailsActivity" />
 
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

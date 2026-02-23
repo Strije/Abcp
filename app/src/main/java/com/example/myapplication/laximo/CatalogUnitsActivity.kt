@@ -1,7 +1,6 @@
 package com.example.myapplication.laximo
 
-import com.example.myapplication.laximo.LaximoImageSize
-import com.example.myapplication.laximo.resolveLaximoImage
+import com.example.myapplication.laximo.resolveLaximoImageUrl
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -24,7 +23,6 @@ import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
 import coil.request.ImageRequest
 import com.example.myapplication.BuildConfig
-import com.example.myapplication.UnitDetailsActivity
 import com.example.myapplication.laximo.model.LaximoCategory
 import com.example.myapplication.laximo.model.LaximoUnit
 import com.example.myapplication.laximo.model.LaximoVehicleContext
@@ -110,9 +108,7 @@ class CatalogUnitsActivity : ComponentActivity() {
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     items(units) { u ->
-                                        val url = remember(u.imageUrl) {
-                                            u.imageUrl.resolveLaximoImage(LaximoImageSize.PREVIEW_250)
-                                        }
+                                        val url = remember(u.imageUrl) { resolveLaximoImageUrl(u.imageUrl, LaximoImageSize.SOURCE) }
 
                                         ElevatedCard(
                                             modifier = Modifier
@@ -147,7 +143,6 @@ class CatalogUnitsActivity : ComponentActivity() {
                                                 SubcomposeAsyncImage(
                                                     model = ImageRequest.Builder(context)
                                                         .data(url)
-                                                        .laximoAuth(BuildConfig.LAXIMO_USER, BuildConfig.LAXIMO_PASS, "ru_RU")
                                                         .crossfade(true)
                                                         .listener(
                                                             onError = { _, result ->

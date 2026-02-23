@@ -1,5 +1,5 @@
 package com.example.myapplication.laximo
-import com.example.myapplication.laximo.resolveLaximoImage
+import com.example.myapplication.laximo.resolveLaximoImageUrl
 
 import android.content.Intent
 import android.os.Bundle
@@ -50,7 +50,7 @@ class CatalogCategoriesActivity : ComponentActivity() {
             try {
                 val categories: List<LaximoCategory> = repo.listCategories(ctx)
 
-                val titles = listOf("⚡ Быстрый каталог") + categories.map { c -> c.name }
+                val titles = categories.map { c -> c.name }
                 listView.adapter = ArrayAdapter(
                     this@CatalogCategoriesActivity,
                     android.R.layout.simple_list_item_1,
@@ -58,17 +58,7 @@ class CatalogCategoriesActivity : ComponentActivity() {
                 )
 
                 listView.setOnItemClickListener { _, _, position, _ ->
-                    if (position == 0) {
-                        // Внутри onItemClickListener нельзя использовать просто `this` — это будет не Activity.
-                        val qi = Intent(this@CatalogCategoriesActivity, QuickGroupsActivity::class.java)
-                        qi.putExtra("catalog", catalog)
-                        qi.putExtra("vehicleId", vehicleId)
-                        qi.putExtra("ssd", ssd)
-                        startActivity(qi)
-                        return@setOnItemClickListener
-                    }
-
-                    val cat = categories[position - 1]
+                    val cat = categories[position]
 
                     // ✅ Переход на следующий экран
                     val i = Intent(this@CatalogCategoriesActivity, CatalogUnitsActivity::class.java)
