@@ -12,7 +12,7 @@ object StoreInfo {
     const val hours = "Пн–Пт 9:00–19:00 · Сб–Вс 9:00–17:00"
 
     /** Онлайн-чат открытой линии Битрикс24 (тот же, что виджет на сайте) — сообщения идут в CRM */
-    const val managerChatUrl = "https://bitrix.freno.ru/online/WFnnB208"
+    const val managerChatUrl = "https://bitrix.freno.ru/online/avtodrug"
 
     /** Запасной канал — MAX (ссылка с сайта) */
     const val maxChatUrl = "https://max.ru/u/f9LHodD0cOLBKIaHZWQOl7LRIia77YiAfQxW7VJqyO8pcPEmbXQwXlarPNY"
