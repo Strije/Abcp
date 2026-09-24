@@ -178,3 +178,11 @@ def test_guest_search_disabled_without_profile():
     app = create_app(s0, Abcp(s0, transport=httpx.MockTransport(fake_abcp)))
     with TestClient(app) as c:
         assert c.get("/v1/guest/brands?number=OC90").status_code == 403
+
+
+def test_numbers_with_thousand_separators():
+    from app.abcp import _num
+    assert _num("4 630,00") == 4630.0          # как в cp/users у реального клиента
+    assert _num("-4 630,00") == -4630.0   # неразрывный пробел
+    assert _num("4630.00") == 4630.0 and _num(4630) == 4630.0
+    assert _num(None) == 0.0 and _num("") == 0.0

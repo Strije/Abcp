@@ -42,6 +42,15 @@ import kotlinx.coroutines.launch
 /** «Быстрее» — по сроку: наличие на Хрусталёва/ПОР (самовывоз сегодня) само окажется сверху. */
 private enum class Sort(val title: String) { Fast("Быстрее"), Price("Дешевле") }
 
+/** Фильтр по сроку: «Сегодня» — забрать сегодня (свой склад или поставка до конца дня), «До 3 дней». */
+private enum class Term(val title: String) { Today("Сегодня"), ThreeDays("До 3 дней") }
+
+private fun Term?.accepts(o: Offer): Boolean = when (this) {
+    null -> true
+    Term.Today -> o.inStore || formatDelivery(o.deliveryHours) == "сегодня"
+    Term.ThreeDays -> o.deliveryHours <= 72
+}
+
 private fun Sort.comparator(): Comparator<Offer> = when (this) {
     Sort.Fast -> compareBy<Offer> { it.deliveryHours }.thenBy { it.price }
     Sort.Price -> compareBy<Offer> { it.price }.thenBy { it.deliveryHours }
@@ -68,6 +77,7 @@ class OffersActivity : ComponentActivity() {
                 var offers by remember { mutableStateOf<List<Offer>>(emptyList()) }
                 var tab by remember { mutableIntStateOf(0) }
                 var sort by remember { mutableStateOf(Sort.Fast) }
+                var term by remember { mutableStateOf<Term?>(null) }
                 var picked by remember { mutableStateOf<Offer?>(null) }
                 var viewer by remember { mutableStateOf<List<String>?>(null) }
                 var showAll by remember { mutableStateOf(false) }
@@ -107,6 +117,7 @@ class OffersActivity : ComponentActivity() {
                 // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
                 fun isReliable(o: Offer) = "${o.brand.uppercase()}|${o.numberFix.uppercase()}" in reliable
                 val groups = (if (tab == 0) own else analogs.filter { !onlyReliable || isReliable(it) })
+                    .filter { term.accepts(it) }
                     .groupBy { "${it.brand}|${it.numberFix}" }
                     .values.map { it.sortedWith(cmp) }
                     .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
@@ -137,6 +148,14 @@ class OffersActivity : ComponentActivity() {
                             Sort.entries.forEach { s ->
                                 FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.title) })
                             }
+                            VerticalDivider(Modifier.height(32.dp).padding(horizontal = 2.dp))
+                            Term.entries.forEach { t ->
+                                FilterChip(
+                                    selected = term == t,
+                                    onClick = { term = if (term == t) null else t },
+                                    label = { Text(t.title) }
+                                )
+                            }
                             if (tab == 1 && reliable.isNotEmpty()) {
                                 FilterChip(
                                     selected = onlyReliable, onClick = { onlyReliable = !onlyReliable },
@@ -148,7 +167,13 @@ class OffersActivity : ComponentActivity() {
                             loading -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
                             error != null -> Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
                             groups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text(if (tab == 0) "По самому номеру предложений нет — посмотрите аналоги." else "Аналогов не найдено")
+                                Text(
+                                    when {
+                                        term != null -> "С условием «${term!!.title}» ничего нет — снимите фильтр."
+                                        tab == 0 -> "По самому номеру предложений нет — посмотрите аналоги."
+                                        else -> "Аналогов не найдено"
+                                    }
+                                )
                                 if (!showAll) OutlinedButton(onClick = { showAll = true }) { Text("Показать все варианты") }
                                 if (advices.isNotEmpty()) AdvicesBlock(advices)
                             }
@@ -438,12 +463,16 @@ fun PhotoSearchLinks(brand: String, number: String) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val q = android.net.Uri.encode("$brand $number".trim())
     fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        TextButton(onClick = { open("https://yandex.ru/images/search?text=$q") }, contentPadding = PaddingValues(0.dp)) {
-            Text("Фото в Яндексе", style = MaterialTheme.typography.labelMedium)
-        }
-        TextButton(onClick = { open("https://www.google.com/search?tbm=isch&q=$q") }, contentPadding = PaddingValues(0.dp)) {
-            Text("Фото в Google", style = MaterialTheme.typography.labelMedium)
-        }
+    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalButton(
+            onClick = { open("https://yandex.ru/images/search?text=$q") },
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            modifier = Modifier.height(34.dp)
+        ) { Text("📷 Фото в Яндексе", style = MaterialTheme.typography.labelMedium) }
+        FilledTonalButton(
+            onClick = { open("https://www.google.com/search?tbm=isch&q=$q") },
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            modifier = Modifier.height(34.dp)
+        ) { Text("📷 Фото в Google", style = MaterialTheme.typography.labelMedium) }
     }
 }

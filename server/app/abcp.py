@@ -32,9 +32,11 @@ def items(data: Any) -> list:
 
 
 def _num(v: Any) -> float:
+    """ABCP отдаёт числа по-разному: 4630, "4630.00", "4 630,00" (пробел — разделитель тысяч, бывает неразрывный)."""
+    s = str(v if v is not None else "").replace(" ", "").replace(" ", "").replace(" ", "").replace(",", ".")
     try:
-        return float(str(v).replace(",", "."))
-    except (TypeError, ValueError):
+        return float(s)
+    except ValueError:
         return 0.0
 
 

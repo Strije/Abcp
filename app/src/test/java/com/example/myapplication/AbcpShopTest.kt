@@ -3,6 +3,7 @@ package com.example.myapplication
 import com.example.myapplication.abcp.cleanNumber
 import com.example.myapplication.abcp.formatDelivery
 import com.example.myapplication.abcp.items
+import com.example.myapplication.abcp.parseAbcpNumber
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -30,5 +31,13 @@ class AbcpShopTest {
         assertEquals("завтра", formatDelivery(21, now = now))
         assertTrue(formatDelivery(262, now = now).startsWith("5 "))
         assertTrue(formatDelivery(72, 120, now = now).startsWith("27–29 "))
+    }
+
+    @Test
+    fun numbersWithThousandSeparators() {
+        assertEquals(4630.0, parseAbcpNumber("4 630,00"), 0.001)
+        assertEquals(-4630.0, parseAbcpNumber("-4 630,00"), 0.001)
+        assertEquals(4630.0, parseAbcpNumber("4630.00"), 0.001)
+        assertEquals(0.0, parseAbcpNumber(null), 0.001)
     }
 }

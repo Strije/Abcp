@@ -127,9 +127,9 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
                     Text("Сумма", style = MaterialTheme.typography.bodySmall)
-                    Text(order.sum?.toDoubleOrNull()?.let(::formatRub) ?: order.sum.orEmpty(), fontWeight = FontWeight.Bold)
+                    Text(order.sum?.let { formatRub(parseAbcpNumber(it)) }.orEmpty(), fontWeight = FontWeight.Bold)
                 }
-                val debt = order.debt?.toDoubleOrNull() ?: 0.0
+                val debt = parseAbcpNumber(order.debt)
                 if (debt > 0) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text("Долг", style = MaterialTheme.typography.bodySmall)

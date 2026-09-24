@@ -325,7 +325,7 @@ private fun JsonElement.asJsonObjectOrNull(): JsonObject? = if (isJsonObject) as
 private fun JsonObject.str(key: String): String? =
     get(key)?.takeIf { it.isJsonPrimitive }?.asString?.trim()?.takeIf { it.isNotEmpty() }
 
-private fun JsonObject.num(key: String): Double = str(key)?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
+private fun JsonObject.num(key: String): Double = parseAbcpNumber(str(key))
 
 private fun JsonObject.int(key: String): Int = num(key).toInt()
 
@@ -494,3 +494,8 @@ private fun daysBetween(a: Calendar, b: Calendar): Int {
 }
 
 fun formatAvailability(a: Int): String = if (a > 0) "Наличие $a шт." else "Наличие уточняется"
+
+
+/** ABCP отдаёт числа по-разному: 4630, "4630.00", "4 630,00" (пробел — разделитель тысяч, бывает неразрывный). */
+fun parseAbcpNumber(s: String?): Double =
+    s?.filterNot { it == ' ' || it == '\u00A0' || it == '\u202F' }?.replace(',', '.')?.toDoubleOrNull() ?: 0.0

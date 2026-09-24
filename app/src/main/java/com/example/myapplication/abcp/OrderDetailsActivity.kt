@@ -172,9 +172,9 @@ private fun OrderDetailsContent(
                     Row(verticalAlignment = Alignment.Bottom) {
                         Column(Modifier.weight(1f)) {
                             Text("Сумма", style = MaterialTheme.typography.bodySmall)
-                            Text(details.sum?.toDoubleOrNull()?.let(::formatRub) ?: details.sum.orEmpty(), fontWeight = FontWeight.Bold)
+                            Text(details.sum?.let { formatRub(parseAbcpNumber(it)) }.orEmpty(), fontWeight = FontWeight.Bold)
                         }
-                        val debt = details.debt?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
+                        val debt = parseAbcpNumber(details.debt)
                         if (debt > 0) {
                             Column(horizontalAlignment = Alignment.End) {
                                 Text("Долг", style = MaterialTheme.typography.bodySmall)
@@ -197,7 +197,7 @@ private fun OrderDetailsContent(
                     Text("${p.brand.orEmpty()} ${p.number.orEmpty()}".trim().ifEmpty { "-" }, style = MaterialTheme.typography.titleSmall)
                     p.description?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     val qty = p.quantity ?: p.quantityOrdered ?: "-"
-                    val price = (p.priceInSiteCurrency ?: p.price)?.replace(',', '.')?.toDoubleOrNull()
+                    val price = (p.priceInSiteCurrency ?: p.price)?.let(::parseAbcpNumber)?.takeIf { it > 0 }
                     Text("$qty шт." + (price?.let { " × ${formatRub(it)}" } ?: ""))
                     p.status?.let { StatusChip(it, p.statusColor) }
                     p.commentAnswer?.takeIf { it.isNotBlank() }?.let {
