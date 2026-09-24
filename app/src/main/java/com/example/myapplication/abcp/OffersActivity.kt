@@ -233,6 +233,9 @@ private fun ArticleCard(list: List<Offer>, reliable: Boolean = false, onImage: (
                 if (head.description.isNotBlank()) {
                     Text(head.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
+                // Своих фото нет (ABCP даёт их только через articles/info с лимитом 10 в сутки) —
+                // даём посмотреть фото детали в поиске картинок
+                if (images.isEmpty()) PhotoSearchLinks(head.brand, head.number)
             }
         }
         list.forEach { o ->
@@ -420,6 +423,22 @@ fun ImageViewer(urls: List<String>, onClose: () -> Unit) {
             IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
                 Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
             }
+        }
+    }
+}
+
+/** «Фото в Яндексе / Google»: поиск картинок по бренду и номеру, открывается в браузере. */
+@Composable
+fun PhotoSearchLinks(brand: String, number: String) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val q = android.net.Uri.encode("$brand $number".trim())
+    fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        TextButton(onClick = { open("https://yandex.ru/images/search?text=$q") }, contentPadding = PaddingValues(0.dp)) {
+            Text("Фото в Яндексе", style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(onClick = { open("https://www.google.com/search?tbm=isch&q=$q") }, contentPadding = PaddingValues(0.dp)) {
+            Text("Фото в Google", style = MaterialTheme.typography.labelMedium)
         }
     }
 }
