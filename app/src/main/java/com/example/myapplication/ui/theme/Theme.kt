@@ -17,9 +17,10 @@ val BrandOrange = Color(0xFFF08A24)
 
 /** Срок поставки цветом: сегодня в магазине / 1–3 дня / дольше */
 object DeliveryColors {
-    val today = Color(0xFF2E9D4A)
-    val soon = Color(0xFFE0A100)
-    val later = Color(0xFF8A8F98)
+    // Подобраны под контраст ≥ 4:1 и на белом, и на тёмном фоне (прежний жёлтый #E0A100 на белом был ~2:1)
+    val today = Color(0xFF1E8A3C)
+    val soon = Color(0xFFB86E00)
+    val later = Color(0xFF7A808A)
 }
 
 private val Light = lightColorScheme(

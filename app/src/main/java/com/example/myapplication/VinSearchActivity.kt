@@ -78,6 +78,58 @@ class VinSearchActivity : ComponentActivity() {
                     }
                 }
 
+                var scanMenu by remember { mutableStateOf(false) }
+                var scanning by remember { mutableStateOf(false) }
+                var scanChoices by remember { mutableStateOf<List<VehicleCode>?>(null) }
+                val photoUri = remember {
+                    val f = java.io.File(ctx.cacheDir, "scan/photo.jpg").apply { parentFile?.mkdirs() }
+                    androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+                }
+
+                fun recognize(uri: android.net.Uri) {
+                    scanning = true
+                    error = null
+                    scope.launch {
+                        try {
+                            val codes = extractVehicleCodes(recognizeText(ctx, uri))
+                            when (codes.size) {
+                                0 -> error = "На фото не нашлось VIN или номера. Попробуйте снять ближе и ровнее."
+                                1 -> { vinText = codes[0].value; onSearchClick() }
+                                else -> scanChoices = codes
+                            }
+                        } catch (e: Exception) {
+                            error = "Не удалось распознать фото: ${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            scanning = false
+                        }
+                    }
+                }
+
+                val takePhoto = androidx.activity.compose.rememberLauncherForActivityResult(
+                    androidx.activity.result.contract.ActivityResultContracts.TakePicture()
+                ) { ok -> if (ok) recognize(photoUri) }
+                val pickPhoto = androidx.activity.compose.rememberLauncherForActivityResult(
+                    androidx.activity.result.contract.ActivityResultContracts.GetContent()
+                ) { uri -> uri?.let { recognize(it) } }
+
+                scanChoices?.let { list ->
+                    AlertDialog(
+                        onDismissRequest = { scanChoices = null },
+                        title = { Text("Что искать?") },
+                        text = {
+                            Column {
+                                list.forEach { c ->
+                                    TextButton(onClick = { scanChoices = null; vinText = c.value; onSearchClick() }) {
+                                        Text("${c.title}: ${c.value}")
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {},
+                        dismissButton = { TextButton(onClick = { scanChoices = null }) { Text("Отмена") } }
+                    )
+                }
+
                 LaunchedEffect(prefillVin) {
                     if (prefillVin.isNotBlank()) {
                         onSearchClick()
@@ -100,7 +152,28 @@ class VinSearchActivity : ComponentActivity() {
                             label = { Text("VIN, номер кузова или госномер") },
                             placeholder = { Text("XTA21099… / SGL5-400683 / А123ВС92") },
                             singleLine = true,
+                            trailingIcon = {
+                                Box {
+                                    IconButton(onClick = { scanMenu = true }, enabled = !scanning) {
+                                        Text(if (scanning) "…" else "📷", style = MaterialTheme.typography.titleLarge)
+                                    }
+                                    DropdownMenu(expanded = scanMenu, onDismissRequest = { scanMenu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Сфотографировать VIN, СТС или номер") },
+                                            onClick = { scanMenu = false; takePhoto.launch(photoUri) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Выбрать фото из галереи") },
+                                            onClick = { scanMenu = false; pickPhoto.launch("image/*") }
+                                        )
+                                    }
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "Можно сфотографировать табличку VIN, СТС или номер машины — распознаем сами",
+                            style = MaterialTheme.typography.bodySmall
                         )
 
                         Button(
@@ -199,3 +272,16 @@ class VinSearchActivity : ComponentActivity() {
         }
     }
 }
+
+
+/** Текст с фото через ML Kit (модель встроена в приложение — работает без интернета и Google-сервисов). */
+suspend fun recognizeText(ctx: android.content.Context, uri: android.net.Uri): String =
+    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        val image = com.google.mlkit.vision.common.InputImage.fromFilePath(ctx, uri)
+        val client = com.google.mlkit.vision.text.TextRecognition.getClient(
+            com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
+        )
+        client.process(image)
+            .addOnSuccessListener { cont.resumeWith(Result.success(it.text)); client.close() }
+            .addOnFailureListener { cont.resumeWith(Result.failure(it)); client.close() }
+    }

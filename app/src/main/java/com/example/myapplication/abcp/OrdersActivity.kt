@@ -158,18 +158,23 @@ fun payOrder(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineSc
     }
 }
 
-/** Плашка статуса в цвете, заданном в ABCP (statusColor), с мягким фоном. */
+/**
+ * Плашка статуса: цвет из ABCP — только кружком. Текстом его не красим: в ABCP бывают жёлтые и
+ * светло-зелёные статусы (#FFFF00, #E0F7AE), на светлом фоне такой текст не читается.
+ */
 @Composable
 fun StatusChip(text: String, hex: String?) {
     val c = parseAbcpColor(hex) ?: MaterialTheme.colorScheme.primary
-    Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        color = c,
-        modifier = Modifier
-            .background(c.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-    )
+    Row(
+        Modifier
+            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(10.dp).background(c, androidx.compose.foundation.shape.CircleShape))
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
 }
 
 fun parseAbcpColor(hex: String?): Color? {
