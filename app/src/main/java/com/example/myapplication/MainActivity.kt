@@ -218,6 +218,14 @@ fun LoginScreen(
                 ctx.startActivity(android.content.Intent(ctx, AccountActivity::class.java).putExtra(AccountActivity.EXTRA_RESTORE, true))
             }) { Text("Забыли пароль?") }
         }
+        OutlinedButton(
+            onClick = {
+                ctx.startActivity(
+                    android.content.Intent(ctx, MainShellActivity::class.java).putExtra(MainShellActivity.EXTRA_GUEST, true)
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Смотреть каталог без входа") }
     }
 }
 

@@ -16,6 +16,8 @@ class Settings:
     # articles/info (картинки, достоверные аналоги) на тарифе — 10 запросов в СУТКИ на весь магазин.
     # Пока ABCP не поднимет лимит, держим выключенным, иначе он сгорает за минуту.
     articles_info_per_day: int = 0
+    # Профиль цен для гостей (поиск без входа). Пусто — гостевой поиск выключен.
+    guest_profile_id: str = ""
 
 
 def load() -> Settings:
@@ -32,4 +34,5 @@ def load() -> Settings:
         admin_md5=md5,
         token_secret=secret.encode(),
         articles_info_per_day=int(os.environ.get("ARTICLES_INFO_PER_DAY", "0") or 0),
+        guest_profile_id=os.environ.get("GUEST_PROFILE_ID", "").strip(),
     )

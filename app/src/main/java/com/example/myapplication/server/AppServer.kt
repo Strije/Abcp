@@ -93,6 +93,22 @@ class AppServer(ctx: Context) {
         return publicPost("/v1/restore", body).asJsonObject["message"]?.takeIf { !it.isJsonNull }?.asString
     }
 
+    /** Поиск без входа: цены профиля гостя, закупочных цен сервер не отдаёт. */
+    suspend fun guestBrands(number: String) =
+        publicGet("/v1/guest/brands?number=${java.net.URLEncoder.encode(number, "UTF-8")}")
+
+    suspend fun guestOffers(number: String, brand: String, all: Boolean) = publicGet(
+        "/v1/guest/offers?number=${java.net.URLEncoder.encode(number, "UTF-8")}" +
+            "&brand=${java.net.URLEncoder.encode(brand, "UTF-8")}&all=${if (all) 1 else 0}"
+    )
+
+    private suspend fun publicGet(path: String) = withContext(Dispatchers.IO) {
+        if (!enabled) throw ServerException("Сервер не настроен")
+        val (code, text) = execute(Request.Builder().url(base + path).get().build())
+        if (code !in 200..299) throw ServerException(detail(text) ?: "Ошибка сервера ($code)", code)
+        JsonParser.parseString(text)
+    }
+
     private suspend fun publicPost(path: String, json: String) = withContext(Dispatchers.IO) {
         if (!enabled) throw ServerException("Сервер не настроен")
         val (code, text) = execute(Request.Builder().url(base + path).post(json.toRequestBody(JSON)).build())

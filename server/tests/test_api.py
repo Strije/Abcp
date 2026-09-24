@@ -11,7 +11,7 @@ from app.config import Settings
 from app.main import RateLimiter, create_app
 
 S = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
-             articles_info_per_day=100)
+             articles_info_per_day=100, guest_profile_id="156077169")
 GOOD_MD5 = hashlib.md5(b"secret").hexdigest()
 
 
@@ -51,6 +51,14 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"paymentLink": f"https://pay.test/{q['number']}"})
     if p == "cp/payment/top-balance-link":
         return httpx.Response(200, json={"paymentLink": f"https://pay.test/topup/{q['clientId']}/{q['amount']}"})
+    if p == "search/brands":
+        return httpx.Response(200, json={"0": {"brand": "Knecht", "number": "OC90", "numberFix": "OC90",
+                                               "availability": "1", "priceIn": "999"}})
+    if p == "search/articles":
+        assert q.get("profileId") == "156077169"
+        return httpx.Response(200, json=[{"brand": "Knecht", "number": "OC90", "numberFix": "OC90", "price": "320",
+                                          "priceIn": "150", "priceRate": "1", "distributorId": "77",
+                                          "availability": "6", "deliveryPeriod": "0", "itemKey": "k"}])
     if p == "articles/info" and q.get("format") == "bnc":
         return httpx.Response(200, json=[{"brand": q["brand"], "number": q["number"], "crosses": [
             {"brand": "Zekkert", "number": "OF-4063", "numberFix": "OF4063", "reliable": True},
@@ -154,3 +162,19 @@ def test_articles_info_budget():
     b = Abcp(s2, transport=httpx.MockTransport(fake_abcp))
     assert asyncio.run(b.images("Knecht", "OC90"))            # первый — можно
     assert asyncio.run(b.reliable_crosses("Knecht", "OC90")) == []  # лимит суток исчерпан
+
+
+def test_guest_search_hides_purchase_price(client):
+    b = client.get("/v1/guest/brands?number=OC90").json()
+    assert b == [{"brand": "Knecht", "number": "OC90", "numberFix": "OC90", "availability": "1"}]
+    o = client.get("/v1/guest/offers?number=OC90&brand=Knecht").json()[0]
+    assert o["price"] == "320"
+    for secret in ("priceIn", "priceRate", "distributorId", "itemKey"):
+        assert secret not in o
+
+
+def test_guest_search_disabled_without_profile():
+    s0 = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40)
+    app = create_app(s0, Abcp(s0, transport=httpx.MockTransport(fake_abcp)))
+    with TestClient(app) as c:
+        assert c.get("/v1/guest/brands?number=OC90").status_code == 403

@@ -136,11 +136,19 @@ class AbcpShop(private val session: SessionManager) {
     suspend fun tips(query: String): List<BrandHit> =
         items(call { api.searchTips(login, psw, query) }).mapNotNull { it.toBrandHit() }
 
+    /** Гость — не вошёл в аккаунт: поиск идёт через наш сервер с ценами гостевого профиля */
+    val isGuest: Boolean get() = !session.isLoggedIn()
+    private val server by lazy { com.example.myapplication.server.AppServer(session.context) }
+
     suspend fun brands(number: String): List<BrandHit> =
-        items(call { api.searchBrands(login, psw, number) }).mapNotNull { it.toBrandHit() }
+        items(if (isGuest) server.guestBrands(number) else call { api.searchBrands(login, psw, number) })
+            .mapNotNull { it.toBrandHit() }
 
     suspend fun offers(number: String, brand: String, all: Boolean = false): List<Offer> =
-        items(call { api.searchArticles(login, psw, number, brand, disableFiltering = if (all) 1 else 0) })
+        items(
+            if (isGuest) server.guestOffers(number, brand, all)
+            else call { api.searchArticles(login, psw, number, brand, disableFiltering = if (all) 1 else 0) }
+        )
             .mapNotNull { it.toOffer() }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
 

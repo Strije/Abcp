@@ -2,7 +2,7 @@ package com.example.myapplication
 
 import android.content.Context
 
-class SessionManager(context: Context) {
+class SessionManager(val context: Context) {
     private val prefs = context.getSharedPreferences("abcp_session", Context.MODE_PRIVATE)
 
     fun save(login: String, passMd5: String) {

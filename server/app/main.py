@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from . import tokens
-from .abcp import Abcp, AbcpError
+from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -94,6 +94,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
     login_limit = RateLimiter(limit=10, window=60)
     # Регистрация и SMS восстановления — дорогие и заметные операции, лимит строже
     public_limit = RateLimiter(limit=5, window=3600)
+    # Гостевой поиск: живой человек не ищет чаще раза в секунду
+    guest_limit = RateLimiter(limit=60, window=60)
 
     def client_ip(request: Request) -> str:
         return request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
@@ -174,6 +176,34 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
         a: Abcp = state["abcp"]
         results = await asyncio.gather(*(a.images(i.brand, i.number) for i in body.items))
         return {f"{i.brand}|{i.number}": urls for i, urls in zip(body.items, results)}
+
+    def guest_guard(request: Request) -> str:
+        pid = state["s"].guest_profile_id
+        if not pid:
+            raise HTTPException(403, "Поиск без входа выключен")
+        if not guest_limit.allow("guest:" + client_ip(request)):
+            raise HTTPException(429, "Слишком много запросов, подождите минуту")
+        return pid
+
+    @app.get("/v1/guest/brands")
+    async def g_brands(number: str, request: Request):
+        guest_guard(request)
+        if not (1 <= len(number.strip()) <= 60):
+            raise HTTPException(400, "Неверный номер")
+        try:
+            return await guest_brands(state["abcp"], number.strip())
+        except AbcpError as e:
+            fail(e)
+
+    @app.get("/v1/guest/offers")
+    async def g_offers(number: str, brand: str, request: Request, all: int = 0):
+        pid = guest_guard(request)
+        if not (1 <= len(number.strip()) <= 60) or not (1 <= len(brand.strip()) <= 100):
+            raise HTTPException(400, "Неверный номер")
+        try:
+            return await guest_offers(state["abcp"], number.strip(), brand.strip(), pid, bool(all))
+        except AbcpError as e:
+            fail(e)
 
     @app.post("/v1/register")
     async def register(body: RegisterIn, request: Request):

@@ -224,3 +224,33 @@ def _msg(m: Any) -> str:
     if isinstance(m, list):
         return "; ".join(str(v) for v in m)
     return str(m) if m else ""
+
+
+# ---------- гостевой поиск (без входа): от имени API-админа с профилем цен гостя ----------
+
+# Только то, что видит покупатель. Админский поиск отдаёт ещё закупочную цену (priceIn),
+# курс (priceRate), id поставщика и т.п. — наружу это не должно уходить НИКОГДА.
+GUEST_OFFER_FIELDS = (
+    "brand", "number", "numberFix", "description", "price", "availability", "packing",
+    "deliveryPeriod", "deliveryPeriodMax", "deadlineReplace", "supplierDescription",
+    "supplierColor", "noReturn", "isUsed", "deliveryProbability",
+    "descriptionOfDeliveryProbability", "lastUpdateTime",
+)
+GUEST_BRAND_FIELDS = ("brand", "number", "numberFix", "description", "availability")
+
+
+def only(d: dict, fields) -> dict:
+    return {k: d[k] for k in fields if k in d}
+
+
+async def guest_brands(a: "Abcp", number: str) -> list[dict]:
+    data = await a._get("search/brands", a._admin({"number": number, "useOnlineStocks": 1}))
+    return [only(x, GUEST_BRAND_FIELDS) for x in items(data)]
+
+
+async def guest_offers(a: "Abcp", number: str, brand: str, profile_id: str, all_: bool) -> list[dict]:
+    data = await a._get("search/articles", a._admin({
+        "number": number, "brand": brand, "useOnlineStocks": 1,
+        "disableFiltering": 1 if all_ else 0, "profileId": profile_id,
+    }))
+    return [only(x, GUEST_OFFER_FIELDS) for x in items(data)]

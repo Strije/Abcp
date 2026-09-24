@@ -66,12 +66,13 @@ class MainShellActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val session = SessionManager(this)
-        if (!session.isLoggedIn()) {
+        val guest = !session.isLoggedIn()
+        if (guest && !intent.getBooleanExtra(EXTRA_GUEST, false)) {
             startActivity(Intent(this, MainActivity::class.java)); finish(); return
         }
-        // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+)
-        OrderStatusWatch.schedule(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+) — только для вошедших
+        if (!guest) OrderStatusWatch.schedule(this)
+        if (!guest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -86,7 +87,10 @@ class MainShellActivity : ComponentActivity() {
             AvtodrugTheme {
                 var tab by remember { mutableStateOf(HomeTab.Home) }
                 var visits by remember { mutableIntStateOf(0) } // для перечитывания корзины при входе на вкладку
-                LaunchedEffect(Unit) { CartState.refresh(AbcpShop(session)) }
+                LaunchedEffect(Unit) { if (!guest) CartState.refresh(AbcpShop(session)) }
+                val toLogin = {
+                    startActivity(Intent(this@MainShellActivity, MainActivity::class.java)); finish()
+                }
 
                 Scaffold(
                     bottomBar = {
@@ -111,6 +115,8 @@ class MainShellActivity : ComponentActivity() {
                     Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
                         when (tab) {
                             HomeTab.Home -> HomeScreen(
+                                guest = guest,
+                                onLogin = toLogin,
                                 userName = user?.name,
                                 unread = unread,
                                 onOpenTab = { tab = it },
@@ -124,9 +130,9 @@ class MainShellActivity : ComponentActivity() {
                                 user = user
                             )
                             HomeTab.Search -> SearchScreen()
-                            HomeTab.Garage -> GarageScreen()
-                            HomeTab.Orders -> OrdersScreen()
-                            HomeTab.Cart -> CartScreen(visits)
+                            HomeTab.Garage -> if (guest) LoginPrompt("Гараж", toLogin) else GarageScreen()
+                            HomeTab.Orders -> if (guest) LoginPrompt("Заказы", toLogin) else OrdersScreen()
+                            HomeTab.Cart -> if (guest) LoginPrompt("Корзина", toLogin) else CartScreen(visits)
                         }
                     }
                 }
@@ -136,6 +142,7 @@ class MainShellActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_USER_JSON = "extra_user_json"
+        const val EXTRA_GUEST = "extra_guest"
     }
 }
 
@@ -144,6 +151,8 @@ class MainShellActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeScreen(
+    guest: Boolean,
+    onLogin: () -> Unit,
     userName: String?,
     unread: Int,
     user: UserInfoDto?,
@@ -158,7 +167,7 @@ private fun HomeScreen(
     var finance by remember { mutableStateOf<Finance?>(null) }
     var showTopup by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { if (server.enabled) finance = runCatching { server.finance() }.getOrNull() }
+    LaunchedEffect(Unit) { if (server.enabled && !guest) finance = runCatching { server.finance() }.getOrNull() }
 
 
     Column(
@@ -168,12 +177,13 @@ private fun HomeScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), "Автодруг", Modifier.height(40.dp).weight(1f, fill = false))
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = { ctx.startActivity(Intent(ctx, NotificationsActivity::class.java)) }) {
+            if (guest) TextButton(onClick = onLogin) { Text("Войти") }
+            if (!guest) IconButton(onClick = { ctx.startActivity(Intent(ctx, NotificationsActivity::class.java)) }) {
                 BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) {
                     Icon(Icons.Default.Notifications, "Уведомления")
                 }
             }
-            IconButton(onClick = { showProfile = true }) { Icon(Icons.Default.AccountCircle, "Профиль") }
+            if (!guest) IconButton(onClick = { showProfile = true }) { Icon(Icons.Default.AccountCircle, "Профиль") }
         }
         Text(
             if (userName.isNullOrBlank()) "Здравствуйте!" else "Здравствуйте, ${userName.substringBefore(' ')}!",
@@ -355,3 +365,20 @@ fun looksLikeVin(s: String): Boolean {
 /** Номер кузова японских авто: «SGL5-400683» — код кузова, дефис, номер. */
 fun looksLikeFrame(s: String): Boolean =
     Regex("^[A-Z]{2,4}\\d{0,3}[A-Z]?-\\d{4,7}$").matches(s.trim().uppercase())
+
+
+/** Раздел только для вошедших: гостю — объяснение и кнопка входа. */
+@Composable
+fun LoginPrompt(section: String, onLogin: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(section, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Войдите или зарегистрируйтесь, чтобы заказывать, видеть свои заказы и гараж.")
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = onLogin, modifier = Modifier.fillMaxWidth()) { Text("Войти") }
+    }
+}

@@ -76,9 +76,9 @@ class OffersActivity : ComponentActivity() {
                 var reliable by remember { mutableStateOf<Set<String>>(emptySet()) }
                 var onlyReliable by remember { mutableStateOf(false) }
 
-                LaunchedEffect(Unit) { advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
+                LaunchedEffect(Unit) { if (!shop.isGuest) advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
                 // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
-                LaunchedEffect(Unit) { reliable = runCatching { server.reliable(brand, number) }.getOrDefault(emptySet()) }
+                LaunchedEffect(Unit) { if (!shop.isGuest) reliable = runCatching { server.reliable(brand, number) }.getOrDefault(emptySet()) }
 
                 LaunchedEffect(showAll) {
                     loading = true
@@ -86,7 +86,7 @@ class OffersActivity : ComponentActivity() {
                         offers = shop.offers(number, brand, all = showAll)
                         // Картинки — с нашего сервера (articles/info доступен только API-админу)
                         val need = offers.filter { it.images.isEmpty() }.map { it.brand to it.number }.distinct()
-                        if (need.isNotEmpty()) {
+                        if (need.isNotEmpty() && !shop.isGuest) {
                             val imgs = runCatching { server.images(need) }.getOrDefault(emptyMap())
                             if (imgs.isNotEmpty()) offers = offers.map { o ->
                                 if (o.images.isNotEmpty()) o else o.copy(images = imgs["${o.brand}|${o.number}"].orEmpty())
@@ -121,7 +121,7 @@ class OffersActivity : ComponentActivity() {
                                     if (d.isNotBlank()) Text(d, style = MaterialTheme.typography.bodySmall, maxLines = 1)
                                 }
                             },
-                            actions = { CartIconButton() }
+                            actions = { if (!shop.isGuest) CartIconButton() }
                         )
                     }
                 ) { padding ->
@@ -179,6 +179,11 @@ class OffersActivity : ComponentActivity() {
                         onDismiss = { picked = null },
                         onConfirm = { qty ->
                             picked = null
+                            if (shop.isGuest) {
+                                Toast.makeText(this@OffersActivity, "Войдите, чтобы положить в корзину", Toast.LENGTH_LONG).show()
+                                startActivity(android.content.Intent(this@OffersActivity, com.example.myapplication.MainActivity::class.java))
+                                return@AddToCartSheet
+                            }
                             scope.launch {
                                 try {
                                     shop.addToBasket(o, qty)

@@ -60,7 +60,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     var error by remember { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
 
-    LaunchedEffect(Unit) { history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
+    LaunchedEffect(Unit) { if (!shop.isGuest) history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
 
     fun search() {
         val n = query.trim()
@@ -92,7 +92,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
         topBar = {
             TopAppBar(
                 title = { Text("Поиск по артикулу") },
-                actions = { CartIconButton() }
+                actions = { if (!shop.isGuest) CartIconButton() }
             )
         }
     ) { padding ->
