@@ -27,9 +27,25 @@ data class Offer(
     val deliveryHoursMax: Int,
     val supplierCode: String,
     val itemKey: String,
+    /** Короткий код поставщика (distributorCode), если задан */
     val supplier: String,
-    val noReturn: Boolean
-)
+    val noReturn: Boolean,
+    /** Метки из HTML-описания поставщика на сайте: «Надежный поставщик», «Сторонний склад»… */
+    val badges: List<SupplierBadge> = emptyList(),
+    /** Подпись вместо срока, например «Хрусталева 111 (самовывоз)» (deadlineReplace) */
+    val deadlineLabel: String? = null,
+    /** Цвет поставщика из ABCP (#RRGGBB) */
+    val supplierColor: String? = null,
+    /** Полные URL картинок, если ABCP их отдаёт */
+    val images: List<String> = emptyList()
+) {
+    /** Товар лежит в нашем магазине — забрать можно сегодня */
+    val inStore: Boolean get() = deliveryHours <= 0
+}
+
+enum class BadgeKind { Good, Bad, Info }
+
+data class SupplierBadge(val text: String, val kind: BadgeKind)
 
 data class BasketItem(
     val brand: String,
@@ -219,8 +235,12 @@ private fun JsonElement.toOffer(): Offer? {
         deliveryHoursMax = o.int("deliveryPeriodMax"),
         supplierCode = o.str("supplierCode").orEmpty(),
         itemKey = o.str("itemKey").orEmpty(),
-        supplier = o.str("supplierDescription") ?: o.str("distributorCode").orEmpty(),
-        noReturn = o.str("noReturn").let { it == "1" || it == "true" }
+        supplier = o.str("distributorCode").orEmpty(),
+        noReturn = o.str("noReturn").let { it == "1" || it == "true" },
+        badges = parseSupplierBadges(o.str("supplierDescription")),
+        deadlineLabel = o.str("deadlineReplace")?.let(::stripHtml)?.takeIf { it.isNotBlank() },
+        supplierColor = o.str("supplierColor"),
+        images = parseImages(o)
     )
 }
 
@@ -241,6 +261,59 @@ private fun JsonElement.toBasketItem(): BasketItem? {
     )
 }
 
+/**
+ * supplierDescription — HTML-значки с сайта: <i class="… red" data-original-title="Сторонний склад">.
+ * Берём подсказку (data-original-title/title) и цвет по классу; если значков нет — просто текст без тегов.
+ */
+fun parseSupplierBadges(html: String?): List<SupplierBadge> {
+    if (html.isNullOrBlank()) return emptyList()
+    val icons = Regex("<i\\b[^>]*>").findAll(html).mapNotNull { m ->
+        val tag = m.value
+        val title = Regex("data-original-title=\"([^\"]*)\"").find(tag)?.groupValues?.get(1)
+            ?.takeIf { it.isNotBlank() }
+            ?: Regex("\\btitle=\"([^\"]*)\"").find(tag)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        val cls = Regex("class=\"([^\"]*)\"").find(tag)?.groupValues?.get(1).orEmpty()
+        val kind = when {
+            Regex("\\b(red|danger)\\b").containsMatchIn(cls) -> BadgeKind.Bad
+            Regex("\\b(blue|green|success)\\b").containsMatchIn(cls) -> BadgeKind.Good
+            else -> BadgeKind.Info
+        }
+        SupplierBadge(unescape(title), kind)
+    }.toList()
+    if (icons.isNotEmpty()) return icons
+    val text = stripHtml(html)
+    return if (text.isBlank()) emptyList() else listOf(SupplierBadge(text, BadgeKind.Info))
+}
+
+fun stripHtml(s: String): String =
+    unescape(s.replace(Regex("<[^>]+>"), " ")).replace(Regex("\\s+"), " ").trim()
+
+private fun unescape(s: String) = s.replace("&nbsp;", " ").replace("&quot;", "\"")
+    .replace("&lt;", "<").replace("&gt;", ">").replace("&#039;", "'").replace("&amp;", "&")
+
+/** Картинки: ABCP может отдать images (строки или объекты с name/url). Имя файла → imgcdn.abcp.ru. */
+private fun parseImages(o: JsonObject): List<String> {
+    val raw = listOf("images", "image", "imageUrl", "photos").firstNotNullOfOrNull { o.get(it) } ?: return emptyList()
+    val names = when {
+        raw.isJsonPrimitive -> raw.asString.split(',')
+        else -> items(raw).ifEmpty { if (raw.isJsonArray) raw.asJsonArray.toList() else emptyList() }.mapNotNull { e ->
+            when {
+                e.isJsonPrimitive -> e.asString
+                e.isJsonObject -> e.asJsonObject.str("url") ?: e.asJsonObject.str("name")
+                else -> null
+            }
+        }
+    }
+    return names.map { it.trim() }.filter { it.isNotBlank() }.map { n ->
+        when {
+            n.startsWith("http") -> n
+            n.startsWith("//") -> "https:$n"
+            else -> "https://imgcdn.abcp.ru/p/full/${n.removePrefix("/")}"
+        }
+    }.distinct()
+}
+
 // ---------- Форматирование ----------
 
 /** Как numberFix у ABCP: только буквы и цифры, верхний регистр. */
@@ -249,6 +322,9 @@ fun cleanNumber(s: String): String = s.uppercase().filter { it.isLetterOrDigit()
 private val rub = DecimalFormat("#,##0.00", DecimalFormatSymbols(Locale("ru")).apply { groupingSeparator = ' ' })
 
 fun formatRub(v: Double): String = rub.format(v) + " ₽"
+
+/** Срок предложения: подпись магазина (deadlineReplace) важнее часов. */
+fun Offer.deliveryText(): String = deadlineLabel ?: formatDelivery(deliveryHours, deliveryHoursMax)
 
 /** Срок из часов ABCP в человеческий вид. */
 fun formatDelivery(hours: Int, hoursMax: Int = 0): String {

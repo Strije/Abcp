@@ -1,26 +1,52 @@
 package com.example.myapplication.abcp
-import com.example.myapplication.ui.theme.AvtodrugTheme
-import com.example.myapplication.ui.theme.DeliveryColors
 
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
 import com.example.myapplication.SessionManager
+import com.example.myapplication.ui.theme.AvtodrugTheme
+import com.example.myapplication.ui.theme.DeliveryColors
 import kotlinx.coroutines.launch
 
-/** Карточка номера: «Наличие» (сам номер) и «Аналоги» (группами по бренду+номеру). */
+private enum class Sort(val title: String) { Store("Сначала в магазине"), Price("Дешевле"), Fast("Быстрее") }
+
+private fun Sort.comparator(): Comparator<Offer> = when (this) {
+    Sort.Store -> compareBy<Offer> { !it.inStore }.thenBy { it.price }.thenBy { it.deliveryHours }
+    Sort.Price -> compareBy<Offer> { it.price }.thenBy { it.deliveryHours }
+    Sort.Fast -> compareBy<Offer> { it.deliveryHours }.thenBy { it.price }
+}
+
+/** Карточка номера, как мобильная выдача сайта: «Наличие» и «Аналоги», сортировка, фото с увеличением. */
 @OptIn(ExperimentalMaterial3Api::class)
 class OffersActivity : ComponentActivity() {
 
@@ -39,7 +65,9 @@ class OffersActivity : ComponentActivity() {
                 var error by remember { mutableStateOf<String?>(null) }
                 var offers by remember { mutableStateOf<List<Offer>>(emptyList()) }
                 var tab by remember { mutableIntStateOf(0) }
+                var sort by remember { mutableStateOf(Sort.Store) }
                 var picked by remember { mutableStateOf<Offer?>(null) }
+                var viewer by remember { mutableStateOf<List<String>?>(null) }
 
                 LaunchedEffect(Unit) {
                     try {
@@ -55,7 +83,12 @@ class OffersActivity : ComponentActivity() {
                 val (own, analogs) = offers.partition {
                     it.numberFix.equals(fix, ignoreCase = true) && it.brand.equals(brand, ignoreCase = true)
                 }
-                val analogGroups = analogs.groupBy { "${it.brand} ${it.number}" }
+                val cmp = sort.comparator()
+                // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
+                val groups = (if (tab == 0) own else analogs)
+                    .groupBy { "${it.brand}|${it.numberFix}" }
+                    .values.map { it.sortedWith(cmp) }
+                    .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
 
                 Scaffold(
                     topBar = {
@@ -76,28 +109,28 @@ class OffersActivity : ComponentActivity() {
                             Tab(tab == 0, { tab = 0 }, text = { Text("Наличие (${own.size})") })
                             Tab(tab == 1, { tab = 1 }, text = { Text("Аналоги (${analogs.size})") })
                         }
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Sort.entries.forEach { s ->
+                                FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.title) })
+                            }
+                        }
                         when {
                             loading -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
                             error != null -> Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
-                            tab == 0 && own.isEmpty() -> Text(
-                                "По самому номеру предложений нет — посмотрите аналоги.",
+                            groups.isEmpty() -> Text(
+                                if (tab == 0) "По самому номеру предложений нет — посмотрите аналоги." else "Аналогов не найдено",
                                 Modifier.padding(16.dp)
                             )
-                            tab == 1 && analogs.isEmpty() -> Text("Аналогов не найдено", Modifier.padding(16.dp))
-                            else -> LazyColumn(Modifier.fillMaxSize()) {
-                                if (tab == 0) {
-                                    items(own) { o -> OfferRow(o) { picked = o } }
-                                } else {
-                                    analogGroups.forEach { (title, list) ->
-                                        item {
-                                            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp)) {
-                                                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                                val d = list.first().description
-                                                if (d.isNotBlank()) Text(d, style = MaterialTheme.typography.bodySmall)
-                                            }
-                                        }
-                                        items(list) { o -> OfferRow(o) { picked = o } }
-                                    }
+                            else -> LazyColumn(
+                                Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(groups, key = { it.first().brand + it.first().numberFix }) { list ->
+                                    ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
                                 }
                             }
                         }
@@ -105,8 +138,9 @@ class OffersActivity : ComponentActivity() {
                 }
 
                 picked?.let { o ->
-                    AddToCartDialog(
+                    AddToCartSheet(
                         offer = o,
+                        onImage = { viewer = it },
                         onDismiss = { picked = null },
                         onConfirm = { qty ->
                             picked = null
@@ -122,6 +156,8 @@ class OffersActivity : ComponentActivity() {
                         }
                     )
                 }
+
+                viewer?.let { urls -> ImageViewer(urls) { viewer = null } }
             }
         }
     }
@@ -133,63 +169,165 @@ class OffersActivity : ComponentActivity() {
     }
 }
 
+/** Артикул: фото, номер, бренд, описание и под ним все предложения. */
+@Composable
+private fun ArticleCard(list: List<Offer>, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
+    val head = list.first()
+    val images = list.flatMap { it.images }.distinct()
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (images.isNotEmpty()) {
+                AsyncImage(
+                    model = images.first(),
+                    contentDescription = "Фото",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(64.dp).clip(RoundedCornerShape(10.dp))
+                        .background(Color.White).clickable { onImage(images) }
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(head.number, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(head.brand, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                if (head.description.isNotBlank()) {
+                    Text(head.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        list.forEach { o ->
+            HorizontalDivider()
+            OfferRow(o) { onPick(o) }
+        }
+    }
+}
+
 @Composable
 private fun OfferRow(o: Offer, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            val pack = if (o.packing > 1) " (партия ${o.packing} шт.)" else ""
+    val stripe = parseAbcpColor(o.supplierColor) ?: Color.Transparent
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).clickable(onClick = onClick)) {
+        // Цвет поставщика, как фон строки на сайте — здесь узкой полосой слева
+        Box(Modifier.width(5.dp).fillMaxHeight().background(stripe))
+        Column(Modifier.weight(1f).padding(start = 10.dp, top = 10.dp, bottom = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    o.deliveryText(),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (o.inStore) FontWeight.Bold else FontWeight.Normal,
+                    color = when {
+                        o.inStore -> DeliveryColors.today
+                        o.deliveryHours <= 72 -> DeliveryColors.soon
+                        else -> DeliveryColors.later
+                    },
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+            val pack = if (o.packing > 1) " · партия ${o.packing} шт." else ""
             Text(formatAvailability(o.availability) + pack, style = MaterialTheme.typography.bodySmall)
+            if (o.badges.isNotEmpty() || o.noReturn) Badges(o)
         }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                formatDelivery(o.deliveryHours, o.deliveryHoursMax),
-                style = MaterialTheme.typography.titleSmall,
-                color = when {
-                    o.deliveryHours <= 0 -> DeliveryColors.today
-                    o.deliveryHours <= 72 -> DeliveryColors.soon
-                    else -> DeliveryColors.later
-                }
-            )
-            if (o.supplier.isNotBlank()) {
-                Text(o.supplier, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(
+            Modifier.padding(10.dp).align(Alignment.CenterVertically),
+            horizontalAlignment = Alignment.End
+        ) {
+            Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.ShoppingCart, "В корзину", Modifier.size(18.dp))
             }
         }
     }
-    HorizontalDivider()
 }
 
-/** Шторка снизу: количество с учётом кратности и итог — карточка товара остаётся на месте. */
+/** Метки поставщика цветом: надёжный — зелёная, сторонний склад/без возврата — красная. */
+@Composable
+private fun Badges(o: Offer) {
+    val list = o.badges.ifEmpty { if (o.noReturn) listOf(SupplierBadge("Возврат невозможен", BadgeKind.Bad)) else emptyList() }
+    Row(Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        list.forEach { b ->
+            val c = when (b.kind) {
+                BadgeKind.Good -> DeliveryColors.today
+                BadgeKind.Bad -> MaterialTheme.colorScheme.error
+                BadgeKind.Info -> DeliveryColors.later
+            }
+            Text(
+                b.text, style = MaterialTheme.typography.labelSmall, color = c, maxLines = 1,
+                modifier = Modifier.background(c.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+/** Шторка снизу: фото, срок, метки, количество с учётом кратности и итог. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddToCartDialog(offer: Offer, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+private fun AddToCartSheet(offer: Offer, onImage: (List<String>) -> Unit, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
     val step = offer.packing
     val max = if (offer.availability > 0) offer.availability else Int.MAX_VALUE
     var qty by remember { mutableIntStateOf(step) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("${offer.brand} ${offer.number}", style = MaterialTheme.typography.titleLarge)
-            if (offer.description.isNotBlank()) Text(offer.description, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                "${formatRub(offer.price)} · ${formatDelivery(offer.deliveryHours, offer.deliveryHoursMax)}",
-                style = MaterialTheme.typography.titleMedium
-            )
-            if (offer.noReturn) Text("Без возврата", color = MaterialTheme.colorScheme.error)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (offer.images.isNotEmpty()) {
+                    AsyncImage(
+                        model = offer.images.first(), contentDescription = "Фото", contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(80.dp).clip(RoundedCornerShape(12.dp)).background(Color.White)
+                            .clickable { onImage(offer.images) }
+                    )
+                    Spacer(Modifier.width(12.dp))
+                }
+                Column {
+                    Text("${offer.brand} ${offer.number}", style = MaterialTheme.typography.titleLarge)
+                    if (offer.description.isNotBlank()) Text(offer.description, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            Text("${formatRub(offer.price)} · ${offer.deliveryText()}", style = MaterialTheme.typography.titleMedium)
+            Text(formatAvailability(offer.availability), style = MaterialTheme.typography.bodySmall)
+            if (offer.badges.isNotEmpty() || offer.noReturn) Badges(offer)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton(onClick = { qty = (qty - step).coerceAtLeast(step) }) { Text("−") }
                 Text("$qty шт.", Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.titleLarge)
                 FilledTonalButton(onClick = { if (qty + step <= max) qty += step }) { Text("+") }
             }
-            Button(
-                onClick = { onConfirm(qty) },
-                modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) { Text("В корзину · ${formatRub(offer.price * qty)}") }
+            Button(onClick = { onConfirm(qty) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("В корзину · ${formatRub(offer.price * qty)}")
+            }
+        }
+    }
+}
+
+/** Фото на весь экран: листать пальцем, приближать щипком, двойной тап не нужен — сброс при смене фото. */
+@Composable
+fun ImageViewer(urls: List<String>, onClose: () -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            val pager = rememberPagerState { urls.size }
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                var scale by remember(page) { mutableFloatStateOf(1f) }
+                var offset by remember(page) { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+                val state = rememberTransformableState { zoom, pan, _ ->
+                    scale = (scale * zoom).coerceIn(1f, 5f)
+                    offset = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else offset + pan
+                }
+                AsyncImage(
+                    model = urls[page], contentDescription = null, contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                        .transformable(state, canPan = { scale > 1f })
+                        .graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
+                )
+            }
+            if (urls.size > 1) {
+                Text(
+                    "${pager.currentPage + 1} / ${urls.size}", color = Color.White,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp)
+                )
+            }
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
+            }
         }
     }
 }
