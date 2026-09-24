@@ -33,6 +33,14 @@ android {
         }
     }
 
+    // Постоянный debug-ключ: в CI путь приходит в DEBUG_KEYSTORE (из секрета),
+    // иначе Gradle создаёт новый ключ на каждой сборке и APK не ставится поверх прошлого.
+    signingConfigs {
+        getByName("debug") {
+            System.getenv("DEBUG_KEYSTORE")?.let { storeFile = file(it) }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

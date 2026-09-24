@@ -35,8 +35,8 @@ jobs:
           DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$DEBUG_KEYSTORE_B64" ]; then
-            mkdir -p ~/.android
-            echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+            echo "DEBUG_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
           else
             echo "::warning::DEBUG_KEYSTORE_B64 не задан — APK подписан случайным ключом"
           fi
@@ -57,6 +57,9 @@ jobs:
         run: |
           AS=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
           $AS verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -i 'SHA-256' | while IFS= read -r l; do echo "::notice::$l"; done
+          # Ожидаемый ключ (debug.keystore с 19.02.2026) — ffad7d27…
+          $AS verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -qi 'ffad7d279f19c0ab' \
+            || echo "::warning::APK подписан НЕ постоянным ключом — поверх прошлой версии не встанет"
 
       - uses: actions/upload-artifact@v4
         with:
