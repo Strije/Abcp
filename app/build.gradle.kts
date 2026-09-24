@@ -18,7 +18,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.myapplication"
+        applicationId = "ru.avtodrug92.app"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
