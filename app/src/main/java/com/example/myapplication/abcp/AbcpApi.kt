@@ -96,10 +96,19 @@ interface AbcpApi {
 
     // --- Корзина ---
 
+    /** Список корзин (если в магазине включена мультикорзина) */
+    @GET("basket/multibasket")
+    suspend fun basketMultibasket(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    /** basketId=null — основная корзина */
     @GET("basket/content")
     suspend fun basketContent(
         @Query("userlogin") userlogin: String,
-        @Query("userpsw") userpsw: String
+        @Query("userpsw") userpsw: String,
+        @Query("basketId") basketId: String? = null
     ): Response<JsonElement>
 
     /** positions[i][brand|number|itemKey|supplierCode|quantity]; quantity=0 удаляет позицию */

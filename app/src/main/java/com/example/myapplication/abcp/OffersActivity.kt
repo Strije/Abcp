@@ -38,12 +38,12 @@ import com.example.myapplication.ui.theme.AvtodrugTheme
 import com.example.myapplication.ui.theme.DeliveryColors
 import kotlinx.coroutines.launch
 
-private enum class Sort(val title: String) { Store("Сначала в магазине"), Price("Дешевле"), Fast("Быстрее") }
+/** «Быстрее» — по сроку: наличие на Хрусталёва/ПОР (самовывоз сегодня) само окажется сверху. */
+private enum class Sort(val title: String) { Fast("Быстрее"), Price("Дешевле") }
 
 private fun Sort.comparator(): Comparator<Offer> = when (this) {
-    Sort.Store -> compareBy<Offer> { !it.inStore }.thenBy { it.price }.thenBy { it.deliveryHours }
-    Sort.Price -> compareBy<Offer> { it.price }.thenBy { it.deliveryHours }
     Sort.Fast -> compareBy<Offer> { it.deliveryHours }.thenBy { it.price }
+    Sort.Price -> compareBy<Offer> { it.price }.thenBy { it.deliveryHours }
 }
 
 /** Карточка номера, как мобильная выдача сайта: «Наличие» и «Аналоги», сортировка, фото с увеличением. */
@@ -65,7 +65,7 @@ class OffersActivity : ComponentActivity() {
                 var error by remember { mutableStateOf<String?>(null) }
                 var offers by remember { mutableStateOf<List<Offer>>(emptyList()) }
                 var tab by remember { mutableIntStateOf(0) }
-                var sort by remember { mutableStateOf(Sort.Store) }
+                var sort by remember { mutableStateOf(Sort.Fast) }
                 var picked by remember { mutableStateOf<Offer?>(null) }
                 var viewer by remember { mutableStateOf<List<String>?>(null) }
                 var showAll by remember { mutableStateOf(false) }
@@ -111,7 +111,7 @@ class OffersActivity : ComponentActivity() {
                 ) { padding ->
                     Column(Modifier.padding(padding).fillMaxSize()) {
                         TabRow(selectedTabIndex = tab) {
-                            Tab(tab == 0, { tab = 0 }, text = { Text("Наличие (${own.size})") })
+                            Tab(tab == 0, { tab = 0 }, text = { Text("Искомый номер (${own.size})") })
                             Tab(tab == 1, { tab = 1 }, text = { Text("Аналоги (${analogs.size})") })
                         }
                         Row(

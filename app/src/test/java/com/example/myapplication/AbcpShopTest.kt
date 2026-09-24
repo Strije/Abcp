@@ -5,6 +5,7 @@ import com.example.myapplication.abcp.formatDelivery
 import com.example.myapplication.abcp.items
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AbcpShopTest {
@@ -22,10 +23,12 @@ class AbcpShopTest {
     }
 
     @Test
-    fun deliveryInDays() {
-        assertEquals("сегодня", formatDelivery(0))
-        assertEquals("1 дн.", formatDelivery(24))
-        assertEquals("2 дн.", formatDelivery(25))
-        assertEquals("3–5 дн.", formatDelivery(72, 120))
+    fun deliveryAsDate() {
+        // 24 сентября 2026, 12:00 — как в выдаче сайта: 21 ч → 25 сент., 262 ч → 5 окт.
+        val now = java.util.Calendar.getInstance().apply { set(2026, 8, 24, 12, 0, 0) }.timeInMillis
+        assertEquals("сегодня", formatDelivery(0, now = now))
+        assertEquals("завтра", formatDelivery(21, now = now))
+        assertTrue(formatDelivery(262, now = now).startsWith("5 "))
+        assertTrue(formatDelivery(72, 120, now = now).startsWith("27–29 "))
     }
 }

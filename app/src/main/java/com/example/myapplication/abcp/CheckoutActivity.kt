@@ -139,7 +139,8 @@ class CheckoutActivity : ComponentActivity() {
                                                         officeId = if (pickup) office else null,
                                                         date = date,
                                                         comment = comment
-                                                    )
+                                                    ),
+                                                    basketIds = basket.map { it.basketId }
                                                 )
                                                 CartState.refresh(shop)
                                             } catch (e: Exception) {

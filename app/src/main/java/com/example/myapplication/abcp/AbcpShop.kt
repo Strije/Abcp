@@ -8,7 +8,8 @@ import retrofit2.Response
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
-import kotlin.math.ceil
+import java.text.SimpleDateFormat
+import java.util.Calendar
 
 // ---------- Модели ----------
 
@@ -87,7 +88,10 @@ data class BasketItem(
     val supplierCode: String,
     val itemKey: String,
     val positionId: String,
-    val errorMessage: String?
+    val errorMessage: String?,
+    /** Корзина при мультикорзине (null — основная) */
+    val basketId: String? = null,
+    val basketName: String? = null
 )
 
 data class IdName(val id: String, val name: String)
@@ -150,19 +154,31 @@ class AbcpShop(private val session: SessionManager) {
     suspend fun advices(brand: String, number: String): List<BrandHit> =
         items(call { api.advices(login, psw, brand, number) }).mapNotNull { it.toBrandHit() }
 
-    suspend fun basket(): List<BasketItem> =
-        items(call { api.basketContent(login, psw) }).mapNotNull { it.toBasketItem() }
+    /**
+     * Все позиции из всех корзин. Если в магазине включена мультикорзина, без basketId ABCP отдаёт
+     * только основную — поэтому обходим каждую. (При опции «частичное оформление» ABCP отдаёт только отмеченные.)
+     */
+    suspend fun basket(): List<BasketItem> {
+        val baskets = runCatching { idNames(call { api.basketMultibasket(login, psw) }) }.getOrDefault(emptyList())
+        if (baskets.size <= 1) return basketContent(baskets.firstOrNull())
+        return baskets.flatMap { basketContent(it) }
+    }
+
+    private suspend fun basketContent(b: IdName?): List<BasketItem> =
+        items(call { api.basketContent(login, psw, b?.id) })
+            .mapNotNull { it.toBasketItem()?.copy(basketId = b?.id, basketName = b?.name) }
 
     suspend fun addToBasket(o: Offer, quantity: Int) =
         setBasketQuantity(o.brand, o.number, o.itemKey, o.supplierCode, quantity)
 
     suspend fun removeFromBasket(b: BasketItem) =
-        setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, 0)
+        setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, 0, b.basketId)
 
     private suspend fun setBasketQuantity(
-        brand: String, number: String, itemKey: String, supplierCode: String, quantity: Int
+        brand: String, number: String, itemKey: String, supplierCode: String, quantity: Int,
+        basketId: String? = null
     ) {
-        val fields = auth() + mapOf(
+        val fields = auth() + (basketId?.let { mapOf("basketId" to it) } ?: emptyMap()) + mapOf(
             "positions[0][brand]" to brand,
             "positions[0][number]" to number,
             "positions[0][itemKey]" to itemKey,
@@ -192,9 +208,24 @@ class AbcpShop(private val session: SessionManager) {
         )
     }
 
-    /** Возвращает номера созданных заказов. */
-    suspend fun placeOrder(c: OrderChoice): List<String> {
+    /** Оформляет каждую корзину, где есть позиции. Возвращает номера созданных заказов. */
+    suspend fun placeOrder(c: OrderChoice, basketIds: List<String?> = listOf(null)): List<String> {
+        val numbers = mutableListOf<String>()
+        var lastError: Exception? = null
+        for (id in basketIds.distinct()) {
+            try {
+                numbers += placeOrderOne(c, id)
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        if (numbers.isEmpty()) throw lastError ?: AbcpException("Заказ не оформлен")
+        return numbers
+    }
+
+    private suspend fun placeOrderOne(c: OrderChoice, basketId: String?): List<String> {
         val fields = buildMap {
+            basketId?.let { put("basketId", it) }
             putAll(auth())
             c.paymentId?.let { put("paymentMethod", it) }
             c.shipmentMethodId?.let { put("shipmentMethod", it) }
@@ -370,12 +401,46 @@ fun formatRub(v: Double): String = rub.format(v) + " ₽"
 /** Срок предложения: подпись магазина (deadlineReplace) важнее часов. */
 fun Offer.deliveryText(): String = deadlineLabel ?: formatDelivery(deliveryHours, deliveryHoursMax)
 
-/** Срок из часов ABCP в человеческий вид. */
-fun formatDelivery(hours: Int, hoursMax: Int = 0): String {
+/**
+ * Срок как на сайте — датой: сейчас + часы поставки («25 сент.», «3–5 окт.»).
+ * Сегодня/завтра — словами. now передаётся для тестов.
+ */
+fun formatDelivery(hours: Int, hoursMax: Int = 0, now: Long = System.currentTimeMillis()): String {
     if (hours <= 0) return "сегодня"
-    val d = ceil(hours / 24.0).toInt()
-    val dMax = ceil(hoursMax / 24.0).toInt()
-    return if (dMax > d) "$d–$dMax дн." else "$d дн."
+    val from = dateAfter(now, hours)
+    val to = if (hoursMax > hours) dateAfter(now, hoursMax) else from
+    val a = dayLabel(now, from)
+    val b = dayLabel(now, to)
+    return when {
+        a == b -> a
+        // один месяц: «3–5 окт.»
+        monthFmt.format(from.time) == monthFmt.format(to.time) && a.first().isDigit() ->
+            "${from.get(Calendar.DAY_OF_MONTH)}–$b"
+        else -> "$a – $b"
+    }
+}
+
+private val dayFmt get() = SimpleDateFormat("d MMM", Locale("ru"))
+private val monthFmt get() = SimpleDateFormat("MMM yyyy", Locale("ru"))
+
+private fun dateAfter(now: Long, hours: Int): Calendar =
+    Calendar.getInstance().apply { timeInMillis = now + hours * 3_600_000L }
+
+private fun dayLabel(now: Long, c: Calendar): String {
+    val today = Calendar.getInstance().apply { timeInMillis = now }
+    val days = daysBetween(today, c)
+    return when (days) {
+        0 -> "сегодня"
+        1 -> "завтра"
+        else -> dayFmt.format(c.time)
+    }
+}
+
+private fun daysBetween(a: Calendar, b: Calendar): Int {
+    fun startOfDay(c: Calendar) = (c.clone() as Calendar).apply {
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    return ((startOfDay(b) - startOfDay(a)) / 86_400_000L).toInt()
 }
 
 fun formatAvailability(a: Int): String = if (a > 0) "Наличие $a шт." else "Наличие уточняется"
