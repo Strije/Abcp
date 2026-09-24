@@ -43,6 +43,7 @@ class QuickGroupsActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository) {
     val scope = rememberCoroutineScope()
