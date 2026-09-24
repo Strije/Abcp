@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.abcp.CartActivity
 import com.example.myapplication.abcp.OrdersActivity
 import com.google.gson.Gson
 
@@ -52,6 +53,18 @@ class CabinetActivity : ComponentActivity() {
 
                         Spacer(Modifier.height(8.dp))
 
+                        Button(
+                            onClick = { startActivity(Intent(this@CabinetActivity, SearchActivity::class.java)) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Поиск по артикулу")
+                        }
+                        Button(
+                            onClick = { startActivity(Intent(this@CabinetActivity, CartActivity::class.java)) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Корзина")
+                        }
                         Button(
                             onClick = {
                                 startActivity(

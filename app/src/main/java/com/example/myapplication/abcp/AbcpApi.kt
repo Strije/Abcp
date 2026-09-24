@@ -1,11 +1,13 @@
 package com.example.myapplication.abcp
 
-import com.example.myapplication.OrderDetailsDto
 import com.example.myapplication.OrdersResponseDto
 import com.example.myapplication.UserInfoDto
 import com.google.gson.JsonElement
 import retrofit2.Response
+import retrofit2.http.FieldMap
+import retrofit2.http.FormUrlEncoded
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Query
 
 interface AbcpApi {
@@ -30,4 +32,79 @@ interface AbcpApi {
         @Query("userpsw") userpsw: String,
         @Query(value = "orders[0]", encoded = true) number: String,
     ): Response<JsonElement>
+
+    // --- Поиск. Списки ABCP приходят то массивом, то объектом {"0": {...}}, поэтому JsonElement ---
+
+    @GET("search/brands")
+    suspend fun searchBrands(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String,
+        @Query("number") number: String,
+        @Query("useOnlineStocks") useOnlineStocks: Int = 1
+    ): Response<JsonElement>
+
+    @GET("search/articles")
+    suspend fun searchArticles(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String,
+        @Query("number") number: String,
+        @Query("brand") brand: String,
+        @Query("useOnlineStocks") useOnlineStocks: Int = 1
+    ): Response<JsonElement>
+
+    @GET("search/tips")
+    suspend fun searchTips(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String,
+        @Query("number") number: String
+    ): Response<JsonElement>
+
+    // --- Корзина ---
+
+    @GET("basket/content")
+    suspend fun basketContent(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    /** positions[i][brand|number|itemKey|supplierCode|quantity]; quantity=0 удаляет позицию */
+    @FormUrlEncoded
+    @POST("basket/add")
+    suspend fun basketAdd(@FieldMap fields: Map<String, String>): Response<JsonElement>
+
+    @GET("basket/paymentMethods")
+    suspend fun paymentMethods(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    @GET("basket/shipmentMethods")
+    suspend fun shipmentMethods(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    @GET("basket/shipmentOffices")
+    suspend fun shipmentOffices(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    @GET("basket/shipmentAddresses")
+    suspend fun shipmentAddresses(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    @GET("basket/shipmentDates")
+    suspend fun shipmentDates(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String,
+        @Query("minDeadlineTime") minDeadlineTime: Int,
+        @Query("maxDeadlineTime") maxDeadlineTime: Int
+    ): Response<JsonElement>
+
+    @FormUrlEncoded
+    @POST("basket/order")
+    suspend fun basketOrder(@FieldMap fields: Map<String, String>): Response<JsonElement>
 }

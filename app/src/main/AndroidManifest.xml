@@ -18,6 +18,9 @@
         <activity android:name=".CabinetActivity" android:exported="false" />
         <activity android:name=".abcp.OrderDetailsActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />
+        <activity android:name=".abcp.OffersActivity" android:exported="false" />
+        <activity android:name=".abcp.CartActivity" android:exported="false" />
+        <activity android:name=".abcp.CheckoutActivity" android:exported="false" />
         <activity android:name=".VinSearchActivity" />
         <activity android:name=".GarageActivity" />
 

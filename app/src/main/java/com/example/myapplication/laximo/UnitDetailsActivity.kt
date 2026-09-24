@@ -89,9 +89,7 @@ private fun UnitDetailsScreen(
     }
 
     fun onCartClick(oem: String) {
-        // TODO: запуск поиска
-        Toast.makeText(context, "Поиск по OEM: $oem", Toast.LENGTH_SHORT).show()
-
+        // OEM со схемы → поиск ABCP: бренды → цены и аналоги
         context.startActivity(
             Intent(context, SearchActivity::class.java).apply {
                 putExtra(SearchActivity.EXTRA_BRAND, "")
