@@ -33,6 +33,15 @@ interface AbcpApi {
         @Query(value = "orders[0]", encoded = true) number: String,
     ): Response<JsonElement>
 
+    /** Заказы вместе с позициями (format=p) — для фоновой проверки статусов */
+    @GET("orders")
+    suspend fun ordersWithPositions(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String,
+        @Query("format") format: String = "p",
+        @Query("limit") limit: Int = 50
+    ): Response<JsonElement>
+
     // --- Поиск. Списки ABCP приходят то массивом, то объектом {"0": {...}}, поэтому JsonElement ---
 
     @GET("search/brands")

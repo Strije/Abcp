@@ -1,10 +1,14 @@
 package com.example.myapplication
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -28,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.example.myapplication.abcp.CartScreen
 import com.example.myapplication.abcp.CartState
 import com.example.myapplication.abcp.GarageCar
+import com.example.myapplication.abcp.OrderStatusWatch
 import com.example.myapplication.abcp.OrdersScreen
 import com.example.myapplication.abcp.AbcpShop
 import com.example.myapplication.laximo.normalizeRuPlate
@@ -51,6 +56,15 @@ class MainShellActivity : ComponentActivity() {
         if (!session.isLoggedIn()) {
             startActivity(Intent(this, MainActivity::class.java)); finish(); return
         }
+        // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+)
+        OrderStatusWatch.schedule(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+                .launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         val user = intent.getStringExtra(EXTRA_USER_JSON)?.let {
             runCatching { Gson().fromJson(it, UserInfoDto::class.java) }.getOrNull()
         }
@@ -87,6 +101,7 @@ class MainShellActivity : ComponentActivity() {
                                 userName = user?.name,
                                 onOpenTab = { tab = it },
                                 onLogout = {
+                                    OrderStatusWatch.stop(this@MainShellActivity)
                                     session.clear()
                                     startActivity(Intent(this@MainShellActivity, MainActivity::class.java))
                                     finish()
