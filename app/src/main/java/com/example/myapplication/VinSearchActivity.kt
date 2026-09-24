@@ -151,8 +151,19 @@ class VinSearchActivity : ComponentActivity() {
                                                     style = MaterialTheme.typography.titleMedium
                                                 )
                                                 Spacer(Modifier.height(4.dp))
-                                                Text("catalog: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
-                                                Text("vehicleId: ${r.vehicleId}", style = MaterialTheme.typography.bodySmall)
+                                                Text("VIN/Frame: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
+                                                Text("Каталог: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
+                                                if (r.attributes.isNotEmpty()) {
+                                                    Spacer(Modifier.height(6.dp))
+                                                    r.attributes.forEach { attr ->
+                                                        if (!attr.value.isNullOrBlank()) {
+                                                            Text(
+                                                                "${attr.name ?: attr.key}: ${attr.value}",
+                                                                style = MaterialTheme.typography.bodySmall
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }

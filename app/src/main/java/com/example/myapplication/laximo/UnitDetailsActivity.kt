@@ -61,6 +61,7 @@ private fun UnitDetailsScreen(
     var mapItems by remember { mutableStateOf<List<LaximoImageMapItem>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var selectedCode by remember { mutableStateOf<String?>(null) }
+    var isInteractingWithScheme by remember { mutableStateOf(false) }
 
     LaunchedEffect(ctx.catalog, unit.unitId, unit.ssd) {
         scope.launch {
@@ -106,7 +107,8 @@ private fun UnitDetailsScreen(
         LazyColumn(
             modifier = Modifier
                 .padding(pad)
-                .fillMaxSize()
+                .fillMaxSize(),
+            userScrollEnabled = !isInteractingWithScheme
         ) {
 
             item {
@@ -120,7 +122,8 @@ private fun UnitDetailsScreen(
                             showNumbers = true,
                             onSelectCode = { code ->
                                 selectedCode = code
-                            }
+                            },
+                            onInteractingChange = { isInteractingWithScheme = it }
                         )
                     }
                 }

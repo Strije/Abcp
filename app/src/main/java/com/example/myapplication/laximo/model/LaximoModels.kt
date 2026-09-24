@@ -5,7 +5,8 @@ data class LaximoVehicleContext(
     val vehicleId: String,
     val ssd: String,
     val brand: String? = null,
-    val name: String? = null
+    val name: String? = null,
+    val attributes: List<LaximoAttribute> = emptyList()
 )
 
 data class LaximoCategory(

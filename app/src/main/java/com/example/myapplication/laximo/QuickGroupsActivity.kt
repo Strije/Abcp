@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
@@ -124,40 +125,59 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                     Text(text = "Ошибка: $error", color = Color.Red, modifier = Modifier.padding(12.dp))
                 }
 
+                data class SearchHit(
+                    val node: LaximoQuickGroupNode,
+                    val level: Int,
+                    // Путь по родительским узлам — без него в плоском списке результатов
+                    // поиска теряется контекст вроде "Передние тормоза" / "Задние тормоза".
+                    val ancestorPath: String
+                )
+
                 val displayItems = remember(root, searchQuery, expandedIds) {
-                    val result = mutableListOf<Pair<LaximoQuickGroupNode, Int>>()
+                    val result = mutableListOf<SearchHit>()
                     val q = searchQuery.trim().lowercase()
-                    
-                    fun walk(node: LaximoQuickGroupNode, level: Int) {
+
+                    fun walk(node: LaximoQuickGroupNode, level: Int, ancestorPath: String) {
                         val nameMatch = node.name.lowercase().contains(q)
                         val synMatch = node.synonyms?.lowercase()?.contains(q) == true
                         val matches = q.isEmpty() || nameMatch || synMatch
-                        
+                        val childPath = if (ancestorPath.isEmpty()) node.name else "$ancestorPath › ${node.name}"
+
                         if (q.isNotEmpty()) {
                             if (matches) {
-                                result.add(node to 0)
+                                result.add(SearchHit(node, 0, ancestorPath))
                             }
-                            node.children.forEach { walk(it, level + 1) }
+                            node.children.forEach { walk(it, level + 1, childPath) }
                         } else {
-                            result.add(node to level)
+                            result.add(SearchHit(node, level, ancestorPath))
                             val id = node.quickGroupId
                             if (id != null && expandedIds.contains(id)) {
-                                node.children.forEach { walk(it, level + 1) }
+                                node.children.forEach { walk(it, level + 1, childPath) }
                             }
                         }
                     }
-                    root?.children?.forEach { walk(it, 0) }
+                    root?.children?.forEach { walk(it, 0, "") }
                     result
                 }
 
                 LazyColumn(Modifier.fillMaxSize()) {
-                    items(displayItems, key = { 
-                        // Составной ключ: ID + уровень + хэш имени для уникальности
-                        "${it.first.quickGroupId}_${it.second}_${it.first.name.hashCode()}" 
-                    }) { (node, level) ->
+                    itemsIndexed(displayItems, key = { index, item ->
+                        // Индекс в списке гарантирует уникальность, даже если один и тот же
+                        // узел встречается в дереве под разными родителями (частый случай
+                        // при поиске: "Фильтры"/"Колодки" есть в нескольких категориях сразу).
+                        "${index}_${item.node.quickGroupId}_${item.node.name.hashCode()}"
+                    }) { _, hit ->
+                        val node = hit.node
+                        val level = hit.level
                         ListItem(
                             headlineContent = { Text(node.name) },
-                            supportingContent = { node.synonyms?.let { Text(it, maxLines = 1) } },
+                            supportingContent = {
+                                val subtitle = listOfNotNull(
+                                    hit.ancestorPath.takeIf { it.isNotEmpty() },
+                                    node.synonyms?.takeIf { it.isNotBlank() }
+                                ).joinToString("  •  ")
+                                if (subtitle.isNotEmpty()) Text(subtitle, maxLines = 1)
+                            },
                             modifier = Modifier
                                 .clickable {
                                     val gid = node.quickGroupId ?: return@clickable

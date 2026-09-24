@@ -3,6 +3,8 @@ package com.example.myapplication.laximo
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -19,11 +21,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -34,6 +37,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Size
 import com.example.myapplication.laximo.model.LaximoImageMapItem
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -59,7 +63,8 @@ fun UnitSchemeWithMap(
     mapItems: List<LaximoImageMapItem>,
     selectedCode: String? = null,
     showNumbers: Boolean = true,
-    onSelectCode: (String) -> Unit = {}
+    onSelectCode: (String) -> Unit = {},
+    onInteractingChange: (Boolean) -> Unit = {}
 ) {
     if (imageUrl.isNullOrBlank()) return
 
@@ -127,10 +132,21 @@ fun UnitSchemeWithMap(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(320.dp)
+            .height(420.dp)
+            .clip(RectangleShape)
             .onSizeChanged { boxSize = it }
             .pointerInput(Unit) {
                 detectTapGestures(onDoubleTap = { scope.launch { animateTransform(1f, Offset.Zero) } })
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    onInteractingChange(true)
+                    do {
+                        val event = awaitPointerEvent()
+                    } while (event.changes.any { it.pressed })
+                    onInteractingChange(false)
+                }
             }
             .transformable(transformState)
     ) {
@@ -145,7 +161,10 @@ fun UnitSchemeWithMap(
                 }
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current).data(imageUrl).build(),
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(imageUrl)
+                    .size(Size.ORIGINAL)
+                    .build(),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit,
@@ -197,7 +216,6 @@ fun UnitSchemeWithMap(
                 val itemsByCode = remember(mapItems) {
                     mapItems.filter { !it.code.isNullOrBlank() }.groupBy { it.code!! }
                 }
-                val badgeScale = (1f / scale).coerceIn(0.6f, 1f)
 
                 itemsByCode.forEach { (code, items) ->
                     val isSelected = !selectedCode.isNullOrBlank() && code == selectedCode
@@ -213,11 +231,17 @@ fun UnitSchemeWithMap(
                         text = code,
                         selected = isSelected,
                         modifier = Modifier
-                            .offset { 
+                            .offset {
                                 // Сдвигаем на 12.dp (размер badge / 2), чтобы центр badge совпал с (cx, cy)
-                                IntOffset(cx.roundToInt(), cy.roundToInt()) 
+                                IntOffset(cx.roundToInt(), cy.roundToInt())
                             }
-                            .scale(badgeScale)
+                            .graphicsLayer {
+                                // Читаем scale лениво, в фазе отрисовки — иначе весь список
+                                // номеров пересобирался бы заново на каждом кадре пинч-зума.
+                                val s = (1f / scale).coerceIn(0.6f, 1f)
+                                scaleX = s
+                                scaleY = s
+                            }
                     )
                 }
             }

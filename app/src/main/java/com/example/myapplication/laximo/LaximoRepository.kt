@@ -241,12 +241,22 @@ private fun parseVehicleContexts(raw: String): List<LaximoVehicleContext> {
         val vehicleId = o.stringOrNullAny("vehicleId", "vehicleid", "VehicleId") ?: "0"
         val ssd = o.stringOrNullAny("ssd", "SSD") ?: return@mapNotNull null
 
+        val attrs = o.getAsJsonArray("attributes")?.mapNotNull { a ->
+            val ao = a.asJsonObject
+            LaximoAttribute(
+                key = ao.stringOrNullAny("key") ?: return@mapNotNull null,
+                name = ao.stringOrNullAny("name"),
+                value = ao.stringOrNullAny("value")
+            )
+        }.orEmpty()
+
         LaximoVehicleContext(
             catalog = catalog,
             vehicleId = vehicleId,
             ssd = ssd,
             brand = o.stringOrNullAny("brand", "Brand", "manufacturer"),
-            name = o.stringOrNullAny("name", "Name", "model", "vehicle")
+            name = o.stringOrNullAny("name", "Name", "model", "vehicle"),
+            attributes = attrs
         )
     }
 }
