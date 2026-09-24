@@ -52,6 +52,12 @@ jobs:
         run: |
           grep -E '^e: |What went wrong|^> |error:|Could not|FAILURE|FAILED|AssertionError' build.log | grep -v '^> Task' | head -40 | while IFS= read -r l; do echo "::error::$l"; done
 
+      # Отпечаток подписи APK — видно в аннотациях; у всех сборок он должен быть одинаковым
+      - name: Signing fingerprint
+        run: |
+          AS=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
+          $AS verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -i 'SHA-256' | while IFS= read -r l; do echo "::notice::$l"; done
+
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug
