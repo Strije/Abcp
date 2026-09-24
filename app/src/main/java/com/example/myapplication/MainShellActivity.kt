@@ -198,7 +198,7 @@ private fun HomeScreen(
                 ctx.startActivity(Intent(ctx, VinSearchActivity::class.java))
             }
             Tile("Спросить менеджера", "Подберём по VIN или фото", Icons.Default.Send, modifier = Modifier.weight(1f).height(110.dp)) {
-                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(StoreInfo.managerChatUrl)))
+                ctx.startActivity(Intent(ctx, ChatActivity::class.java))
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

@@ -23,6 +23,7 @@
         <activity android:name=".abcp.CartActivity" android:exported="false" />
         <activity android:name=".abcp.CheckoutActivity" android:exported="false" />
         <activity android:name=".abcp.NotificationsActivity" android:exported="false" />
+        <activity android:name=".ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".VinSearchActivity" />
         <activity android:name=".GarageActivity" />
 
