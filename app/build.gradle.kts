@@ -4,6 +4,11 @@ plugins {
     id("kotlin-parcelize")
 }
 
+val localProps = java.util.Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.example.myapplication"
     compileSdk {
@@ -22,8 +27,11 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "LAXIMO_USER", "\"ru888963\"")
-        buildConfigField("String", "LAXIMO_PASS", "\"xA3FCyt53hx30o2yhz228CRI9ljw-xXZQdYCh4xi4Po\"")
+        // Доступ к Laximo берётся из local.properties (в git не попадает):
+        // laximo.user=...
+        // laximo.pass=...
+        buildConfigField("String", "LAXIMO_USER", "\"${localProps.getProperty("laximo.user", "")}\"")
+        buildConfigField("String", "LAXIMO_PASS", "\"${localProps.getProperty("laximo.pass", "")}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

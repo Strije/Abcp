@@ -1,6 +1,7 @@
 package com.example.myapplication.abcp
 
 import com.google.gson.JsonParser
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -13,9 +14,10 @@ class AbcpGarageRepository(
     private val client: OkHttpClient = OkHttpClient()
 ) {
     fun loadGarage(userLogin: String, userPsw: String): List<GarageCar> {
-        val url =
-            "https://id25202.public.api.abcp.ru/user/garage" +
-                    "?userlogin=$userLogin&userpsw=$userPsw"
+        val url = "https://id25202.public.api.abcp.ru/user/garage".toHttpUrl().newBuilder()
+            .addQueryParameter("userlogin", userLogin)
+            .addQueryParameter("userpsw", userPsw)
+            .build()
 
         val req = Request.Builder().url(url).get().build()
 

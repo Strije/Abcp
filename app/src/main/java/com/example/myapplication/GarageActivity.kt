@@ -27,10 +27,9 @@ class GarageActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ВРЕМЕННО (быстро): прямо тут, чтобы у тебя всё заработало.
-        // Потом перенесём в BuildConfig как LAXIMO_USER/PASS.
-        val userLogin = "m.r.strizh@gmail.com"
-        val userPsw = "88a33660393da77e2f44b9373c4b0138"
+        val session = SessionManager(this)
+        val userLogin = session.login()
+        val userPsw = session.passMd5()
 
         setContent {
             MaterialTheme {
