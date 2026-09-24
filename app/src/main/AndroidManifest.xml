@@ -30,7 +30,6 @@
         <activity android:name=".GarageActivity" />
 
         <!-- Laximo -->
-        <activity android:name=".laximo.VehicleActivity" />
         <activity android:name=".laximo.QuickGroupsActivity" />
         <activity android:name=".laximo.CatalogCategoriesActivity" />
         <activity android:name=".laximo.CatalogUnitsActivity" />
