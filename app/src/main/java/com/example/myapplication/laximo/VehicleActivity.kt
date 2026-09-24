@@ -1,4 +1,5 @@
 package com.example.myapplication.laximo
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import android.content.Intent
 import android.os.Bundle
@@ -32,7 +33,7 @@ class VehicleActivity : ComponentActivity() {
         val title = listOf(brand, name).filter { it.isNotBlank() }.joinToString(" ")
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 VehicleScreen(
                     title = title,
                     onGroupsClick = {

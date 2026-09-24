@@ -1,4 +1,5 @@
 package com.example.myapplication.abcp
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import androidx.compose.material3.ExperimentalMaterial3Api
 import android.os.Bundle
@@ -37,7 +38,7 @@ class OrderDetailsActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
 

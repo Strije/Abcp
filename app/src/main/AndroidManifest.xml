@@ -15,7 +15,7 @@
         android:theme="@style/Theme.MyApplication">
 
         <activity android:name=".abcp.OrdersActivity" android:exported="false" />
-        <activity android:name=".CabinetActivity" android:exported="false" />
+        <activity android:name=".MainShellActivity" android:exported="false" />
         <activity android:name=".abcp.OrderDetailsActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />
         <activity android:name=".abcp.OffersActivity" android:exported="false" />

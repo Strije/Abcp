@@ -1,4 +1,5 @@
 package com.example.myapplication.laximo
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import com.example.myapplication.laximo.resolveLaximoImageUrl
 import android.content.Intent
@@ -59,7 +60,7 @@ class CatalogUnitsActivity : ComponentActivity() {
         )
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 val context = LocalContext.current
 
                 // ✅ ImageLoader с поддержкой GIF

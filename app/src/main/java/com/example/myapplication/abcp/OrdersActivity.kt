@@ -4,112 +4,79 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.OrderDto
 import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 class OrdersActivity : ComponentActivity() {
-
-    private val api = ApiClient.create()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContent { AvtodrugTheme { OrdersScreen() } }
+    }
+}
 
-        val session = SessionManager(this)
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OrdersScreen() {
+    val ctx = LocalContext.current
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var orders by remember { mutableStateOf<List<OrderDto>>(emptyList()) }
 
-        setContent {
-            MaterialTheme {
-                var loading by remember { mutableStateOf(true) }
-                var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        val session = SessionManager(ctx)
+        try {
+            val resp = performRequestWithRetry {
+                ApiClient.create().orders(userlogin = session.login(), userpsw = session.passMd5())
+            }
+            if (resp.isSuccessful) {
+                orders = resp.body()?.itemsList().orEmpty()
+            } else {
+                error = prettifyAbcpError(resp.errorBody()?.string())
+            }
+        } catch (_: Exception) {
+            error = "Не удалось подключиться к серверу."
+        } finally {
+            loading = false
+        }
+    }
 
-                // ✅ единственная переменная со списком заказов
-                var orders by remember { mutableStateOf<List<OrderDto>>(emptyList()) }
-
-                LaunchedEffect(Unit) {
-                    loading = true
-                    error = null
-                    orders = emptyList()
-
-                    try {
-                        val resp = performRequestWithRetry {
-                            api.orders(
-                                userlogin = session.login(),
-                                userpsw = session.passMd5()
-                            )
-                        }
-
-                        if (resp.isSuccessful) {
-                            val body = resp.body()
-                            orders = body?.itemsList().orEmpty()
-                        } else {
-                            val raw = resp.errorBody()?.string()
-                            error = prettifyAbcpError(raw)
-                        }
-                    } catch (_: Exception) {
-                        error = "Не удалось подключиться к серверу."
-                    } finally {
-                        loading = false
-                    }
-                }
-                @OptIn(ExperimentalMaterial3Api::class)
-                Scaffold(
-                    topBar = { TopAppBar(title = { Text("Заказы") }) }
-                ) { padding ->
-                    Box(
-                        modifier = Modifier
-                            .padding(padding)
-                            .fillMaxSize()
-                    ) {
-                        when {
-                            loading -> {
-                                CircularProgressIndicator(Modifier.align(Alignment.Center))
-                            }
-
-                            !error.isNullOrBlank() -> {
-                                Text(
-                                    text = error!!,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier
-                                        .align(Alignment.Center)
-                                        .padding(16.dp)
+    Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }) }) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            when {
+                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                !error.isNullOrBlank() -> Text(
+                    error!!, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.align(Alignment.Center).padding(16.dp)
+                )
+                orders.isEmpty() -> Text("Заказов пока нет", Modifier.align(Alignment.Center))
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(orders) { order ->
+                        OrderRow(order) {
+                            order.number?.let { num ->
+                                ctx.startActivity(
+                                    Intent(ctx, OrderDetailsActivity::class.java)
+                                        .putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
                                 )
-                            }
-
-                            orders.isEmpty() -> {
-                                Text("Заказы не найдены", Modifier.align(Alignment.Center))
-                            }
-
-                            else -> {
-                                LazyColumn(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentPadding = PaddingValues(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    items(orders) { order ->
-                                        OrderRow(
-                                            order = order,
-                                            onClick = {
-                                                order.number?.let { num ->
-                                                    startActivity(
-                                                        Intent(
-                                                            this@OrdersActivity,
-                                                            OrderDetailsActivity::class.java
-                                                        ).putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
-                                                    )
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
                             }
                         }
                     }
@@ -121,22 +88,48 @@ class OrdersActivity : ComponentActivity() {
 
 @Composable
 private fun OrderRow(order: OrderDto, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
+    ElevatedCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp)) {
-            Text(
-                text = "Заказ №${order.number ?: "-"}",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(text = "Статус: ${order.status ?: "-"}")
-            Spacer(Modifier.height(4.dp))
-            Text(text = "Сумма: ${order.sum ?: "-"}")
-            Spacer(Modifier.height(4.dp))
-            Text(text = "Дата: ${order.date ?: "-"}")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("№ ${order.number ?: "-"}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(order.date.orEmpty(), style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.height(8.dp))
+            order.status?.let { StatusChip(it, order.statusColor) }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Column(Modifier.weight(1f)) {
+                    Text("Сумма", style = MaterialTheme.typography.bodySmall)
+                    Text(order.sum?.toDoubleOrNull()?.let(::formatRub) ?: order.sum.orEmpty(), fontWeight = FontWeight.Bold)
+                }
+                val debt = order.debt?.toDoubleOrNull() ?: 0.0
+                if (debt > 0) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text("Долг", style = MaterialTheme.typography.bodySmall)
+                        Text(formatRub(debt), color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
+}
+
+/** Плашка статуса в цвете, заданном в ABCP (statusColor), с мягким фоном. */
+@Composable
+fun StatusChip(text: String, hex: String?) {
+    val c = parseAbcpColor(hex) ?: MaterialTheme.colorScheme.primary
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = c,
+        modifier = Modifier
+            .background(c.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
+}
+
+fun parseAbcpColor(hex: String?): Color? {
+    val h = hex?.trim()?.removePrefix("#") ?: return null
+    if (h.length != 6) return null
+    return h.toLongOrNull(16)?.let { Color(0xFF000000 or it) }
 }

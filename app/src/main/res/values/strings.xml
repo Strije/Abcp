@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AbcpClient</string>
+    <string name="app_name">Автодруг</string>
     <string name="login">Логин</string>
     <string name="password">Пароль</string>
     <string name="login_button">Войти</string>

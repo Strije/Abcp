@@ -1,4 +1,5 @@
 package com.example.myapplication
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import android.content.Intent
 import android.os.Bundle
@@ -32,7 +33,7 @@ class MainActivity : ComponentActivity() {
         val session = SessionManager(this)
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 var checkingAutoLogin by remember { mutableStateOf(true) }
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
                 var inFlight by remember { mutableStateOf(false) }
@@ -40,8 +41,8 @@ class MainActivity : ComponentActivity() {
                 fun goToCabinet(user: UserInfoDto) {
                     val json = Gson().toJson(user)
                     startActivity(
-                        Intent(this@MainActivity, CabinetActivity::class.java)
-                            .putExtra(CabinetActivity.EXTRA_USER_JSON, json)
+                        Intent(this@MainActivity, MainShellActivity::class.java)
+                            .putExtra(MainShellActivity.EXTRA_USER_JSON, json)
                     )
                     finish()
                 }
@@ -212,7 +213,7 @@ fun LoginScreen(
 @Preview(showBackground = true)
 @Composable
 fun LoginScreenPreview() {
-    MaterialTheme {
+    AvtodrugTheme {
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("Preview")
         }

@@ -1,4 +1,5 @@
 package com.example.myapplication.laximo
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import android.content.Intent
 import android.os.Bundle
@@ -40,7 +41,7 @@ class UnitDetailsActivity : ComponentActivity() {
         val unit = LaximoUnit(unitId = unitId, name = unitName, ssd = unitSsd, imageUrl = imageUrl)
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 UnitDetailsScreen(ctx = ctx, unit = unit, repo = repo)
             }
         }

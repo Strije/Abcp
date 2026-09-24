@@ -1,4 +1,5 @@
 package com.example.myapplication
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import android.content.Intent
 import android.os.Bundle
@@ -42,7 +43,7 @@ class VinSearchActivity : ComponentActivity() {
         val prefillVin = intent.getStringExtra("prefillVin").orEmpty()
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 val ctx = LocalContext.current
                 val scope = rememberCoroutineScope()
 

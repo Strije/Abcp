@@ -1,4 +1,6 @@
 package com.example.myapplication.abcp
+import com.example.myapplication.ui.theme.AvtodrugTheme
+import com.example.myapplication.ui.theme.DeliveryColors
 
 import android.os.Bundle
 import android.widget.Toast
@@ -31,7 +33,7 @@ class OffersActivity : ComponentActivity() {
         val shop = AbcpShop(SessionManager(this))
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 val scope = rememberCoroutineScope()
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
@@ -143,7 +145,15 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
             Text(formatAvailability(o.availability) + pack, style = MaterialTheme.typography.bodySmall)
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(formatDelivery(o.deliveryHours, o.deliveryHoursMax), style = MaterialTheme.typography.titleSmall)
+            Text(
+                formatDelivery(o.deliveryHours, o.deliveryHoursMax),
+                style = MaterialTheme.typography.titleSmall,
+                color = when {
+                    o.deliveryHours <= 0 -> DeliveryColors.today
+                    o.deliveryHours <= 72 -> DeliveryColors.soon
+                    else -> DeliveryColors.later
+                }
+            )
             if (o.supplier.isNotBlank()) {
                 Text(o.supplier, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -152,27 +162,34 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
     HorizontalDivider()
 }
 
+/** Шторка снизу: количество с учётом кратности и итог — карточка товара остаётся на месте. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddToCartDialog(offer: Offer, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
     val step = offer.packing
     val max = if (offer.availability > 0) offer.availability else Int.MAX_VALUE
     var qty by remember { mutableIntStateOf(step) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${offer.brand} ${offer.number}") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${formatRub(offer.price)} · ${formatDelivery(offer.deliveryHours, offer.deliveryHoursMax)}")
-                if (offer.noReturn) Text("Без возврата", color = MaterialTheme.colorScheme.error)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = { qty = (qty - step).coerceAtLeast(step) }) { Text("−") }
-                    Text("$qty шт.", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.titleMedium)
-                    OutlinedButton(onClick = { if (qty + step <= max) qty += step }) { Text("+") }
-                }
-                Text("Итого: ${formatRub(offer.price * qty)}", fontWeight = FontWeight.Bold)
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("${offer.brand} ${offer.number}", style = MaterialTheme.typography.titleLarge)
+            if (offer.description.isNotBlank()) Text(offer.description, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "${formatRub(offer.price)} · ${formatDelivery(offer.deliveryHours, offer.deliveryHoursMax)}",
+                style = MaterialTheme.typography.titleMedium
+            )
+            if (offer.noReturn) Text("Без возврата", color = MaterialTheme.colorScheme.error)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FilledTonalButton(onClick = { qty = (qty - step).coerceAtLeast(step) }) { Text("−") }
+                Text("$qty шт.", Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.titleLarge)
+                FilledTonalButton(onClick = { if (qty + step <= max) qty += step }) { Text("+") }
             }
-        },
-        confirmButton = { Button(onClick = { onConfirm(qty) }) { Text("В корзину") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
-    )
+            Button(
+                onClick = { onConfirm(qty) },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("В корзину · ${formatRub(offer.price * qty)}") }
+        }
+    }
 }

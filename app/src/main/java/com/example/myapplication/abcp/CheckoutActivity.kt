@@ -1,4 +1,5 @@
 package com.example.myapplication.abcp
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import android.content.Intent
 import android.os.Bundle
@@ -27,7 +28,7 @@ class CheckoutActivity : ComponentActivity() {
         val shop = AbcpShop(SessionManager(this))
 
         setContent {
-            MaterialTheme {
+            AvtodrugTheme {
                 val scope = rememberCoroutineScope()
                 var loading by remember { mutableStateOf(true) }
                 var sending by remember { mutableStateOf(false) }

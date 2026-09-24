@@ -1,4 +1,5 @@
 package com.example.myapplication.abcp
+import com.example.myapplication.ui.theme.AvtodrugTheme
 
 import android.content.Intent
 import android.os.Bundle
@@ -18,9 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.SearchActivity
 import com.example.myapplication.SessionManager
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
 class CartActivity : ComponentActivity() {
 
     private var reloadKey by mutableIntStateOf(0)
@@ -32,96 +33,100 @@ class CartActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val shop = AbcpShop(SessionManager(this))
+        setContent { AvtodrugTheme { CartScreen(reloadKey) } }
+    }
+}
 
-        setContent {
-            MaterialTheme {
-                val scope = rememberCoroutineScope()
-                var loading by remember { mutableStateOf(true) }
-                var error by remember { mutableStateOf<String?>(null) }
-                var basket by remember { mutableStateOf<List<BasketItem>>(emptyList()) }
+/** reloadKey меняется — корзина перечитывается (возврат на экран, смена вкладки). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CartScreen(reloadKey: Int) {
+    val ctx = LocalContext.current
+    val shop = remember { AbcpShop(SessionManager(ctx)) }
+    var localReload by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var basket by remember { mutableStateOf<List<BasketItem>>(emptyList()) }
 
-                LaunchedEffect(reloadKey) {
-                    loading = true
-                    error = null
-                    try {
-                        basket = shop.basket()
-                        CartState.count = basket.size
-                    } catch (e: Exception) {
-                        error = e.message ?: "Ошибка загрузки корзины"
-                    } finally {
-                        loading = false
+    LaunchedEffect(reloadKey, localReload) {
+        loading = true
+        error = null
+        try {
+            basket = shop.basket()
+            CartState.count = basket.size
+        } catch (e: Exception) {
+            error = e.message ?: "Ошибка загрузки корзины"
+        } finally {
+            loading = false
+        }
+    }
+
+    val total = basket.sumOf { it.price * it.quantity }
+
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Корзина") }) },
+        bottomBar = {
+            if (basket.isNotEmpty()) {
+                Surface(tonalElevation = 3.dp) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Итого", style = MaterialTheme.typography.bodySmall)
+                            Text(formatRub(total), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        }
+                        Button(onClick = {
+                            ctx.startActivity(Intent(ctx, CheckoutActivity::class.java))
+                        }) { Text("Оформить") }
                     }
                 }
-
-                val total = basket.sumOf { it.price * it.quantity }
-
-                Scaffold(
-                    topBar = { TopAppBar(title = { Text("Корзина") }) },
-                    bottomBar = {
-                        if (basket.isNotEmpty()) {
-                            Surface(tonalElevation = 3.dp) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("Итого", style = MaterialTheme.typography.bodySmall)
-                                        Text(formatRub(total), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                                    }
-                                    Button(onClick = {
-                                        startActivity(Intent(this@CartActivity, CheckoutActivity::class.java))
-                                    }) { Text("Оформить") }
+            }
+        }
+    ) { padding ->
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            when {
+                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                error != null -> Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                basket.isEmpty() -> Column(
+                    Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Корзина пуста")
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = {
+                        ctx.startActivity(Intent(ctx, SearchActivity::class.java))
+                    }) { Text("Найти запчасть") }
+                }
+                else -> LazyColumn(
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(basket) { b ->
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("${b.brand} ${b.number}", style = MaterialTheme.typography.titleSmall)
+                                    if (b.description.isNotBlank()) Text(b.description, style = MaterialTheme.typography.bodySmall)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "${formatRub(b.price)} × ${b.quantity} = ${formatRub(b.price * b.quantity)}",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text("Срок: ${formatDelivery(b.deadlineHours, b.deadlineHoursMax)}", style = MaterialTheme.typography.bodySmall)
+                                    b.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                                 }
-                            }
-                        }
-                    }
-                ) { padding ->
-                    Box(Modifier.padding(padding).fillMaxSize()) {
-                        when {
-                            loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                            error != null -> Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
-                            basket.isEmpty() -> Column(
-                                Modifier.align(Alignment.Center),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text("Корзина пуста")
-                                Spacer(Modifier.height(12.dp))
-                                Button(onClick = {
-                                    startActivity(Intent(this@CartActivity, SearchActivity::class.java))
-                                }) { Text("Найти запчасть") }
-                            }
-                            else -> LazyColumn(
-                                contentPadding = PaddingValues(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(basket) { b ->
-                                    ElevatedCard(Modifier.fillMaxWidth()) {
-                                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Column(Modifier.weight(1f)) {
-                                                Text("${b.brand} ${b.number}", style = MaterialTheme.typography.titleSmall)
-                                                if (b.description.isNotBlank()) Text(b.description, style = MaterialTheme.typography.bodySmall)
-                                                Spacer(Modifier.height(4.dp))
-                                                Text(
-                                                    "${formatRub(b.price)} × ${b.quantity} = ${formatRub(b.price * b.quantity)}",
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                                Text("Срок: ${formatDelivery(b.deadlineHours, b.deadlineHoursMax)}", style = MaterialTheme.typography.bodySmall)
-                                                b.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                                            }
-                                            IconButton(onClick = {
-                                                scope.launch {
-                                                    try {
-                                                        shop.removeFromBasket(b)
-                                                        reloadKey++
-                                                    } catch (e: Exception) {
-                                                        Toast.makeText(this@CartActivity, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
-                                                    }
-                                                }
-                                            }) { Icon(Icons.Default.Delete, "Удалить") }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        try {
+                                            shop.removeFromBasket(b)
+                                            localReload++
+                                        } catch (e: Exception) {
+                                            Toast.makeText(ctx, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
                                         }
                                     }
-                                }
+                                }) { Icon(Icons.Default.Delete, "Удалить") }
                             }
                         }
                     }
