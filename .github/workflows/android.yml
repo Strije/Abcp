@@ -44,13 +44,13 @@ jobs:
       - name: Build debug APK
         run: |
           set -o pipefail
-          ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleDebug testDebugUnitTest --stacktrace 2>&1 | tee build.log
 
       # Ошибки компиляции — в аннотации, их видно без входа в GitHub
       - name: Report errors
         if: failure()
         run: |
-          grep -E '^e: |What went wrong|^> |error:|Could not|FAILURE' build.log | grep -v '^> Task' | head -40 | while IFS= read -r l; do echo "::error::$l"; done
+          grep -E '^e: |What went wrong|^> |error:|Could not|FAILURE|FAILED|AssertionError' build.log | grep -v '^> Task' | head -40 | while IFS= read -r l; do echo "::error::$l"; done
 
       - uses: actions/upload-artifact@v4
         with:

@@ -80,7 +80,7 @@ class GarageActivity : ComponentActivity() {
                                         Column(Modifier.padding(12.dp)) {
                                             Text(car.title, style = MaterialTheme.typography.titleMedium)
                                             Spacer(Modifier.height(4.dp))
-                                            Text("VIN: ${car.vin}", style = MaterialTheme.typography.bodySmall)
+                                            Text(car.vin, style = MaterialTheme.typography.bodySmall)
                                         }
                                     }
                                 }

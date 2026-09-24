@@ -54,7 +54,7 @@ class VinSearchActivity : ComponentActivity() {
                 fun onSearchClick() {
                     val vin = vinText.trim()
                     if (vin.isBlank()) {
-                        error = "Введите VIN"
+                        error = "Введите VIN, номер кузова или госномер"
                         return
                     }
 
@@ -65,7 +65,7 @@ class VinSearchActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             val list = withContext(Dispatchers.IO) {
-                                repo.findVehicle(vin)
+                                repo.findVehicleAny(vin)
                             }
                             results = list
                         } catch (e: Exception) {
@@ -84,7 +84,7 @@ class VinSearchActivity : ComponentActivity() {
                 }
 
                 Scaffold(
-                    topBar = { TopAppBar(title = { Text("Поиск по VIN") }) }
+                    topBar = { TopAppBar(title = { Text("Поиск автомобиля") }) }
                 ) { padding ->
                     Column(
                         modifier = Modifier
@@ -96,7 +96,8 @@ class VinSearchActivity : ComponentActivity() {
                         OutlinedTextField(
                             value = vinText,
                             onValueChange = { vinText = it },
-                            label = { Text("VIN") },
+                            label = { Text("VIN, номер кузова или госномер") },
+                            placeholder = { Text("XTA21099… / SGL5-400683 / А123ВС92") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -151,7 +152,7 @@ class VinSearchActivity : ComponentActivity() {
                                                     style = MaterialTheme.typography.titleMedium
                                                 )
                                                 Spacer(Modifier.height(4.dp))
-                                                Text("VIN/Frame: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
+                                                Text("Запрос: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
                                                 Text("Каталог: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
                                                 if (r.attributes.isNotEmpty()) {
                                                     Spacer(Modifier.height(6.dp))

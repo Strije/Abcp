@@ -37,7 +37,7 @@ class AbcpGarageRepository(
             return arr.mapNotNull { el ->
                 val o = el.asJsonObject
 
-                val vin = listOf("vin", "VIN", "frame", "body", "chassis")
+                val vin = listOf("vin", "VIN", "frame", "body", "chassis", "vehicleRegPlate")
                     .firstNotNullOfOrNull { key ->
                         o.get(key)?.takeIf { it.isJsonPrimitive }?.asString
                     }

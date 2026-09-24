@@ -23,6 +23,20 @@ class LaximoRepository(
         parseVehicleContexts(raw)
     }
 
+    suspend fun findVehicleByPlate(plate: String): List<LaximoVehicleContext> = withContext(Dispatchers.IO) {
+        val raw = client.post(
+            "findVehicleByPlateNumber",
+            mapOf("countryCode" to "ru", "plateNumber" to plate)
+        )
+        parseVehicleContexts(raw)
+    }
+
+    /** Госномер РФ ищем по номеру, всё остальное — как VIN/Frame. */
+    suspend fun findVehicleAny(query: String): List<LaximoVehicleContext> {
+        val plate = normalizeRuPlate(query)
+        return if (plate != null) findVehicleByPlate(plate) else findVehicle(query)
+    }
+
     suspend fun listCategories(ctx: LaximoVehicleContext): List<LaximoCategory> = withContext(Dispatchers.IO) {
         val raw = client.post(
             "listCategories",
