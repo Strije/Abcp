@@ -88,6 +88,14 @@ class AbcpShop(private val session: SessionManager) {
             .mapNotNull { it.toOffer() }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
 
+    /** id статусов, которые в ABCP отмечены как конечные (выдано, отказ, возврат…) */
+    suspend fun finalStatusIds(): Set<String> =
+        items(call { api.orderStatuses(login, psw) }).mapNotNull {
+            val o = it.asJsonObjectOrNull() ?: return@mapNotNull null
+            val fin = o.str("isFinalStatus")
+            if (fin == "1" || fin.equals("true", ignoreCase = true)) o.str("id") else null
+        }.toSet()
+
     suspend fun basket(): List<BasketItem> =
         items(call { api.basketContent(login, psw) }).mapNotNull { it.toBasketItem() }
 

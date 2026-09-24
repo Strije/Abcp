@@ -33,6 +33,13 @@ interface AbcpApi {
         @Query(value = "orders[0]", encoded = true) number: String,
     ): Response<JsonElement>
 
+    /** Все статусы магазина: id, name, color, isFinalStatus */
+    @GET("orders/statuses")
+    suspend fun orderStatuses(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
     /** Заказы вместе с позициями (format=p) — для фоновой проверки статусов */
     @GET("orders")
     suspend fun ordersWithPositions(

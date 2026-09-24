@@ -53,6 +53,9 @@ fun collectPositionStatuses(root: JsonElement): List<PositionStatus> {
 fun changedStatuses(previous: Map<String, String>, now: List<PositionStatus>): List<PositionStatus> =
     now.filter { p -> previous[p.key].let { it != null && it != p.status } }
 
+/** Запись ленты: когда, какой заказ, какая позиция, новый статус. */
+data class FeedItem(val time: Long, val order: String, val title: String, val status: String)
+
 // ---------------- Фоновая проверка ----------------
 
 object OrderStatusWatch {
@@ -87,6 +90,35 @@ object OrderStatusWatch {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, json).apply()
     }
 
+    // ---- Лента уведомлений: история изменений, чтобы смахнутое уведомление не терялось ----
+
+    private const val FEED = "feed"
+    private const val SEEN = "feed_seen"
+    private const val FEED_MAX = 100
+
+    fun feed(ctx: Context): List<FeedItem> {
+        val json = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(FEED, null) ?: return emptyList()
+        return runCatching {
+            Gson().fromJson<List<FeedItem>>(json, object : TypeToken<List<FeedItem>>() {}.type)
+        }.getOrNull().orEmpty()
+    }
+
+    internal fun addToFeed(ctx: Context, order: String, changed: List<PositionStatus>) {
+        val now = System.currentTimeMillis()
+        val added = changed.map { FeedItem(now, order, it.title, it.status) }
+        val all = (added + feed(ctx)).take(FEED_MAX)
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(FEED, Gson().toJson(all)).apply()
+    }
+
+    fun unreadCount(ctx: Context): Int {
+        val seen = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(SEEN, 0)
+        return feed(ctx).count { it.time > seen }
+    }
+
+    fun markSeen(ctx: Context) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putLong(SEEN, System.currentTimeMillis()).apply()
+    }
+
     fun ensureChannel(ctx: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(CHANNEL, "Статусы заказов", NotificationManager.IMPORTANCE_DEFAULT)
@@ -114,7 +146,10 @@ class OrderStatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         // Первый запуск — только запоминаем, чтобы не завалить уведомлениями по старым заказам
         if (previous == null) return Result.success()
 
-        changedStatuses(previous, now).groupBy { it.order }.forEach { (order, list) -> notify(order, list) }
+        changedStatuses(previous, now).groupBy { it.order }.forEach { (order, list) ->
+            OrderStatusWatch.addToFeed(applicationContext, order, list)
+            notify(order, list)
+        }
         return Result.success()
     }
 

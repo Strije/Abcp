@@ -37,6 +37,8 @@ fun OrdersScreen() {
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var orders by remember { mutableStateOf<List<OrderDto>>(emptyList()) }
+    var finalIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var tab by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         val session = SessionManager(ctx)
@@ -49,6 +51,8 @@ fun OrdersScreen() {
             } else {
                 error = prettifyAbcpError(resp.errorBody()?.string())
             }
+            // Если справочник статусов не загрузился — все заказы окажутся в «Активных», это безопасно
+            finalIds = runCatching { AbcpShop(session).finalStatusIds() }.getOrDefault(emptySet())
         } catch (_: Exception) {
             error = "Не удалось подключиться к серверу."
         } finally {
@@ -56,27 +60,40 @@ fun OrdersScreen() {
         }
     }
 
+    // Заказ завершён, когда у него общий статус и он конечный. Позиции в разных статусах — заказ ещё в работе.
+    val (done, active) = orders.partition { o -> o.statusId != null && o.statusId in finalIds }
+    val shown = if (tab == 0) active else done
+
     Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }) }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when {
-                loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                !error.isNullOrBlank() -> Text(
-                    error!!, color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp)
-                )
-                orders.isEmpty() -> Text("Заказов пока нет", Modifier.align(Alignment.Center))
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(orders) { order ->
-                        OrderRow(order) {
-                            order.number?.let { num ->
-                                ctx.startActivity(
-                                    Intent(ctx, OrderDetailsActivity::class.java)
-                                        .putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
-                                )
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            TabRow(selectedTabIndex = tab) {
+                Tab(tab == 0, { tab = 0 }, text = { Text("Активные (${active.size})") })
+                Tab(tab == 1, { tab = 1 }, text = { Text("Завершённые (${done.size})") })
+            }
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                    !error.isNullOrBlank() -> Text(
+                        error!!, color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.align(Alignment.Center).padding(16.dp)
+                    )
+                    shown.isEmpty() -> Text(
+                        if (tab == 0) "Активных заказов нет" else "Завершённых заказов нет",
+                        Modifier.align(Alignment.Center)
+                    )
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(shown) { order ->
+                            OrderRow(order) {
+                                order.number?.let { num ->
+                                    ctx.startActivity(
+                                        Intent(ctx, OrderDetailsActivity::class.java)
+                                            .putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
+                                    )
+                                }
                             }
                         }
                     }

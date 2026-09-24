@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.example.myapplication.abcp.CartScreen
 import com.example.myapplication.abcp.CartState
 import com.example.myapplication.abcp.GarageCar
+import com.example.myapplication.abcp.NotificationsActivity
 import com.example.myapplication.abcp.OrderStatusWatch
 import com.example.myapplication.abcp.OrdersScreen
 import com.example.myapplication.abcp.AbcpShop
@@ -49,6 +50,14 @@ private enum class HomeTab(val title: String, val icon: ImageVector) {
 
 /** Основной экран после входа: нижнее меню (зона большого пальца) и вкладки. */
 class MainShellActivity : ComponentActivity() {
+
+    /** Непрочитанные в ленте уведомлений — перечитываем при каждом возврате на экран */
+    private var unread by mutableIntStateOf(0)
+
+    override fun onResume() {
+        super.onResume()
+        unread = OrderStatusWatch.unreadCount(this)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +108,7 @@ class MainShellActivity : ComponentActivity() {
                         when (tab) {
                             HomeTab.Home -> HomeScreen(
                                 userName = user?.name,
+                                unread = unread,
                                 onOpenTab = { tab = it },
                                 onLogout = {
                                     OrderStatusWatch.stop(this@MainShellActivity)
@@ -130,6 +140,7 @@ class MainShellActivity : ComponentActivity() {
 @Composable
 private fun HomeScreen(
     userName: String?,
+    unread: Int,
     user: UserInfoDto?,
     onOpenTab: (HomeTab) -> Unit,
     onLogout: () -> Unit
@@ -148,6 +159,11 @@ private fun HomeScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), "Автодруг", Modifier.height(40.dp).weight(1f, fill = false))
             Spacer(Modifier.weight(1f))
+            IconButton(onClick = { ctx.startActivity(Intent(ctx, NotificationsActivity::class.java)) }) {
+                BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) {
+                    Icon(Icons.Default.Notifications, "Уведомления")
+                }
+            }
             IconButton(onClick = { showProfile = true }) { Icon(Icons.Default.AccountCircle, "Профиль") }
         }
         Text(
