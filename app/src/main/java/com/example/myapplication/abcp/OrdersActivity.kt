@@ -21,7 +21,9 @@ import androidx.compose.ui.unit.dp
 import com.example.myapplication.OrderDto
 import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
+import com.example.myapplication.server.AppServer
 import com.example.myapplication.ui.theme.AvtodrugTheme
+import kotlinx.coroutines.launch
 
 class OrdersActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,6 +36,8 @@ class OrdersActivity : ComponentActivity() {
 @Composable
 fun OrdersScreen() {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val server = remember { AppServer(ctx) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var orders by remember { mutableStateOf<List<OrderDto>>(emptyList()) }
@@ -87,7 +91,13 @@ fun OrdersScreen() {
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(shown) { order ->
-                            OrderRow(order) {
+                            val payNumber = order.number
+                            OrderRow(
+                                order,
+                                onPay = if (server.enabled && payNumber != null) {
+                                    { payOrder(ctx, scope, server, payNumber) }
+                                } else null
+                            ) {
                                 order.number?.let { num ->
                                     ctx.startActivity(
                                         Intent(ctx, OrderDetailsActivity::class.java)
@@ -104,7 +114,7 @@ fun OrdersScreen() {
 }
 
 @Composable
-private fun OrderRow(order: OrderDto, onClick: () -> Unit) {
+private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -> Unit) {
     ElevatedCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -125,8 +135,25 @@ private fun OrderRow(order: OrderDto, onClick: () -> Unit) {
                         Text("Долг", style = MaterialTheme.typography.bodySmall)
                         Text(formatRub(debt), color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                     }
+                    if (onPay != null) {
+                        Spacer(Modifier.width(12.dp))
+                        Button(onClick = onPay) { Text("Оплатить") }
+                    }
                 }
             }
+        }
+    }
+}
+
+/** Ссылку на оплату даёт наш сервер (cp/payment/token доступен только API-админу), открываем в браузере. */
+fun payOrder(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope, server: AppServer, number: String) {
+    android.widget.Toast.makeText(ctx, "Открываем оплату…", android.widget.Toast.LENGTH_SHORT).show()
+    scope.launch {
+        try {
+            val url = server.payLink(number)
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(ctx, e.message ?: "Не удалось получить ссылку на оплату", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 }

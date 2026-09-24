@@ -36,7 +36,11 @@ import com.example.myapplication.abcp.NotificationsActivity
 import com.example.myapplication.abcp.OrderStatusWatch
 import com.example.myapplication.abcp.OrdersScreen
 import com.example.myapplication.abcp.AbcpShop
+import com.example.myapplication.abcp.formatRub
 import com.example.myapplication.laximo.normalizeRuPlate
+import com.example.myapplication.server.AppServer
+import com.example.myapplication.server.Finance
+import kotlinx.coroutines.launch
 import com.example.myapplication.ui.theme.AvtodrugTheme
 import com.google.gson.Gson
 
@@ -146,9 +150,15 @@ private fun HomeScreen(
     onLogout: () -> Unit
 ) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var car by remember { mutableStateOf<GarageCar?>(null) }
     var showProfile by remember { mutableStateOf(false) }
+    val server = remember { AppServer(ctx) }
+    var finance by remember { mutableStateOf<Finance?>(null) }
+    var showTopup by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { if (server.enabled) finance = runCatching { server.finance() }.getOrNull() }
 
     LaunchedEffect(Unit) { car = runCatching { loadGarage(ctx).firstOrNull() }.getOrNull() }
 
@@ -193,6 +203,21 @@ private fun HomeScreen(
             modifier = Modifier.fillMaxWidth().height(120.dp)
         ) { car?.let { openCar(ctx, it) } ?: ctx.startActivity(Intent(ctx, VinSearchActivity::class.java)) }
 
+        // Баланс и уровень цен — с нашего сервера (в клиентском API ABCP их нет)
+        finance?.let { f ->
+            val owe = f.debt > 0
+            Tile(
+                title = if (owe) "Долг ${formatRub(f.debt)}" else "Баланс ${formatRub(f.balance)}",
+                subtitle = listOfNotNull(
+                    f.profile?.let { "Уровень цен: $it" },
+                    f.creditLimit.takeIf { it > 0 }?.let { "Кредитный лимит ${formatRub(it)}" },
+                    "Пополнить счёт"
+                ).joinToString(" · "),
+                icon = Icons.Default.AccountBox,
+                modifier = Modifier.fillMaxWidth().height(104.dp)
+            ) { showTopup = true }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Tile("Подбор по авто", "VIN · кузов · госномер", Icons.Default.Search, modifier = Modifier.weight(1f).height(110.dp)) {
                 ctx.startActivity(Intent(ctx, VinSearchActivity::class.java))
@@ -212,6 +237,19 @@ private fun HomeScreen(
         Spacer(Modifier.height(8.dp))
     }
 
+    if (showTopup) {
+        TopupSheet(suggested = finance?.debt?.takeIf { it > 0 } ?: 1000.0, onDismiss = { showTopup = false }) { amount ->
+            showTopup = false
+            scope.launch {
+                try {
+                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(server.topupLink(amount))))
+                } catch (e: Exception) {
+                    android.widget.Toast.makeText(ctx, e.message ?: "Не удалось получить ссылку", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     if (showProfile) {
         ModalBottomSheet(onDismissRequest = { showProfile = false }) {
             Column(Modifier.fillMaxWidth().padding(20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -222,6 +260,29 @@ private fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TopupSheet(suggested: Double, onDismiss: () -> Unit, onPay: (Double) -> Unit) {
+    var text by remember { mutableStateOf("%.0f".format(suggested)) }
+    val amount = text.replace(',', '.').toDoubleOrNull()
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Пополнить счёт", style = MaterialTheme.typography.titleLarge)
+            OutlinedTextField(
+                value = text, onValueChange = { text = it.filter { c -> c.isDigit() || c == ',' || c == '.' } },
+                label = { Text("Сумма, ₽") }, singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(
+                onClick = { amount?.let(onPay) },
+                enabled = amount != null && amount >= 1,
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("Перейти к оплате") }
         }
     }
 }

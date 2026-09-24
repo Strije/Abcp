@@ -34,6 +34,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.example.myapplication.SessionManager
+import com.example.myapplication.server.AppServer
 import com.example.myapplication.ui.theme.AvtodrugTheme
 import com.example.myapplication.ui.theme.DeliveryColors
 import kotlinx.coroutines.launch
@@ -57,6 +58,7 @@ class OffersActivity : ComponentActivity() {
         val number = intent.getStringExtra(EXTRA_NUMBER).orEmpty()
         val description = intent.getStringExtra(EXTRA_DESCRIPTION).orEmpty()
         val shop = AbcpShop(SessionManager(this))
+        val server = AppServer(this)
 
         setContent {
             AvtodrugTheme {
@@ -77,6 +79,14 @@ class OffersActivity : ComponentActivity() {
                     loading = true
                     try {
                         offers = shop.offers(number, brand, all = showAll)
+                        // Картинки — с нашего сервера (articles/info доступен только API-админу)
+                        val need = offers.filter { it.images.isEmpty() }.map { it.brand to it.number }.distinct()
+                        if (need.isNotEmpty()) {
+                            val imgs = runCatching { server.images(need) }.getOrDefault(emptyMap())
+                            if (imgs.isNotEmpty()) offers = offers.map { o ->
+                                if (o.images.isNotEmpty()) o else o.copy(images = imgs["${o.brand}|${o.number}"].orEmpty())
+                            }
+                        }
                     } catch (e: Exception) {
                         error = e.message ?: "Ошибка загрузки"
                     } finally {

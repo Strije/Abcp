@@ -1,0 +1,117 @@
+package com.example.myapplication.server
+
+import android.content.Context
+import com.example.myapplication.BuildConfig
+import com.example.myapplication.SessionManager
+import com.google.gson.Gson
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
+
+data class Finance(
+    val balance: Double,
+    val debt: Double,
+    val saldo: Double,
+    val creditLimit: Double,
+    val overdueSaldo: Double,
+    val inStopList: Boolean,
+    val profile: String?
+)
+
+class ServerException(message: String, val code: Int = 0) : Exception(message)
+
+/**
+ * Наш сервер (server/ в репозитории): то, что ABCP отдаёт только API-администратору —
+ * баланс, ссылки на оплату, картинки. Вход — тем же логином клиента, сервер выдаёт токен.
+ */
+class AppServer(ctx: Context) {
+
+    private val session = SessionManager(ctx)
+    private val prefs = ctx.getSharedPreferences("abcp_session", Context.MODE_PRIVATE) // очищается при выходе
+    private val base = BuildConfig.SERVER_URL.trimEnd('/')
+
+    val enabled: Boolean get() = base.isNotBlank()
+
+    suspend fun finance(): Finance {
+        val o = get("/v1/me/finance").asJsonObject
+        fun d(k: String) = o.get(k)?.takeIf { !it.isJsonNull }?.asDouble ?: 0.0
+        return Finance(
+            balance = d("balance"), debt = d("debt"), saldo = d("saldo"),
+            creditLimit = d("creditLimit"), overdueSaldo = d("overdueSaldo"),
+            inStopList = o.get("inStopList")?.asBoolean == true,
+            profile = o.get("profile")?.takeIf { !it.isJsonNull }?.asString
+        )
+    }
+
+    /** Ссылка на оплату заказа (сервер проверит, что заказ свой и не оплачен). */
+    suspend fun payLink(order: String): String = get("/v1/orders/$order/pay").asJsonObject["url"].asString
+
+    suspend fun topupLink(amount: Double): String =
+        get("/v1/topup?amount=${"%.2f".format(java.util.Locale.US, amount)}").asJsonObject["url"].asString
+
+    /** Картинки для списка «бренд|номер» → URL. Ошибки не критичны: без картинок выдача всё равно работает. */
+    suspend fun images(items: List<Pair<String, String>>): Map<String, List<String>> {
+        if (!enabled || items.isEmpty()) return emptyMap()
+        val body = JsonObject().apply {
+            add("items", com.google.gson.JsonArray().apply {
+                items.take(40).forEach { (b, n) -> add(JsonObject().apply { addProperty("brand", b); addProperty("number", n) }) }
+            })
+        }
+        val o = post("/v1/images", body.toString()).asJsonObject
+        return o.entrySet().associate { (k, v) -> k to v.asJsonArray.map { it.asString } }
+    }
+
+    // ---------- транспорт ----------
+
+    private suspend fun get(path: String) = call { token -> Request.Builder().url(base + path).get().auth(token).build() }
+
+    private suspend fun post(path: String, json: String) =
+        call { token -> Request.Builder().url(base + path).post(json.toRequestBody(JSON)).auth(token).build() }
+
+    private fun Request.Builder.auth(token: String) = header("Authorization", "Bearer $token")
+
+    /** Токен протух или сервер перезапущен с новым секретом — получаем новый и повторяем один раз. */
+    private suspend fun call(build: (String) -> Request) = withContext(Dispatchers.IO) {
+        if (!enabled) throw ServerException("Сервер не настроен")
+        var token = prefs.getString(KEY, null) ?: login()
+        var resp = execute(build(token))
+        if (resp.first == 401) {
+            token = login()
+            resp = execute(build(token))
+        }
+        val (code, text) = resp
+        if (code !in 200..299) throw ServerException(detail(text) ?: "Ошибка сервера ($code)", code)
+        JsonParser.parseString(text)
+    }
+
+    private fun login(): String {
+        val body = Gson().toJson(mapOf("login" to session.login(), "passwordMd5" to session.passMd5()))
+        val (code, text) = execute(Request.Builder().url("$base/v1/session").post(body.toRequestBody(JSON)).build())
+        if (code != 200) throw ServerException(detail(text) ?: "Не удалось войти на сервер", code)
+        val token = JsonParser.parseString(text).asJsonObject["token"].asString
+        prefs.edit().putString(KEY, token).apply()
+        return token
+    }
+
+    private fun execute(req: Request): Pair<Int, String> =
+        http.newCall(req).execute().use { it.code to (it.body?.string().orEmpty()) }
+
+    private fun detail(text: String): String? =
+        runCatching { JsonParser.parseString(text).asJsonObject["detail"].asString }.getOrNull()
+
+    companion object {
+        private const val KEY = "server_token"
+        private val JSON = "application/json".toMediaType()
+        private val http = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(40, TimeUnit.SECONDS)
+            .build()
+    }
+}

@@ -27,6 +27,9 @@ android {
         buildConfigField("String", "LAXIMO_USER", "\"${localProperties.getProperty("LAXIMO_USER", "")}\"")
         buildConfigField("String", "LAXIMO_PASS", "\"${localProperties.getProperty("LAXIMO_PASS", "")}\"")
 
+        // Наш сервер (server/): баланс, оплата, картинки. Тестовый — на VPS в NL, к выпуску переедет в РФ.
+        buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://9077635-oy742028.twc1.net:8446")}\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
