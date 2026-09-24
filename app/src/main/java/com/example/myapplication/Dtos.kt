@@ -84,6 +84,7 @@ data class OrderDetailsDto(
 )
 
 data class OrderPositionDto(
+    val positionId: String? = null,
     val brand: String? = null,
     val number: String? = null,
     val description: String? = null,

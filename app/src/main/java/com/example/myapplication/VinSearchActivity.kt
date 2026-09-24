@@ -154,6 +154,27 @@ class VinSearchActivity : ComponentActivity() {
                                                 )
                                                 Spacer(Modifier.height(4.dp))
                                                 Text("Запрос: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
+                                                TextButton(
+                                                    contentPadding = PaddingValues(0.dp),
+                                                    onClick = {
+                                                        val q = vinText.trim()
+                                                        val kind = when {
+                                                            com.example.myapplication.laximo.normalizeRuPlate(q) != null -> "plate"
+                                                            looksLikeVin(q) -> "vin"
+                                                            else -> "frame"
+                                                        }
+                                                        val value = com.example.myapplication.laximo.normalizeRuPlate(q) ?: q.uppercase()
+                                                        scope.launch {
+                                                            try {
+                                                                com.example.myapplication.abcp.AbcpShop(SessionManager(ctx))
+                                                                    .addToGarage("${r.brand.orEmpty()} ${r.name.orEmpty()}".trim(), value, kind)
+                                                                android.widget.Toast.makeText(ctx, "Машина добавлена в гараж", android.widget.Toast.LENGTH_SHORT).show()
+                                                            } catch (e: Exception) {
+                                                                android.widget.Toast.makeText(ctx, e.message ?: "Не удалось добавить", android.widget.Toast.LENGTH_LONG).show()
+                                                            }
+                                                        }
+                                                    }
+                                                ) { Text("＋ В мой гараж") }
                                                 Text("Каталог: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
                                                 if (r.attributes.isNotEmpty()) {
                                                     Spacer(Modifier.height(6.dp))

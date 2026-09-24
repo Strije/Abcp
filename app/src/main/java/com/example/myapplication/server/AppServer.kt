@@ -74,6 +74,27 @@ class AppServer(ctx: Context) {
         return post("/v1/reliable", body.toString()).asJsonObject["reliable"].asJsonArray.map { it.asString }.toSet()
     }
 
+    // ---------- без входа: регистрация и восстановление пароля (ABCP пускает их только с IP сервера) ----------
+
+    suspend fun register(name: String, surname: String, mobile: String, email: String, password: String, office: String): Boolean {
+        val body = Gson().toJson(mapOf("name" to name, "surname" to surname, "mobile" to mobile,
+            "email" to email, "password" to password, "office" to office))
+        return publicPost("/v1/register", body).asJsonObject["needsActivation"]?.asBoolean == true
+    }
+
+    /** Шаг 1 (code пустой): отправить код. Шаг 2: код из SMS + новый пароль. */
+    suspend fun restore(emailOrMobile: String, code: String = "", passwordNew: String = ""): String? {
+        val body = Gson().toJson(mapOf("emailOrMobile" to emailOrMobile, "code" to code, "passwordNew" to passwordNew))
+        return publicPost("/v1/restore", body).asJsonObject["message"]?.takeIf { !it.isJsonNull }?.asString
+    }
+
+    private suspend fun publicPost(path: String, json: String) = withContext(Dispatchers.IO) {
+        if (!enabled) throw ServerException("Сервер не настроен")
+        val (code, text) = execute(Request.Builder().url(base + path).post(json.toRequestBody(JSON)).build())
+        if (code !in 200..299) throw ServerException(detail(text) ?: "Ошибка сервера ($code)", code)
+        JsonParser.parseString(text)
+    }
+
     // ---------- транспорт ----------
 
     private suspend fun get(path: String) = call { token -> Request.Builder().url(base + path).get().auth(token).build() }

@@ -114,6 +114,28 @@ fun CartScreen(reloadKey: Int) {
                                         "${formatRub(b.price)} × ${b.quantity} = ${formatRub(b.price * b.quantity)}",
                                         fontWeight = FontWeight.Bold
                                     )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        fun change(q: Int) = scope.launch {
+                                            try {
+                                                shop.changeQuantity(b, q)
+                                                localReload++
+                                            } catch (e: Exception) {
+                                                Toast.makeText(ctx, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = { change(b.quantity - b.packing) },
+                                            enabled = b.quantity > b.packing,
+                                            contentPadding = PaddingValues(0.dp),
+                                            modifier = Modifier.size(36.dp)
+                                        ) { Text("−") }
+                                        Text("${b.quantity} шт.", Modifier.padding(horizontal = 12.dp))
+                                        OutlinedButton(
+                                            onClick = { change(b.quantity + b.packing) },
+                                            contentPadding = PaddingValues(0.dp),
+                                            modifier = Modifier.size(36.dp)
+                                        ) { Text("+") }
+                                    }
                                     Text("Срок: ${formatDelivery(b.deadlineHours, b.deadlineHoursMax)}", style = MaterialTheme.typography.bodySmall)
                                     b.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                                 }

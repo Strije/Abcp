@@ -207,6 +207,17 @@ fun LoginScreen(
                 Text("Войти")
             }
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = {
+                ctx.startActivity(android.content.Intent(ctx, AccountActivity::class.java))
+            }) { Text("Регистрация") }
+            TextButton(onClick = {
+                ctx.startActivity(android.content.Intent(ctx, AccountActivity::class.java).putExtra(AccountActivity.EXTRA_RESTORE, true))
+            }) { Text("Забыли пароль?") }
+        }
     }
 }
 

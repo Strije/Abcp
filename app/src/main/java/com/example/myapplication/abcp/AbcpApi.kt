@@ -148,6 +148,16 @@ interface AbcpApi {
         @Query("maxDeadlineTime") maxDeadlineTime: Int
     ): Response<JsonElement>
 
+    /** name/vin/frame/vehicleRegPlate — обязательно одно из vin, frame, name */
+    @FormUrlEncoded
+    @POST("user/garage/add")
+    suspend fun garageAdd(@FieldMap fields: Map<String, String>): Response<JsonElement>
+
+    /** «Запрос на отмену» позиции заказа */
+    @FormUrlEncoded
+    @POST("orders/cancelPosition")
+    suspend fun cancelPosition(@FieldMap fields: Map<String, String>): Response<JsonElement>
+
     @FormUrlEncoded
     @POST("basket/order")
     suspend fun basketOrder(@FieldMap fields: Map<String, String>): Response<JsonElement>

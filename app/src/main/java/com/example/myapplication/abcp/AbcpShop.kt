@@ -89,6 +89,8 @@ data class BasketItem(
     val itemKey: String,
     val positionId: String,
     val errorMessage: String?,
+    /** Кратность (мин. партия) */
+    val packing: Int = 1,
     /** Корзина при мультикорзине (null — основная) */
     val basketId: String? = null,
     val basketName: String? = null
@@ -158,6 +160,19 @@ class AbcpShop(private val session: SessionManager) {
      * Все позиции из всех корзин. Если в магазине включена мультикорзина, без basketId ABCP отдаёт
      * только основную — поэтому обходим каждую. (При опции «частичное оформление» ABCP отдаёт только отмеченные.)
      */
+    /** Добавить машину в гараж ABCP. kind — что ввёл человек: vin / frame / plate. */
+    suspend fun addToGarage(name: String, value: String, kind: String) {
+        val key = when (kind) { "vin" -> "vin"; "plate" -> "vehicleRegPlate"; else -> "frame" }
+        val fields = auth() + mapOf("name" to name.ifBlank { value }, key to value)
+        call(retry = false) { api.garageAdd(fields) }
+    }
+
+    /** Запрос на отмену позиции; возвращает текст ответа ABCP. */
+    suspend fun cancelPosition(positionId: String): String {
+        val r = call(retry = false) { api.cancelPosition(auth() + mapOf("positionId" to positionId)) }
+        return r.asJsonObjectOrNull()?.str("message") ?: "Запрос на отмену отправлен"
+    }
+
     suspend fun basket(): List<BasketItem> {
         val baskets = runCatching { idNames(call { api.basketMultibasket(login, psw) }) }.getOrDefault(emptyList())
         if (baskets.size <= 1) return basketContent(baskets.firstOrNull())
@@ -170,6 +185,22 @@ class AbcpShop(private val session: SessionManager) {
 
     suspend fun addToBasket(o: Offer, quantity: Int) =
         setBasketQuantity(o.brand, o.number, o.itemKey, o.supplierCode, quantity)
+
+    /**
+     * Новое количество позиции. ABCP при повторном basket/add прибавляет количество,
+     * поэтому увеличение — добавлением разницы, уменьшение — удалением и добавлением заново (как советует документация).
+     */
+    suspend fun changeQuantity(b: BasketItem, newQty: Int) {
+        when {
+            newQty == b.quantity -> Unit
+            newQty > b.quantity -> setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, newQty - b.quantity, b.basketId)
+            newQty <= 0 -> removeFromBasket(b)
+            else -> {
+                removeFromBasket(b)
+                setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, newQty, b.basketId)
+            }
+        }
+    }
 
     suspend fun removeFromBasket(b: BasketItem) =
         setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, 0, b.basketId)
@@ -332,6 +363,7 @@ private fun JsonElement.toBasketItem(): BasketItem? {
         supplierCode = o.str("supplierCode").orEmpty(),
         itemKey = o.str("itemKey").orEmpty(),
         positionId = o.str("positionId").orEmpty(),
+        packing = o.int("packing").coerceAtLeast(1),
         errorMessage = o.str("errorMessage")
     )
 }
