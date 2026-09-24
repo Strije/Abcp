@@ -58,6 +58,9 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     var brands by remember { mutableStateOf<List<BrandHit>?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var history by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
+
+    LaunchedEffect(Unit) { history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
 
     fun search() {
         val n = query.trim()
@@ -129,6 +132,10 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                     HitList(brands!!) { openOffers(ctx, it) }
                 }
                 tips.isNotEmpty() -> HitList(tips) { openOffers(ctx, it) }
+                query.isBlank() && history.isNotEmpty() -> {
+                    Text("Вы искали", style = MaterialTheme.typography.titleSmall)
+                    HitList(history) { openOffers(ctx, it) }
+                }
             }
         }
     }

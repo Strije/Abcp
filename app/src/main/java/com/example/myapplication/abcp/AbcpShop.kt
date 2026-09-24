@@ -59,7 +59,14 @@ data class Offer(
     /** Цвет поставщика из ABCP (#RRGGBB) */
     val supplierColor: String? = null,
     /** Полные URL картинок, если ABCP их отдаёт */
-    val images: List<String> = emptyList()
+    val images: List<String> = emptyList(),
+    /** Вероятность поставки, % (null — ABCP не сообщил) */
+    val probability: Int? = null,
+    /** Пояснение к вероятности поставки */
+    val probabilityText: String? = null,
+    val isUsed: Boolean = false,
+    /** Когда обновлён прайс поставщика */
+    val updatedAt: String? = null
 ) {
     /** Товар лежит в нашем магазине — забрать можно сегодня */
     val inStore: Boolean get() = deliveryHours <= 0
@@ -121,8 +128,8 @@ class AbcpShop(private val session: SessionManager) {
     suspend fun brands(number: String): List<BrandHit> =
         items(call { api.searchBrands(login, psw, number) }).mapNotNull { it.toBrandHit() }
 
-    suspend fun offers(number: String, brand: String): List<Offer> =
-        items(call { api.searchArticles(login, psw, number, brand) })
+    suspend fun offers(number: String, brand: String, all: Boolean = false): List<Offer> =
+        items(call { api.searchArticles(login, psw, number, brand, disableFiltering = if (all) 1 else 0) })
             .mapNotNull { it.toOffer() }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
 
@@ -133,6 +140,15 @@ class AbcpShop(private val session: SessionManager) {
             val fin = o.str("isFinalStatus")
             if (fin == "1" || fin.equals("true", ignoreCase = true)) o.str("id") else null
         }.toSet()
+
+    /** Что клиент искал раньше — без повторов, свежие сверху */
+    suspend fun history(): List<BrandHit> =
+        items(call { api.searchHistory(login, psw) }).mapNotNull { it.toBrandHit() }
+            .distinctBy { cleanNumber(it.brand) + cleanNumber(it.number) }
+
+    /** «С этим товаром покупают» */
+    suspend fun advices(brand: String, number: String): List<BrandHit> =
+        items(call { api.advices(login, psw, brand, number) }).mapNotNull { it.toBrandHit() }
 
     suspend fun basket(): List<BasketItem> =
         items(call { api.basketContent(login, psw) }).mapNotNull { it.toBasketItem() }
@@ -263,7 +279,12 @@ private fun JsonElement.toOffer(): Offer? {
         badges = parseSupplierBadges(o.str("supplierDescription")),
         deadlineLabel = o.str("deadlineReplace")?.let(::stripHtml)?.takeIf { it.isNotBlank() },
         supplierColor = o.str("supplierColor"),
-        images = parseImages(o)
+        images = parseImages(o),
+        probability = o.str("deliveryProbability")?.replace(',', '.')?.toDoubleOrNull()
+            ?.let { if (it <= 1.0) it * 100 else it }?.toInt()?.takeIf { it > 0 },
+        probabilityText = o.str("descriptionOfDeliveryProbability")?.let(::stripHtml)?.takeIf { it.isNotBlank() },
+        isUsed = o.str("isUsed").let { it == "1" || it.equals("true", true) },
+        updatedAt = o.str("lastUpdateTime")
     )
 }
 

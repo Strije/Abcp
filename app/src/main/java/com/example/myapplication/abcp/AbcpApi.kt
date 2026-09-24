@@ -65,7 +65,26 @@ interface AbcpApi {
         @Query("userpsw") userpsw: String,
         @Query("number") number: String,
         @Query("brand") brand: String,
-        @Query("useOnlineStocks") useOnlineStocks: Int = 1
+        @Query("useOnlineStocks") useOnlineStocks: Int = 1,
+        /** 1 — полная выдача, как «Показать все варианты» на сайте */
+        @Query("disableFiltering") disableFiltering: Int = 0
+    ): Response<JsonElement>
+
+    /** Последние (до 50) поисковые запросы клиента */
+    @GET("search/history")
+    suspend fun searchHistory(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String
+    ): Response<JsonElement>
+
+    /** «С этим товаром покупают» — по статистике заказов магазина */
+    @GET("advices")
+    suspend fun advices(
+        @Query("userlogin") userlogin: String,
+        @Query("userpsw") userpsw: String,
+        @Query("brand") brand: String,
+        @Query("number") number: String,
+        @Query("limit") limit: Int = 8
     ): Response<JsonElement>
 
     @GET("search/tips")

@@ -68,10 +68,15 @@ class OffersActivity : ComponentActivity() {
                 var sort by remember { mutableStateOf(Sort.Store) }
                 var picked by remember { mutableStateOf<Offer?>(null) }
                 var viewer by remember { mutableStateOf<List<String>?>(null) }
+                var showAll by remember { mutableStateOf(false) }
+                var advices by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
 
-                LaunchedEffect(Unit) {
+                LaunchedEffect(Unit) { advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
+
+                LaunchedEffect(showAll) {
+                    loading = true
                     try {
-                        offers = shop.offers(number, brand)
+                        offers = shop.offers(number, brand, all = showAll)
                     } catch (e: Exception) {
                         error = e.message ?: "Ошибка загрузки"
                     } finally {
@@ -120,10 +125,11 @@ class OffersActivity : ComponentActivity() {
                         when {
                             loading -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
                             error != null -> Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
-                            groups.isEmpty() -> Text(
-                                if (tab == 0) "По самому номеру предложений нет — посмотрите аналоги." else "Аналогов не найдено",
-                                Modifier.padding(16.dp)
-                            )
+                            groups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text(if (tab == 0) "По самому номеру предложений нет — посмотрите аналоги." else "Аналогов не найдено")
+                                if (!showAll) OutlinedButton(onClick = { showAll = true }) { Text("Показать все варианты") }
+                                if (advices.isNotEmpty()) AdvicesBlock(advices)
+                            }
                             else -> LazyColumn(
                                 Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 16.dp),
@@ -132,6 +138,13 @@ class OffersActivity : ComponentActivity() {
                                 items(groups, key = { it.first().brand + it.first().numberFix }) { list ->
                                     ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
                                 }
+                                if (!showAll) item {
+                                    // ABCP по умолчанию отдаёт сокращённую выдачу — как сайт до «Показать все варианты»
+                                    OutlinedButton(onClick = { showAll = true }, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Показать все варианты")
+                                    }
+                                }
+                                if (advices.isNotEmpty()) item { AdvicesBlock(advices) }
                             }
                         }
                     }
@@ -224,7 +237,18 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
             }
             val pack = if (o.packing > 1) " · партия ${o.packing} шт." else ""
             Text(formatAvailability(o.availability) + pack, style = MaterialTheme.typography.bodySmall)
-            if (o.badges.isNotEmpty() || o.noReturn) Badges(o)
+            o.probability?.let { p ->
+                Text(
+                    "Вероятность поставки $p%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        p >= 90 -> DeliveryColors.today
+                        p >= 70 -> DeliveryColors.soon
+                        else -> MaterialTheme.colorScheme.error
+                    }
+                )
+            }
+            if (o.badges.isNotEmpty() || o.noReturn || o.isUsed) Badges(o)
         }
         Column(
             Modifier.padding(10.dp).align(Alignment.CenterVertically),
@@ -242,7 +266,11 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
 /** Метки поставщика цветом: надёжный — зелёная, сторонний склад/без возврата — красная. */
 @Composable
 private fun Badges(o: Offer) {
-    val list = o.badges.ifEmpty { if (o.noReturn) listOf(SupplierBadge("Возврат невозможен", BadgeKind.Bad)) else emptyList() }
+    val list = buildList {
+        if (o.isUsed) add(SupplierBadge("Б/у", BadgeKind.Bad))
+        addAll(o.badges)
+        if (o.badges.isEmpty() && o.noReturn) add(SupplierBadge("Возврат невозможен", BadgeKind.Bad))
+    }
     Row(Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         list.forEach { b ->
             val c = when (b.kind) {
@@ -254,6 +282,37 @@ private fun Badges(o: Offer) {
                 b.text, style = MaterialTheme.typography.labelSmall, color = c, maxLines = 1,
                 modifier = Modifier.background(c.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
             )
+        }
+    }
+}
+
+/** «С этим товаром покупают» — статистика заказов магазина; нажатие открывает цены. */
+@Composable
+private fun AdvicesBlock(list: List<BrandHit>) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("С этим товаром покупают", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            list.forEach { h ->
+                OutlinedCard(
+                    Modifier.width(170.dp).clickable {
+                        ctx.startActivity(
+                            android.content.Intent(ctx, OffersActivity::class.java)
+                                .putExtra(OffersActivity.EXTRA_BRAND, h.brand)
+                                .putExtra(OffersActivity.EXTRA_NUMBER, h.number)
+                                .putExtra(OffersActivity.EXTRA_DESCRIPTION, h.description)
+                        )
+                    }
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(h.number, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Text(h.brand, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+                        if (h.description.isNotBlank()) {
+                            Text(h.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -286,7 +345,11 @@ private fun AddToCartSheet(offer: Offer, onImage: (List<String>) -> Unit, onDism
             }
             Text("${formatRub(offer.price)} · ${offer.deliveryText()}", style = MaterialTheme.typography.titleMedium)
             Text(formatAvailability(offer.availability), style = MaterialTheme.typography.bodySmall)
-            if (offer.badges.isNotEmpty() || offer.noReturn) Badges(offer)
+            offer.probability?.let { p ->
+                Text("Вероятность поставки $p%" + (offer.probabilityText?.let { " — $it" } ?: ""), style = MaterialTheme.typography.bodySmall)
+            }
+            offer.updatedAt?.let { Text("Прайс обновлён: $it", style = MaterialTheme.typography.bodySmall) }
+            if (offer.badges.isNotEmpty() || offer.noReturn || offer.isUsed) Badges(offer)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton(onClick = { qty = (qty - step).coerceAtLeast(step) }) { Text("−") }
                 Text("$qty шт.", Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.titleLarge)
