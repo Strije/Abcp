@@ -124,6 +124,11 @@ class AbcpException(message: String) : Exception(message)
 
 class AbcpShop(private val session: SessionManager) {
 
+    companion object {
+        /** Справочник статусов на час — один на всё приложение */
+        @Volatile private var statusCache: Pair<Long, Set<String>>? = null
+    }
+
     private val api = ApiClient.create()
     private val login get() = session.login()
     private val psw get() = session.passMd5()
@@ -140,7 +145,12 @@ class AbcpShop(private val session: SessionManager) {
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
 
     /** id статусов, которые в ABCP отмечены как конечные (выдано, отказ, возврат…) */
-    suspend fun finalStatusIds(): Set<String> =
+    suspend fun finalStatusIds(): Set<String> {
+        statusCache?.let { (at, ids) -> if (System.currentTimeMillis() - at < 3_600_000L) return ids }
+        return loadFinalStatusIds().also { statusCache = System.currentTimeMillis() to it }
+    }
+
+    private suspend fun loadFinalStatusIds(): Set<String> =
         items(call { api.orderStatuses(login, psw) }).mapNotNull {
             val o = it.asJsonObjectOrNull() ?: return@mapNotNull null
             val fin = o.str("isFinalStatus")

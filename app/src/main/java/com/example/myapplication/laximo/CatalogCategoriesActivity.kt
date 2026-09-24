@@ -77,7 +77,7 @@ class CatalogCategoriesActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Toast.makeText(
                     this@CatalogCategoriesActivity,
-                    e.message ?: "Ошибка загрузки категорий",
+                    laximoUserMessage(e),
                     Toast.LENGTH_LONG
                 ).show()
             }

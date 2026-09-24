@@ -57,7 +57,7 @@ class LaximoClient(
 
             // ✅ Теперь ты увидишь, что реально вернул сервер
             Log.d("LAXIMO_HTTP", "<-- HTTP ${resp.code}")
-            Log.d("LAXIMO_HTTP", "BODY: $body")
+            if (com.example.myapplication.BuildConfig.DEBUG) Log.d("LAXIMO_HTTP", "BODY: $body")
 
             // Если HTTP не 2xx — это уже ошибка
             if (!resp.isSuccessful) {

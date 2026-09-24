@@ -88,7 +88,7 @@ class CatalogUnitsActivity : ComponentActivity() {
                         try {
                             units = repo.listUnits(ctx, category)
                         } catch (e: Exception) {
-                            error = e.message ?: e.javaClass.simpleName
+                            error = laximoUserMessage(e)
                         } finally {
                             loading = false
                         }

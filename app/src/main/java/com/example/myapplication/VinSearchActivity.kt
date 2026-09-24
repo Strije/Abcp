@@ -71,7 +71,7 @@ class VinSearchActivity : ComponentActivity() {
                             results = list
                         } catch (e: Exception) {
                             Log.e("VIN_SEARCH", "EX", e)
-                            error = e.message ?: e.javaClass.simpleName
+                            error = com.example.myapplication.laximo.laximoUserMessage(e)
                         } finally {
                             loading = false
                         }

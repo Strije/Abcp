@@ -116,6 +116,7 @@ class MainShellActivity : ComponentActivity() {
                                 onOpenTab = { tab = it },
                                 onLogout = {
                                     OrderStatusWatch.stop(this@MainShellActivity)
+                                    com.example.myapplication.server.AppServer.clearCache()
                                     session.clear()
                                     startActivity(Intent(this@MainShellActivity, MainActivity::class.java))
                                     finish()

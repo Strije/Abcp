@@ -39,6 +39,11 @@ class AppServer(ctx: Context) {
     val enabled: Boolean get() = base.isNotBlank()
 
     suspend fun finance(): Finance {
+        financeCache?.let { (at, f) -> if (System.currentTimeMillis() - at < 60_000L) return f }
+        return loadFinance().also { financeCache = System.currentTimeMillis() to it }
+    }
+
+    private suspend fun loadFinance(): Finance {
         val o = get("/v1/me/finance").asJsonObject
         fun d(k: String) = o.get(k)?.takeIf { !it.isJsonNull }?.asDouble ?: 0.0
         return Finance(
@@ -135,6 +140,10 @@ class AppServer(ctx: Context) {
 
     companion object {
         private const val KEY = "server_token"
+        @Volatile private var financeCache: Pair<Long, Finance>? = null
+
+        /** При выходе из аккаунта — чтобы следующий клиент не увидел чужой баланс */
+        fun clearCache() { financeCache = null }
         private val JSON = "application/json".toMediaType()
         private val http = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

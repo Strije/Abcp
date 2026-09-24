@@ -39,7 +39,7 @@ class QuickGroupsActivity : ComponentActivity() {
         val ctx = LaximoVehicleContext(catalog = catalog, vehicleId = vehicleId, ssd = ssd)
 
         setContent {
-            MaterialTheme { QuickGroupsScreen(ctx, repo) }
+            com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo) }
         }
     }
 }
@@ -63,7 +63,7 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
         loading = true
         runCatching { repo.listQuickGroup(ctx) }
             .onSuccess { root = it }
-            .onFailure { error = it.message }
+            .onFailure { error = laximoUserMessage(it) }
         loading = false
     }
 
@@ -122,7 +122,7 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                 )
 
                 if (error != null) {
-                    Text(text = "Ошибка: $error", color = Color.Red, modifier = Modifier.padding(12.dp))
+                    Text(text = error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
                 }
 
                 data class SearchHit(
@@ -196,7 +196,7 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                                                     categories = it
                                                     selectedGroup = node
                                                 }
-                                                .onFailure { error = it.message }
+                                                .onFailure { error = laximoUserMessage(it) }
                                             loading = false
                                         }
                                     }
@@ -208,7 +208,7 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                 }
             } else {
                 if (error != null) {
-                    Text(text = "Ошибка: $error", color = Color.Red, modifier = Modifier.padding(16.dp))
+                    Text(text = error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
                 }
                 
                 LazyColumn(Modifier.fillMaxSize()) {

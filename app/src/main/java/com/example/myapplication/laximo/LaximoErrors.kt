@@ -31,3 +31,13 @@ fun prettifyLaximoError(message: String): String {
         else -> message
     }
 }
+
+/** Текст ошибки для покупателя: без «HTTP 500: {…}» и прочих технических подробностей. */
+fun laximoUserMessage(e: Throwable?): String = when {
+    e is LaximoApiException -> e.pretty
+    e is java.net.UnknownHostException || e is java.net.ConnectException ->
+        "Нет связи с каталогом. Проверьте интернет и попробуйте ещё раз."
+    e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException ->
+        "Каталог отвечает слишком долго. Попробуйте ещё раз."
+    else -> "Каталог временно недоступен. Попробуйте позже или спросите менеджера в чате."
+}

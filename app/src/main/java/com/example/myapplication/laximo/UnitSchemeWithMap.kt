@@ -206,7 +206,7 @@ fun UnitSchemeWithMap(
                     modifier = Modifier
                         .offset { IntOffset(l.roundToInt(), t.roundToInt()) }
                         .size(width = with(density) { wPx.toDp() }, height = with(density) { hPx.toDp() })
-                        .background(if (isSelected) Color(0x332196F3) else Color.Transparent)
+                        .background(if (isSelected) Color(0x33F08A24) else Color.Transparent)
                         .clickableNoRipple { onSelectCode(code) }
                 )
             }
@@ -251,7 +251,7 @@ fun UnitSchemeWithMap(
 
 @Composable
 private fun NumberBadge(text: String, selected: Boolean, modifier: Modifier = Modifier) {
-    val bg = if (selected) Color(0xFF1E88E5) else Color(0xAA000000)
+    val bg = if (selected) Color(0xFFF08A24) else Color(0xAA1C3A6E)
     Box(
         modifier = modifier
             // Сдвигаем чуть больше влево и вверх (-14dp вместо -12dp), 

@@ -70,7 +70,7 @@ private fun UnitDetailsScreen(
                 details = repo.listDetailByUnit(ctx, unit)
                 mapItems = repo.listImageMapByUnit(ctx, unit)
             }.onFailure { e ->
-                error = e.message
+                error = laximoUserMessage(e)
             }
         }
     }
@@ -142,8 +142,8 @@ private fun UnitDetailsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(codes) { code ->
-                            val isSel = selectedCode == code
-                            AssistChip(
+                            FilterChip(
+                                selected = selectedCode == code,
                                 onClick = { selectedCode = code },
                                 label = { Text(code) }
                             )
@@ -164,7 +164,7 @@ private fun UnitDetailsScreen(
             if (error != null) {
                 item {
                     Text(
-                        "Ошибка: $error",
+                        error!!,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(12.dp)
                     )
