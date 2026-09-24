@@ -25,6 +25,7 @@ import com.example.myapplication.abcp.AbcpShop
 import com.example.myapplication.abcp.BrandHit
 import com.example.myapplication.abcp.CartIconButton
 import com.example.myapplication.abcp.OffersActivity
+import com.example.myapplication.abcp.autoPickBrand
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -36,7 +37,8 @@ class SearchActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val prefillNumber = intent.getStringExtra(EXTRA_NUMBER).orEmpty()
-        setContent { AvtodrugTheme { SearchScreen(prefillNumber) } }
+        val preferredBrand = intent.getStringExtra(EXTRA_BRAND)
+        setContent { AvtodrugTheme { SearchScreen(prefillNumber, preferredBrand) } }
     }
 
     companion object {
@@ -47,7 +49,7 @@ class SearchActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(prefillNumber: String = "") {
+fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     val ctx = LocalContext.current
     val shop = remember { AbcpShop(SessionManager(ctx)) }
     val scope = rememberCoroutineScope()
@@ -65,10 +67,11 @@ fun SearchScreen(prefillNumber: String = "") {
         error = null
         scope.launch {
             try {
-                val found = shop.brands(n)
+                // Бренды в наличии — наверху списка
+                val found = shop.brands(n).sortedByDescending { it.available }
                 brands = found
-                // Один бренд — сразу к ценам, как в Автодоке
-                if (found.size == 1) openOffers(ctx, found[0])
+                // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
+                autoPickBrand(found, preferredBrand)?.let { openOffers(ctx, it) }
             } catch (e: Exception) {
                 error = e.message ?: "Ошибка поиска"
             } finally {
@@ -146,7 +149,10 @@ private fun HitList(hits: List<BrandHit>, onClick: (BrandHit) -> Unit) {
         items(hits) { h ->
             ElevatedCard(Modifier.fillMaxWidth().clickable { onClick(h) }) {
                 Column(Modifier.padding(12.dp)) {
-                    Text("${h.brand}  ${h.number}", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${h.brand}  ${h.number}" + if (h.available) "  · в наличии" else "",
+                        style = MaterialTheme.typography.titleSmall
+                    )
                     if (h.description.isNotBlank()) {
                         Text(h.description, style = MaterialTheme.typography.bodySmall)
                     }

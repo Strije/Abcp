@@ -299,7 +299,8 @@ private fun AddToCartSheet(offer: Offer, onImage: (List<String>) -> Unit, onDism
     }
 }
 
-/** Фото на весь экран: листать пальцем, приближать щипком, двойной тап не нужен — сброс при смене фото. */
+/** Фото на весь экран: листать пальцем, приближать щипком; пока не приближено — свайп листает фото. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ImageViewer(urls: List<String>, onClose: () -> Unit) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {

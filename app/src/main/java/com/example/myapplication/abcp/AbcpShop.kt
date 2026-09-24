@@ -12,7 +12,29 @@ import kotlin.math.ceil
 
 // ---------- Модели ----------
 
-data class BrandHit(val brand: String, val number: String, val description: String)
+data class BrandHit(
+    val brand: String,
+    val number: String,
+    val description: String,
+    /** ABCP: «есть в наличии» у этого бренда с этим номером */
+    val available: Boolean = false
+)
+
+/**
+ * Какой бренд открыть сразу, минуя список: единственный; совпавший с известным заранее
+ * (Hyundai-KIA ≈ KIA, Mahle/Knecht ≈ Knecht); единственный в наличии. Иначе null — показать список.
+ */
+fun autoPickBrand(found: List<BrandHit>, preferred: String?): BrandHit? {
+    found.singleOrNull()?.let { return it }
+    val pref = preferred?.let(::brandKey).orEmpty()
+    if (pref.isNotEmpty()) {
+        found.firstOrNull { brandKey(it.brand) == pref }?.let { return it }
+        found.filter { val k = brandKey(it.brand); k.contains(pref) || pref.contains(k) }.singleOrNull()?.let { return it }
+    }
+    return found.filter { it.available }.singleOrNull()
+}
+
+private fun brandKey(b: String) = b.uppercase().filter { it.isLetterOrDigit() }
 
 data class Offer(
     val brand: String,
@@ -216,7 +238,8 @@ private fun JsonElement.toBrandHit(): BrandHit? {
     return BrandHit(
         brand = o.str("brand") ?: return null,
         number = o.str("number") ?: return null,
-        description = o.str("description").orEmpty()
+        description = o.str("description").orEmpty(),
+        available = o.str("availability").let { it == "1" || it.equals("true", true) || (it?.toIntOrNull() ?: 0) > 0 }
     )
 }
 
