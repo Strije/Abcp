@@ -28,6 +28,19 @@ jobs:
           echo "LAXIMO_USER=$LAXIMO_USER" >> local.properties
           echo "LAXIMO_PASS=$LAXIMO_PASS" >> local.properties
 
+      # Постоянный debug-ключ (секрет DEBUG_KEYSTORE_B64 = base64 от debug.keystore).
+      # Без него runner каждый раз создаёт новый ключ, и APK не ставится поверх прошлого.
+      - name: Restore debug keystore
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          else
+            echo "::warning::DEBUG_KEYSTORE_B64 не задан — APK подписан случайным ключом"
+          fi
+
       - name: Build debug APK
         run: |
           set -o pipefail
