@@ -85,15 +85,8 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
 
     LaunchedEffect(Unit) { if (prefillNumber.isNotBlank()) search() }
 
-    // Подсказки по мере ввода, с паузой, чтобы не дёргать сервер на каждую букву
-    LaunchedEffect(query) {
-        val q = query.trim()
-        if (q.length < 3) {
-            tips = emptyList(); return@LaunchedEffect
-        }
-        delay(400)
-        tips = runCatching { shop.tips(q) }.getOrDefault(emptyList()).take(8)
-    }
+    // Подсказки при вводе (search/tips) отключены: на тарифе ABCP их 100 в сутки на весь магазин —
+    // сгорели бы за полчаса. Вместо них — «Вы искали» и выбор бренда (search/brands, 150 тыс. в сутки).
 
     Scaffold(
         topBar = {

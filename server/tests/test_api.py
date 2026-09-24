@@ -10,7 +10,8 @@ from app.abcp import Abcp
 from app.config import Settings
 from app.main import RateLimiter, create_app
 
-S = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40)
+S = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
+             articles_info_per_day=100)
 GOOD_MD5 = hashlib.md5(b"secret").hexdigest()
 
 
@@ -22,6 +23,15 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
         if q.get("userlogin") == "ivan" and q.get("userpsw") == GOOD_MD5:
             return httpx.Response(200, json={"id": "101", "name": "Иван Петров"})
         return httpx.Response(403, json={"errorCode": 102, "errorMessage": "Wrong name or password!"})
+    if p == "user/new":
+        f = dict(httpx.QueryParams(request.content.decode()))
+        if f.get("mobile") == "79780000000":
+            return httpx.Response(200, json={"status": 0, "errorMessage": {"mobile": "Номер уже зарегистрирован"}})
+        assert f["office"] == "27993" and f["marketType"] == "1" and "userlogin" not in f
+        return httpx.Response(200, json={"status": 1, "userCode": "555"})
+    if p == "user/restore":
+        f = dict(httpx.QueryParams(request.content.decode()))
+        return httpx.Response(200, json={"status": 2 if f.get("code") else 1, "message": "ok"})
     assert admin, f"админский запрос {p} без админского доступа"
     if p == "cp/users":
         # как у ABCP: объект по индексам
@@ -119,3 +129,28 @@ def test_rate_limit():
 def test_reliable(client):
     r = client.post("/v1/reliable", headers=login(client), json={"brand": "Knecht", "number": "OC90"})
     assert r.json()["reliable"] == ["ZEKKERT|OF4063"]
+
+
+def test_register(client):
+    ok = {"name": "Иван", "mobile": "+7 (978) 123-45-67", "password": "secret1", "office": "27993"}
+    assert client.post("/v1/register", json=ok).json() == {"ok": True, "needsActivation": False}
+    dup = client.post("/v1/register", json={**ok, "mobile": "79780000000"})
+    assert dup.status_code == 400 and "уже зарегистрирован" in dup.json()["detail"]
+    assert client.post("/v1/register", json={**ok, "office": "1; DROP"}).status_code == 422
+
+
+def test_restore(client):
+    assert client.post("/v1/restore", json={"emailOrMobile": "79781234567"}).json()["ok"]
+    assert client.post("/v1/restore", json={"emailOrMobile": "79781234567", "code": "1234", "passwordNew": "newpass"}).json()["ok"]
+
+
+def test_articles_info_budget():
+    import asyncio
+    s0 = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40)
+    a = Abcp(s0, transport=httpx.MockTransport(fake_abcp))
+    assert asyncio.run(a.images("Knecht", "OC90")) == []  # по умолчанию выключено — в ABCP не ходим
+    s2 = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
+                  articles_info_per_day=1)
+    b = Abcp(s2, transport=httpx.MockTransport(fake_abcp))
+    assert asyncio.run(b.images("Knecht", "OC90"))            # первый — можно
+    assert asyncio.run(b.reliable_crosses("Knecht", "OC90")) == []  # лимит суток исчерпан

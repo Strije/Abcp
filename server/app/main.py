@@ -38,6 +38,21 @@ class ImagesIn(BaseModel):
     items: list[Article] = Field(max_length=40)
 
 
+class RegisterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    surname: str = Field(default="", max_length=60)
+    mobile: str = Field(min_length=10, max_length=20)
+    email: str = Field(default="", max_length=120)
+    password: str = Field(min_length=6, max_length=64)
+    office: str = Field(pattern=r"^\d{1,10}$")
+
+
+class RestoreIn(BaseModel):
+    emailOrMobile: str = Field(min_length=5, max_length=120)
+    code: str = Field(default="", max_length=20)
+    passwordNew: str = Field(default="", max_length=64)
+
+
 class RateLimiter:
     """Не больше `limit` попыток за `window` секунд с одного ключа (IP) — против перебора паролей."""
 
@@ -77,6 +92,11 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
         log.info("%s %s -> %s %.0fms", request.method, request.url.path, resp.status_code, (time.time() - t) * 1000)
         return resp
     login_limit = RateLimiter(limit=10, window=60)
+    # Регистрация и SMS восстановления — дорогие и заметные операции, лимит строже
+    public_limit = RateLimiter(limit=5, window=3600)
+
+    def client_ip(request: Request) -> str:
+        return request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
 
     def fail(e: AbcpError):
         # Наружу — только понятный текст, без деталей запросов к ABCP
@@ -154,6 +174,31 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
         a: Abcp = state["abcp"]
         results = await asyncio.gather(*(a.images(i.brand, i.number) for i in body.items))
         return {f"{i.brand}|{i.number}": urls for i, urls in zip(body.items, results)}
+
+    @app.post("/v1/register")
+    async def register(body: RegisterIn, request: Request):
+        if not public_limit.allow("reg:" + client_ip(request)):
+            raise HTTPException(429, "Слишком много попыток, попробуйте через час")
+        mobile = "".join(ch for ch in body.mobile if ch.isdigit())
+        try:
+            r = await state["abcp"].register({
+                "name": body.name.strip(), "surname": body.surname.strip(), "mobile": mobile,
+                "email": body.email.strip(), "password": body.password, "office": body.office,
+            })
+        except AbcpError as e:
+            raise HTTPException(400 if e.status < 500 else 502, e.message)
+        return {"ok": True, "needsActivation": bool(r.get("activationCode"))}
+
+    @app.post("/v1/restore")
+    async def restore(body: RestoreIn, request: Request):
+        """Без code — отправить SMS/письмо; с code и passwordNew — сохранить новый пароль."""
+        if not body.code and not public_limit.allow("restore:" + client_ip(request)):
+            raise HTTPException(429, "Слишком много запросов кода, попробуйте через час")
+        try:
+            r = await state["abcp"].restore(body.model_dump())
+        except AbcpError as e:
+            raise HTTPException(400 if e.status < 500 else 502, e.message)
+        return {"ok": True, "message": r.get("message")}
 
     @app.post("/v1/reliable")
     async def reliable(body: Article, uid: str = Depends(current_uid)):

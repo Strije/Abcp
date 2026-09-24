@@ -51,6 +51,18 @@ class Abcp:
         self._profiles: dict[str, str] = {}
         self._img_sem = asyncio.Semaphore(6)
         self._rel_cache: dict[str, tuple[float, list[str]]] = {}
+        self._ai_day = ""
+        self._ai_used = 0
+
+    def _articles_info_allowed(self) -> bool:
+        """Суточный предохранитель для articles/info (лимит тарифа ABCP — 10 в сутки)."""
+        day = time.strftime("%Y-%m-%d")
+        if day != self._ai_day:
+            self._ai_day, self._ai_used = day, 0
+        if self._ai_used >= self.s.articles_info_per_day:
+            return False
+        self._ai_used += 1
+        return True
 
     async def close(self):
         await self.http.aclose()
@@ -128,6 +140,8 @@ class Abcp:
         hit = self._img_cache.get(key)
         if hit and hit[0] > time.time():
             return hit[1]
+        if not self._articles_info_allowed():
+            return []
         async with self._img_sem:
             try:
                 data = await self._get("articles/info", self._admin({"brand": brand, "number": number, "format": "bni"}))
@@ -155,6 +169,8 @@ class Abcp:
         hit = self._rel_cache.get(key)
         if hit and hit[0] > time.time():
             return hit[1]
+        if not self._articles_info_allowed():
+            return []
         try:
             data = await self._get("articles/info", self._admin({"brand": brand, "number": number, "format": "bnc"}))
         except (AbcpError, httpx.HTTPError) as e:
@@ -173,3 +189,38 @@ class Abcp:
         if len(self._rel_cache) > 5000:
             self._rel_cache.clear()
         return out
+
+    # ---------- регистрация и восстановление пароля (клиентские операции без входа) ----------
+    # ABCP выполняет их только с разрешённых IP — поэтому идут через сервер, а не с телефона.
+
+    async def _post_public(self, op: str, data: dict) -> Any:
+        r = await self.http.post(op, data=data)
+        try:
+            body = r.json()
+        except ValueError:
+            raise AbcpError(502, "ABCP вернул не JSON")
+        if r.status_code >= 400:
+            msg = body.get("errorMessage") if isinstance(body, dict) else None
+            raise AbcpError(r.status_code, _msg(msg) or "Ошибка ABCP")
+        return body
+
+    async def register(self, form: dict) -> dict:
+        data = {k: v for k, v in form.items() if v not in (None, "")}
+        data.setdefault("marketType", "1")  # розница
+        body = await self._post_public("user/new", data)
+        if isinstance(body, dict) and str(body.get("status")) == "0":
+            raise AbcpError(400, _msg(body.get("errorMessage")) or "Регистрация не прошла")
+        return body if isinstance(body, dict) else {}
+
+    async def restore(self, data: dict) -> dict:
+        body = await self._post_public("user/restore", {k: v for k, v in data.items() if v})
+        return body if isinstance(body, dict) else {}
+
+
+def _msg(m: Any) -> str:
+    """errorMessage у ABCP бывает строкой, списком или словарём полей."""
+    if isinstance(m, dict):
+        return "; ".join(str(v) for v in m.values())
+    if isinstance(m, list):
+        return "; ".join(str(v) for v in m)
+    return str(m) if m else ""

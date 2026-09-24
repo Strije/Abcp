@@ -13,6 +13,9 @@ class Settings:
     admin_md5: str
     token_secret: bytes
     token_ttl: int = 30 * 24 * 3600  # 30 дней, потом приложение просто войдёт заново
+    # articles/info (картинки, достоверные аналоги) на тарифе — 10 запросов в СУТКИ на весь магазин.
+    # Пока ABCP не поднимет лимит, держим выключенным, иначе он сгорает за минуту.
+    articles_info_per_day: int = 0
 
 
 def load() -> Settings:
@@ -28,4 +31,5 @@ def load() -> Settings:
         admin_login=login,
         admin_md5=md5,
         token_secret=secret.encode(),
+        articles_info_per_day=int(os.environ.get("ARTICLES_INFO_PER_DAY", "0") or 0),
     )
