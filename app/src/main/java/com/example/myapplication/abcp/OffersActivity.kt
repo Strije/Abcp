@@ -73,7 +73,12 @@ class OffersActivity : ComponentActivity() {
                 var showAll by remember { mutableStateOf(false) }
                 var advices by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
 
+                var reliable by remember { mutableStateOf<Set<String>>(emptySet()) }
+                var onlyReliable by remember { mutableStateOf(false) }
+
                 LaunchedEffect(Unit) { advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
+                // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
+                LaunchedEffect(Unit) { reliable = runCatching { server.reliable(brand, number) }.getOrDefault(emptySet()) }
 
                 LaunchedEffect(showAll) {
                     loading = true
@@ -100,7 +105,8 @@ class OffersActivity : ComponentActivity() {
                 }
                 val cmp = sort.comparator()
                 // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
-                val groups = (if (tab == 0) own else analogs)
+                fun isReliable(o: Offer) = "${o.brand.uppercase()}|${o.numberFix.uppercase()}" in reliable
+                val groups = (if (tab == 0) own else analogs.filter { !onlyReliable || isReliable(it) })
                     .groupBy { "${it.brand}|${it.numberFix}" }
                     .values.map { it.sortedWith(cmp) }
                     .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
@@ -131,6 +137,12 @@ class OffersActivity : ComponentActivity() {
                             Sort.entries.forEach { s ->
                                 FilterChip(selected = sort == s, onClick = { sort = s }, label = { Text(s.title) })
                             }
+                            if (tab == 1 && reliable.isNotEmpty()) {
+                                FilterChip(
+                                    selected = onlyReliable, onClick = { onlyReliable = !onlyReliable },
+                                    label = { Text("★ Только достоверные") }
+                                )
+                            }
                         }
                         when {
                             loading -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
@@ -146,7 +158,7 @@ class OffersActivity : ComponentActivity() {
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 items(groups, key = { it.first().brand + it.first().numberFix }) { list ->
-                                    ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
+                                    ArticleCard(list, reliable = tab == 1 && isReliable(list.first()), onImage = { viewer = it }, onPick = { picked = it })
                                 }
                                 if (!showAll) item {
                                     // ABCP по умолчанию отдаёт сокращённую выдачу — как сайт до «Показать все варианты»
@@ -194,7 +206,7 @@ class OffersActivity : ComponentActivity() {
 
 /** Артикул: фото, номер, бренд, описание и под ним все предложения. */
 @Composable
-private fun ArticleCard(list: List<Offer>, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
+private fun ArticleCard(list: List<Offer>, reliable: Boolean = false, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
     val head = list.first()
     val images = list.flatMap { it.images }.distinct()
     ElevatedCard(Modifier.fillMaxWidth()) {
@@ -211,7 +223,13 @@ private fun ArticleCard(list: List<Offer>, onImage: (List<String>) -> Unit, onPi
             }
             Column(Modifier.weight(1f)) {
                 Text(head.number, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(head.brand, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(head.brand, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    if (reliable) {
+                        Text(" ★", color = Color(0xFFF2B01E), style = MaterialTheme.typography.bodyMedium)
+                        Text(" достоверный аналог", style = MaterialTheme.typography.labelSmall, color = DeliveryColors.later)
+                    }
+                }
                 if (head.description.isNotBlank()) {
                     Text(head.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }

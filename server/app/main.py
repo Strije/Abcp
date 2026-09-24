@@ -5,8 +5,10 @@ GET  /v1/me/finance           баланс, долг, кредитный лим�
 GET  /v1/orders/{number}/pay  ссылка на оплату заказа (только своего и неоплаченного)
 GET  /v1/topup?amount=        ссылка на пополнение баланса
 POST /v1/images               картинки товаров для выдачи
+POST /v1/reliable             достоверные аналоги (звёздочка)
 """
 import asyncio
+import logging
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -17,6 +19,9 @@ from pydantic import BaseModel, Field
 from . import tokens
 from .abcp import Abcp, AbcpError
 from .config import Settings, load
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+log = logging.getLogger("avtodrug")
 
 
 class SessionIn(BaseModel):
@@ -63,6 +68,14 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
         await state["abcp"].close()
 
     app = FastAPI(title="Avtodrug API", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    @app.middleware("http")
+    async def access_log(request: Request, call_next):
+        # Только метод, путь и код — без параметров, тела и токена
+        t = time.time()
+        resp = await call_next(request)
+        log.info("%s %s -> %s %.0fms", request.method, request.url.path, resp.status_code, (time.time() - t) * 1000)
+        return resp
     login_limit = RateLimiter(limit=10, window=60)
 
     def fail(e: AbcpError):
@@ -141,6 +154,11 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
         a: Abcp = state["abcp"]
         results = await asyncio.gather(*(a.images(i.brand, i.number) for i in body.items))
         return {f"{i.brand}|{i.number}": urls for i, urls in zip(body.items, results)}
+
+    @app.post("/v1/reliable")
+    async def reliable(body: Article, uid: str = Depends(current_uid)):
+        """Достоверные аналоги артикула — для звёздочки, как на сайте."""
+        return {"reliable": await state["abcp"].reliable_crosses(body.brand, body.number)}
 
     return app
 

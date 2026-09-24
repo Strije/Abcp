@@ -152,7 +152,6 @@ private fun HomeScreen(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
-    var car by remember { mutableStateOf<GarageCar?>(null) }
     var showProfile by remember { mutableStateOf(false) }
     val server = remember { AppServer(ctx) }
     var finance by remember { mutableStateOf<Finance?>(null) }
@@ -160,7 +159,6 @@ private fun HomeScreen(
 
     LaunchedEffect(Unit) { if (server.enabled) finance = runCatching { server.finance() }.getOrNull() }
 
-    LaunchedEffect(Unit) { car = runCatching { loadGarage(ctx).firstOrNull() }.getOrNull() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -194,28 +192,31 @@ private fun HomeScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        // Большая плитка — моя машина
-        Tile(
-            title = car?.title ?: "Моя машина",
-            subtitle = if (car != null) "Подобрать запчасти по схемам" else "Добавьте авто по VIN или госномеру",
-            icon = Icons.Default.Build,
-            accent = true,
-            modifier = Modifier.fillMaxWidth().height(120.dp)
-        ) { car?.let { openCar(ctx, it) } ?: ctx.startActivity(Intent(ctx, VinSearchActivity::class.java)) }
+        // Новости и акции — страницы сайта news1…news4 (что положено на сайт, то и видно)
+        NewsCarousel()
 
-        // Баланс и уровень цен — с нашего сервера (в клиентском API ABCP их нет)
+        // Баланс отдельно от пополнения; данные — с нашего сервера (в клиентском API ABCP их нет)
         finance?.let { f ->
-            val owe = f.debt > 0
-            Tile(
-                title = if (owe) "Долг ${formatRub(f.debt)}" else "Баланс ${formatRub(f.balance)}",
-                subtitle = listOfNotNull(
-                    f.profile?.let { "Уровень цен: $it" },
-                    f.creditLimit.takeIf { it > 0 }?.let { "Кредитный лимит ${formatRub(it)}" },
-                    "Пополнить счёт"
-                ).joinToString(" · "),
-                icon = Icons.Default.AccountBox,
-                modifier = Modifier.fillMaxWidth().height(104.dp)
-            ) { showTopup = true }
+            val value = f.balance - f.debt // долг по заказам — со знаком минус, как на счёте
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Tile(
+                    title = "Баланс ${formatRub(value)}",
+                    subtitle = when {
+                        f.debt > 0 -> "Долг по заказам ${formatRub(f.debt)}"
+                        f.creditLimit > 0 -> "Кредитный лимит ${formatRub(f.creditLimit)}"
+                        else -> "Задолженности нет"
+                    },
+                    icon = Icons.Default.AccountBox,
+                    modifier = Modifier.weight(1f).height(104.dp)
+                ) { onOpenTab(HomeTab.Orders) }
+                Tile(
+                    title = "Пополнить",
+                    subtitle = "Оплата картой или СБП",
+                    icon = Icons.Default.Add,
+                    accent = true,
+                    modifier = Modifier.weight(1f).height(104.dp)
+                ) { showTopup = true }
+            }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

@@ -67,6 +67,13 @@ class AppServer(ctx: Context) {
         return o.entrySet().associate { (k, v) -> k to v.asJsonArray.map { it.asString } }
     }
 
+    /** Достоверные аналоги артикула: множество «БРЕНД|НОМЕР» (numberFix, верхний регистр). */
+    suspend fun reliable(brand: String, number: String): Set<String> {
+        if (!enabled) return emptySet()
+        val body = JsonObject().apply { addProperty("brand", brand); addProperty("number", number) }
+        return post("/v1/reliable", body.toString()).asJsonObject["reliable"].asJsonArray.map { it.asString }.toSet()
+    }
+
     // ---------- транспорт ----------
 
     private suspend fun get(path: String) = call { token -> Request.Builder().url(base + path).get().auth(token).build() }

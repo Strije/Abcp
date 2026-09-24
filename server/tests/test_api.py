@@ -41,6 +41,10 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"paymentLink": f"https://pay.test/{q['number']}"})
     if p == "cp/payment/top-balance-link":
         return httpx.Response(200, json={"paymentLink": f"https://pay.test/topup/{q['clientId']}/{q['amount']}"})
+    if p == "articles/info" and q.get("format") == "bnc":
+        return httpx.Response(200, json=[{"brand": q["brand"], "number": q["number"], "crosses": [
+            {"brand": "Zekkert", "number": "OF-4063", "numberFix": "OF4063", "reliable": True},
+            {"brand": "Noname", "number": "X1", "numberFix": "X1", "reliable": False}]}])
     if p == "articles/info":
         return httpx.Response(200, json=[{"brand": q["brand"], "number": q["number"],
                                           "images": [{"name": "abc0002.jpeg"}, "https://x.test/b.jpg"]}])
@@ -110,3 +114,8 @@ def test_rate_limit():
     assert all(rl.allow("ip", now=100 + i) for i in range(3))
     assert not rl.allow("ip", now=110)
     assert rl.allow("ip", now=200)
+
+
+def test_reliable(client):
+    r = client.post("/v1/reliable", headers=login(client), json={"brand": "Knecht", "number": "OC90"})
+    assert r.json()["reliable"] == ["ZEKKERT|OF4063"]
