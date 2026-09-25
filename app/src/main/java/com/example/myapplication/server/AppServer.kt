@@ -72,13 +72,6 @@ class AppServer(ctx: Context) {
         return o.entrySet().associate { (k, v) -> k to v.asJsonArray.map { it.asString } }
     }
 
-    /** Достоверные аналоги артикула: множество «БРЕНД|НОМЕР» (numberFix, верхний регистр). */
-    suspend fun reliable(brand: String, number: String): Set<String> {
-        if (!enabled) return emptySet()
-        val body = JsonObject().apply { addProperty("brand", brand); addProperty("number", number) }
-        return post("/v1/reliable", body.toString()).asJsonObject["reliable"].asJsonArray.map { it.asString }.toSet()
-    }
-
     /** Служебная заметка к заказу «оформлен через приложение» — для статистики магазина, клиент её не видит. */
     suspend fun markOrderFromApp(number: String) {
         call { token ->

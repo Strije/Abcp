@@ -83,7 +83,7 @@ fun OrdersScreen() {
     }
     val shown = if (tab == 0) active else done
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             com.example.myapplication.OneTimeHint(
                 "orders_pull", "Потяните список вниз, чтобы обновить статусы. Когда заказ будет готов, придёт уведомление.",

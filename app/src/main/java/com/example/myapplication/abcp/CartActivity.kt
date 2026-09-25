@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -82,7 +83,7 @@ fun CartScreen(reloadKey: Int) {
     val total = items.sumOf { it.price * it.quantity }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Корзина") }) },
+        topBar = { TopAppBar(title = { Text("Корзина") }, actions = { com.example.myapplication.ui.SearchAction() }) },
         bottomBar = {
             if (items.isNotEmpty()) {
                 Surface(tonalElevation = 3.dp) {
@@ -123,7 +124,12 @@ fun CartScreen(reloadKey: Int) {
                     ElevatedCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("${b.brand} ${b.number}", style = MaterialTheme.typography.titleSmall)
+                                // Нажатие на номер — цены и аналоги этой детали
+                                Text(
+                                    "${b.brand} ${b.number}", style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { com.example.myapplication.ui.openOffers(ctx, b.brand, b.number, b.description) }
+                                )
                                 if (b.description.isNotBlank()) Text(b.description, style = MaterialTheme.typography.bodySmall)
                                 Spacer(Modifier.height(4.dp))
                                 Text(

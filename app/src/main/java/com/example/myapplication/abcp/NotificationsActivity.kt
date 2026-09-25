@@ -31,7 +31,7 @@ class NotificationsActivity : ComponentActivity() {
 
         setContent {
             AvtodrugTheme {
-                Scaffold(topBar = { TopAppBar(title = { Text("Уведомления") }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(title = { Text("Уведомления") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
                     Box(Modifier.padding(padding).fillMaxSize()) {
                         if (feed.isEmpty()) {
                             Text(

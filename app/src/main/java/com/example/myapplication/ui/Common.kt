@@ -1,6 +1,8 @@
 package com.example.myapplication.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -81,4 +83,24 @@ fun OnResume(block: () -> Unit) {
         owner.lifecycle.addObserver(obs)
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
+}
+
+/** 🔍 в шапке экрана — к поиску запчастей откуда угодно (корзина, заказы, уведомления). */
+@androidx.compose.runtime.Composable
+fun SearchAction() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.material3.IconButton(onClick = {
+        ctx.startActivity(android.content.Intent(ctx, com.example.myapplication.SearchActivity::class.java))
+    }) { androidx.compose.material3.Icon(Icons.Default.Search, "Поиск запчастей") }
+}
+
+/** Открыть цены и аналоги по номеру (из корзины, заказа) — сразу выдача, без выбора бренда. */
+fun openOffers(ctx: android.content.Context, brand: String, number: String, description: String = "") {
+    if (number.isBlank()) return
+    ctx.startActivity(
+        android.content.Intent(ctx, com.example.myapplication.abcp.OffersActivity::class.java)
+            .putExtra(com.example.myapplication.abcp.OffersActivity.EXTRA_BRAND, brand)
+            .putExtra(com.example.myapplication.abcp.OffersActivity.EXTRA_NUMBER, number)
+            .putExtra(com.example.myapplication.abcp.OffersActivity.EXTRA_DESCRIPTION, description)
+    )
 }

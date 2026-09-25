@@ -5,6 +5,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -79,7 +80,7 @@ class OrderDetailsActivity : ComponentActivity() {
                 // Вернулись с оплаты — долг и статусы могли измениться
                 com.example.myapplication.ui.OnResume { reload++ }
 
-                Scaffold(topBar = { TopAppBar(title = { Text("Заказ № $orderNumber") }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(title = { Text("Заказ № $orderNumber") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
                     // Первая загрузка — спиннер, дальше заказ на экране, обновление тихое («потянуть вниз»)
                     com.example.myapplication.ui.RefreshableContent(
                         hasData = details != null, loading = loading, error = error,
@@ -87,10 +88,11 @@ class OrderDetailsActivity : ComponentActivity() {
                     ) {
                             OrderDetailsContent(
                                 details = details!!,
-                                // Выданное и уже готовое к выдаче отменять нельзя — это уже возврат
+                                // Отказаться можно, только пока позицию не взяли в работу (статус «Ожидает обработки»);
+                                // дальше деталь уже заказана у поставщика — только через менеджера
                                 canCancel = { p ->
-                                    val st = p.status?.lowercase().orEmpty()
-                                    !p.positionId.isNullOrBlank() && p.statusId !in finalIds && "выдан" !in st && "выдач" !in st
+                                    !p.positionId.isNullOrBlank() && p.statusId !in finalIds &&
+                                        "ожидает обработки" in p.status?.lowercase().orEmpty()
                                 },
                                 onCancel = { toCancel = it },
                                 onPay = if (server.enabled) {
@@ -252,7 +254,12 @@ private fun OrderDetailsContent(
         items(positions) { p ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${p.brand.orEmpty()} ${p.number.orEmpty()}".trim().ifEmpty { "-" }, style = MaterialTheme.typography.titleSmall)
+                    // Нажатие на номер — цены и аналоги этой детали
+                    Text(
+                        "${p.brand.orEmpty()} ${p.number.orEmpty()}".trim().ifEmpty { "-" }, style = MaterialTheme.typography.titleSmall,
+                        color = if (p.number.isNullOrBlank()) androidx.compose.ui.graphics.Color.Unspecified else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable(enabled = !p.number.isNullOrBlank()) { onBuyAgain(p) }
+                    )
                     p.description?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     val qty = p.quantity ?: p.quantityOrdered ?: "-"
                     val price = (p.priceInSiteCurrency ?: p.price)?.let(::parseAbcpNumber)?.takeIf { it > 0 }

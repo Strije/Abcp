@@ -96,7 +96,6 @@ class OffersActivity : ComponentActivity() {
                 fun warrantyOf(o: Offer) = warranties[Warranties.key(o.brand)]
 
                 LaunchedEffect(Unit) { if (!shop.isGuest) advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
-                // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
 
                 LaunchedEffect(Unit) { com.example.myapplication.Analytics.event("offers_open", mapOf("brand" to brand, "number" to number, "guest" to shop.isGuest)) }
                 LaunchedEffect(showAll, reload) {
@@ -188,7 +187,8 @@ class OffersActivity : ComponentActivity() {
                                 Text(
                                     when {
                                         term != null -> "С условием «${term!!.title}» ничего нет — снимите фильтр."
-                                        onlyConfirmed -> "Аналогов от 2 и более поставщиков нет — снимите фильтр «★»."
+                                        onlyWarranty -> "С гарантией магазина ничего нет — снимите фильтр «🛡»."
+                                        onlyConfirmed -> "Частых замен нет — снимите фильтр «★»."
                                         else -> "Предложений не найдено. Спросите менеджера в чате — подберём."
                                     }
                                 )
@@ -623,26 +623,6 @@ private fun PhotoSearchButton(brand: String, number: String) {
             DropdownMenuItem(text = { Text("Фото в Яндексе") }, onClick = { menu = false; open("https://yandex.ru/images/search?text=$q") })
             DropdownMenuItem(text = { Text("Фото в Google") }, onClick = { menu = false; open("https://www.google.com/search?tbm=isch&q=$q") })
         }
-    }
-}
-
-/** «Фото в Яндексе / Google»: поиск картинок по бренду и номеру, открывается в браузере. */
-@Composable
-fun PhotoSearchLinks(brand: String, number: String) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val q = android.net.Uri.encode("$brand $number".trim())
-    fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilledTonalButton(
-            onClick = { open("https://yandex.ru/images/search?text=$q") },
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-            modifier = Modifier.height(34.dp)
-        ) { Text("📷 Фото в Яндексе", style = MaterialTheme.typography.labelMedium) }
-        FilledTonalButton(
-            onClick = { open("https://www.google.com/search?tbm=isch&q=$q") },
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-            modifier = Modifier.height(34.dp)
-        ) { Text("📷 Фото в Google", style = MaterialTheme.typography.labelMedium) }
     }
 }
 
