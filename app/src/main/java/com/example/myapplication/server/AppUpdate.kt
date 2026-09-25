@@ -187,6 +187,7 @@ fun UpdateDialog(release: Release, onLater: () -> Unit) {
                             file = downloaded
                             installOrAsk(downloaded)
                         } catch (e: Exception) {
+                            com.example.myapplication.Analytics.error("Обновление → скачивание", e)
                             error = e.message ?: "Не удалось скачать"
                             progress = null
                         }

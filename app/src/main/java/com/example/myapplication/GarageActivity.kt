@@ -50,6 +50,7 @@ fun GarageScreen() {
         try {
             cars = loadGarage(ctx).also { MemoryCache.garage = it }
         } catch (e: Exception) {
+            com.example.myapplication.Analytics.error("Гараж → загрузка", e)
             error = "Не удалось загрузить гараж. Проверьте интернет."
         } finally {
             loading = false

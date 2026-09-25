@@ -69,6 +69,7 @@ class VinSearchActivity : ComponentActivity() {
                             }
                             results = list
                         } catch (e: Exception) {
+                            com.example.myapplication.Analytics.error("Подбор → поиск авто", e)
                             Log.e("VIN_SEARCH", "EX", e)
                             error = com.example.myapplication.laximo.laximoUserMessage(e)
                         } finally {
@@ -97,6 +98,7 @@ class VinSearchActivity : ComponentActivity() {
                                 else -> scanChoices = codes
                             }
                         } catch (e: Exception) {
+                            com.example.myapplication.Analytics.error("Подбор → распознавание фото", e)
                             error = "Не удалось распознать фото: ${e.message ?: e.javaClass.simpleName}"
                         } finally {
                             scanning = false
@@ -247,6 +249,7 @@ class VinSearchActivity : ComponentActivity() {
                                                                     .addToGarage("${r.brand.orEmpty()} ${r.name.orEmpty()}".trim(), value, kind)
                                                                 android.widget.Toast.makeText(ctx, "Машина добавлена в гараж", android.widget.Toast.LENGTH_SHORT).show()
                                                             } catch (e: Exception) {
+                                                                com.example.myapplication.Analytics.error("Подбор → в гараж", e)
                                                                 android.widget.Toast.makeText(ctx, e.message ?: "Не удалось добавить", android.widget.Toast.LENGTH_LONG).show()
                                                             }
                                                         }

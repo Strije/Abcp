@@ -142,6 +142,7 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
                     exists = e.code == 409
                     error = e.message ?: "Регистрация не прошла"
                 } catch (e: Exception) {
+                    com.example.myapplication.Analytics.error("Регистрация", e)
                     error = e.message ?: "Регистрация не прошла"
                 } finally {
                     busy = false
@@ -214,6 +215,7 @@ private fun RestoreForm(server: AppServer, prefill: String, onDone: (String?) ->
                     notFound = e.code == 404 && !codeSent
                     error = if (notFound) "Такой номер или email у нас не зарегистрирован." else e.message ?: "Не получилось"
                 } catch (e: Exception) {
+                    com.example.myapplication.Analytics.error("Восстановление пароля", e)
                     error = e.message ?: "Не получилось"
                 } finally {
                     busy = false

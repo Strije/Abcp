@@ -157,6 +157,7 @@ fun payOrder(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineSc
             val url = server.payLink(number)
             ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
         } catch (e: Exception) {
+            com.example.myapplication.Analytics.error("Заказы → оплата", e)
             android.widget.Toast.makeText(ctx, e.message ?: "Не удалось получить ссылку на оплату", android.widget.Toast.LENGTH_LONG).show()
         }
     }

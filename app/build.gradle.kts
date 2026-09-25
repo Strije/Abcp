@@ -30,6 +30,8 @@ android {
         buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://9077635-oy742028.twc1.net:8446")}\"")
 
         // ID проекта push в Консоли RuStore — не секрет (он зашивается в любое приложение с push)
+        // AppMetrica (Яндекс): вылеты и ошибки. Ключ приложения — не секрет. Пусто — ничего не отправляем.
+        buildConfigField("String", "APPMETRICA_KEY", "\"${localProperties.getProperty("APPMETRICA_KEY", "")}\"")
         buildConfigField("String", "RUSTORE_PROJECT_ID", "\"ENyKTeW4scP40-pocP1gWiOTC-kB89sT\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -125,6 +127,8 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     // Push-уведомления RuStore (доставка через RuStore или приложения VK, без Google)
     implementation("ru.rustore.sdk:pushclient:7.5.0")
+    // AppMetrica: отчёты о вылетах и ошибках
+    implementation("io.appmetrica.analytics:analytics:8.5.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

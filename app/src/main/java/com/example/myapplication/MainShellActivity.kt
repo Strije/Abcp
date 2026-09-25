@@ -316,6 +316,7 @@ private fun HomeScreen(
                 try {
                     ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(server.topupLink(amount))))
                 } catch (e: Exception) {
+                    com.example.myapplication.Analytics.error("Главная → пополнение", e)
                     android.widget.Toast.makeText(ctx, e.message ?: "Не удалось получить ссылку", android.widget.Toast.LENGTH_LONG).show()
                 }
             }

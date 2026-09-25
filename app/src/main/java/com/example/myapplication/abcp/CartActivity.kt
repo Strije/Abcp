@@ -53,6 +53,7 @@ fun CartScreen(reloadKey: Int) {
         try {
             basket = shop.basket().also { MemoryCache.basket = it; CartState.count = it.size }
         } catch (e: Exception) {
+            com.example.myapplication.Analytics.error("Корзина → загрузка", e)
             error = e.message ?: "Не удалось загрузить корзину"
         } finally {
             loading = false
@@ -69,6 +70,7 @@ fun CartScreen(reloadKey: Int) {
                 action()
                 localReload++
             } catch (e: Exception) {
+                com.example.myapplication.Analytics.error("Корзина → изменение", e)
                 Toast.makeText(ctx, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
             } finally {
                 busy = null

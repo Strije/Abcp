@@ -58,6 +58,7 @@ class CheckoutActivity : ComponentActivity() {
                         date = o.dates.firstOrNull()?.date
                         pickup = o.addresses.isEmpty() || o.offices.isNotEmpty()
                     } catch (e: Exception) {
+                        com.example.myapplication.Analytics.error("Оформление → варианты доставки", e)
                         error = e.message ?: "Ошибка загрузки"
                     } finally {
                         loading = false
@@ -143,7 +144,9 @@ class CheckoutActivity : ComponentActivity() {
                                                     basketIds = basket.map { it.basketId }
                                                 )
                                                 CartState.refresh(shop)
+                                                com.example.myapplication.Analytics.event("order_placed", mapOf("positions" to basket.size))
                                             } catch (e: Exception) {
+                                                com.example.myapplication.Analytics.error("Оформление → подтвердить заказ", e)
                                                 error = e.message ?: "Заказ не оформлен"
                                             } finally {
                                                 sending = false

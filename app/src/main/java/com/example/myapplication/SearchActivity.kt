@@ -85,6 +85,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
                 autoPickBrand(found, preferredBrand)?.let { openOffers(ctx, it) }
             } catch (e: Exception) {
+                com.example.myapplication.Analytics.error("Поиск → бренды", e)
                 error = e.message ?: "Не удалось выполнить поиск. Проверьте интернет."
             } finally {
                 loading = false

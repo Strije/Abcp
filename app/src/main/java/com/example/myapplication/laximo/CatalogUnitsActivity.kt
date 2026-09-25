@@ -82,6 +82,7 @@ class CatalogUnitsActivity : ComponentActivity() {
                         try {
                             units = repo.listUnits(ctx, category)
                         } catch (e: Exception) {
+                            com.example.myapplication.Analytics.error("Каталог → узлы", e)
                             error = laximoUserMessage(e)
                         } finally {
                             loading = false

@@ -265,6 +265,7 @@ class AbcpShop(private val session: SessionManager) {
             try {
                 numbers += placeOrderOne(c, id)
             } catch (e: Exception) {
+                com.example.myapplication.Analytics.error("Оформление → basket/order", e)
                 lastError = e
             }
         }

@@ -114,6 +114,7 @@ class OrderDetailsActivity : ComponentActivity() {
                                         android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
                                         reload++
                                     } catch (e: Exception) {
+                                        com.example.myapplication.Analytics.error("Заказ → отмена позиции", e)
                                         android.widget.Toast.makeText(ctx, e.message ?: "Не удалось", android.widget.Toast.LENGTH_LONG).show()
                                     }
                                 }

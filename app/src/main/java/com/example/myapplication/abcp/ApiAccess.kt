@@ -113,7 +113,10 @@ fun ApiAccessCard() {
                 if (requested == null) Button(enabled = !busy, onClick = {
                     busy = true; message = null
                     scope.launch {
-                        try { ApiAccess.request(ctx) } catch (e: Exception) { message = e.message ?: "Не удалось отправить заявку" }
+                        try { ApiAccess.request(ctx) } catch (e: Exception) {
+                            com.example.myapplication.Analytics.error("Доступ → отправить заявку", e)
+                            message = e.message ?: "Не удалось отправить заявку"
+                        }
                         busy = false
                     }
                 }) { Text(if (busy) "Отправляем…" else "Отправить заявку") }

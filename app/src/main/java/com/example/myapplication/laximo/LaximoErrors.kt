@@ -33,7 +33,12 @@ fun prettifyLaximoError(message: String): String {
 }
 
 /** Текст ошибки для покупателя: без «HTTP 500: {…}» и прочих технических подробностей. */
-fun laximoUserMessage(e: Throwable?): String = when {
+fun laximoUserMessage(e: Throwable?): String = run {
+    if (e != null) com.example.myapplication.Analytics.error("Каталог Laximo", e)
+    laximoText(e)
+}
+
+private fun laximoText(e: Throwable?): String = when {
     e is LaximoApiException -> e.pretty
     // Лимит запросов / подбор выключен на сервере — текст сервера понятен покупателю
     e is com.example.myapplication.server.ServerException && e.code in setOf(429, 503) -> e.message.orEmpty()

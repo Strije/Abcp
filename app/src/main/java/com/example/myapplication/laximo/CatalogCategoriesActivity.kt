@@ -69,6 +69,7 @@ class CatalogCategoriesActivity : ComponentActivity() {
                 }
 
             } catch (e: Exception) {
+                com.example.myapplication.Analytics.error("Каталог → категории", e)
                 Toast.makeText(
                     this@CatalogCategoriesActivity,
                     laximoUserMessage(e),

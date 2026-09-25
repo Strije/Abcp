@@ -98,6 +98,7 @@ class OffersActivity : ComponentActivity() {
                     try {
                         offers = shop.offers(number, brand, all = showAll)
                     } catch (e: Exception) {
+                        com.example.myapplication.Analytics.error("Выдача → загрузка предложений", e)
                         error = e.message ?: "Не удалось загрузить предложения. Проверьте интернет."
                     } finally {
                         loading = false
@@ -224,6 +225,7 @@ class OffersActivity : ComponentActivity() {
                                     CartState.refresh(shop)
                                     Toast.makeText(this@OffersActivity, "Добавлено в корзину", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {
+                                    com.example.myapplication.Analytics.error("Выдача → в корзину", e)
                                     Toast.makeText(this@OffersActivity, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
                                 }
                             }
