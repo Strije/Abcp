@@ -116,6 +116,17 @@ class Abcp:
         return {"name": (u.get("name") or "").strip(), "surname": (u.get("surname") or "").strip(),
                 "mobile": u.get("mobile") or "", "email": u.get("email") or ""}
 
+    async def clients_brief(self, uids: list[str]) -> dict[str, dict]:
+        """Имя, телефон, профиль (группа цен) клиентов с push — для адресных рассылок из бота. Не храним."""
+        out: dict[str, dict] = {}
+        for i in range(0, len(uids), 50):
+            data = await self._get("cp/users", self._admin() + [("customersIds[]", u) for u in uids[i:i + 50]])
+            for x in items(data):
+                name = " ".join(p for p in ((x.get("name") or "").strip(), (x.get("surname") or "").strip()) if p)
+                out[str(x.get("userId"))] = {"name": name or "без имени", "mobile": x.get("mobile") or "",
+                                             "profileId": str(x.get("profileId") or "")}
+        return out
+
     async def profile_name(self, profile_id: str) -> str | None:
         if profile_id not in self._profiles:
             try:

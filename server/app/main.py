@@ -409,11 +409,14 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             await send_request(uid, queue().get(uid) or {}, repeat=False)
 
     # ---------- команды бота: рассылки и статистика ----------
-    broadcasts: dict[str, str] = {}  # черновики рассылок до подтверждения кнопкой
+    # черновики рассылок до подтверждения кнопкой: текст и кому (None — всем)
+    broadcasts: dict[str, dict] = {}
 
-    async def push_all(data: dict) -> tuple[int, int]:
-        """Push всем устройствам. Возвращает (доставлено в RuStore, всего устройств); мёртвые токены убираем."""
-        pairs = [(uid, t) for uid in state["tokens"].uids() for t in state["tokens"].tokens(uid)]
+    async def push_all(data: dict, uids: set[str] | None = None) -> tuple[int, int]:
+        """Push всем устройствам (или только клиентам uids). Возвращает (доставлено в RuStore, всего устройств);
+        мёртвые токены убираем."""
+        pairs = [(uid, t) for uid in state["tokens"].uids() if uids is None or uid in uids
+                 for t in state["tokens"].tokens(uid)]
         sem = asyncio.Semaphore(10)
 
         async def one(t: str) -> int:
@@ -426,29 +429,84 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         codes = await asyncio.gather(*(one(t) for _, t in pairs))
         return sum(1 for c in codes if c == 200), len(pairs)
 
+    async def subscribers() -> dict[str, dict]:
+        """Клиенты с push: имя, телефон, профиль — из ABCP на лету (у нас не хранятся)."""
+        return await state["abcp"].clients_brief(sorted(state["tokens"].uids()))
+
+    def draft(text: str, uids: set[str] | None, who: str):
+        """Черновик рассылки + кнопки подтверждения. None — текста нет."""
+        if not text:
+            return None
+        if len(text) > 300:
+            return ("Слишком длинно для уведомления — до 300 символов.",)
+        if not state["pusher"].enabled:
+            return ("Push не настроен на сервере.",)
+        devices = sum(len(state["tokens"].tokens(u)) for u in state["tokens"].uids() if uids is None or u in uids)
+        if not devices:
+            return ("У этих клиентов нет приложения с включёнными уведомлениями.",)
+        bid = str(int(time.time() * 1000))
+        broadcasts[bid] = {"text": text, "uids": uids}
+        return (f"📣 {who} — {devices} устр.\n\nАвтодруг92\n{text}\n\nОтправить?",
+                {"inline_keyboard": [[{"text": f"✅ Отправить ({devices})", "callback_data": f"bc:{bid}"},
+                                      {"text": "✖ Отмена", "callback_data": f"bcx:{bid}"}]]})
+
+    async def groups_of(subs: dict[str, dict]) -> list[tuple[str, str, set[str]]]:
+        """Группы = профили ABCP клиентов с push: [(profileId, название, {uid})], по названию."""
+        out = []
+        for pid in {c["profileId"] for c in subs.values()}:
+            out.append((pid, await state["abcp"].profile_name(pid) or f"профиль {pid}",
+                        {u for u, c in subs.items() if c["profileId"] == pid}))
+        return sorted(out, key=lambda g: g[1].lower())
+
     async def bot_command(text: str):
         cmd, _, arg = text.strip().partition(" ")
         cmd = cmd.split("@")[0].lower()
+        arg = arg.strip()
         devices = sum(len(state["tokens"].tokens(u)) for u in state["tokens"].uids())
         if cmd == "/push":
-            arg = arg.strip()
-            if not arg:
-                return ("Напишите текст после команды, например:\n/push Скидка 10% на моторные масла до воскресенья",)
-            if len(arg) > 300:
-                return ("Слишком длинно для уведомления — до 300 символов.",)
-            if not state["pusher"].enabled:
-                return ("Push не настроен на сервере.",)
-            bid = str(int(time.time() * 1000))
-            broadcasts[bid] = arg
-            return (f"📣 Рассылка на {devices} устр.\n\nАвтодруг92\n{arg}\n\nОтправить?",
-                    {"inline_keyboard": [[{"text": f"✅ Отправить ({devices})", "callback_data": f"bc:{bid}"},
-                                          {"text": "✖ Отмена", "callback_data": f"bcx:{bid}"}]]})
+            return draft(arg, None, "Рассылка всем") or (
+                "Напишите текст после команды, например:\n/push Скидка 10% на моторные масла до воскресенья",)
+        if cmd == "/pushto":
+            who, msg = push.split_recipients(arg)
+            if not who or not msg:
+                return ("Кому и что, например:\n/pushto 9497384 Ваш заказ собран\n"
+                        "/pushto +7 978 123-45-67, 9497385 Текст\n(ID клиента в ABCP или телефон, через запятую)",)
+            subs = await subscribers()
+            found, missing = push.match_recipients(who, {u: c["mobile"] for u, c in subs.items()})
+            if missing:
+                return (f"Нет среди клиентов с уведомлениями: {', '.join(missing)}\n/clients — список",)
+            names = ", ".join(subs[u]["name"] for u in sorted(found))
+            return draft(msg, found, f"Лично: {names}")
+        if cmd in ("/groups", "/pushgroup"):
+            subs = await subscribers()
+            groups = await groups_of(subs)
+            if not groups:
+                return ("Пока нет клиентов с уведомлениями.",)
+            num, _, msg = arg.partition(" ")
+            if cmd == "/pushgroup" and num.isdigit() and 1 <= int(num) <= len(groups) and msg.strip():
+                _, name, uids = groups[int(num) - 1]
+                return draft(msg.strip(), uids, f"Группа «{name}»")
+            lines = [f"{i}. {name} — {len(uids)} клиент." for i, (_, name, uids) in enumerate(groups, 1)]
+            return ("👥 Группы (профили ABCP) клиентов с уведомлениями:\n" + "\n".join(lines) +
+                    "\n\nОтправить группе: /pushgroup номер текст\nнапример: /pushgroup 1 Новый прайс",)
+        if cmd == "/clients":
+            subs = await subscribers()
+            if not subs:
+                return ("Пока нет клиентов с уведомлениями.",)
+            lines = [f"{u} — {c['name']}, {c['mobile']}" for u, c in sorted(subs.items(), key=lambda x: x[1]["name"])]
+            return (f"📱 Клиенты с уведомлениями ({len(lines)}):\n" + "\n".join(lines[:100]) +
+                    ("\n…" if len(lines) > 100 else "") + "\n\nЛично: /pushto ID текст",)
         if cmd == "/stats":
             pending = len(queue().load())
             return (f"📊 Приложение\nКлиентов с push: {len(state['tokens'].uids())}\nУстройств: {devices}\n"
                     f"Заявок на доступ ждут: {pending}",)
         if cmd in ("/help", "/start"):
-            return ("Команды:\n/push текст — уведомление всем клиентам с приложением (с подтверждением)\n"
+            return ("Команды (рассылки — с подтверждением):\n"
+                    "/push текст — уведомление всем клиентам с приложением\n"
+                    "/pushto ID или телефон текст — одному или нескольким (через запятую)\n"
+                    "/groups — группы клиентов (профили ABCP)\n"
+                    "/pushgroup номер текст — уведомление группе\n"
+                    "/clients — кто получает уведомления\n"
                     "/stats — сколько клиентов с push, заявки на доступ\n\n"
                     "Сюда же приходят заявки на доступ и сообщения о сбоях сервера.",)
         return ("Не знаю такой команды. /help — список.",)
@@ -458,11 +516,11 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             broadcasts.pop(data[4:], None)
             return "✖ Отменено"
         if data.startswith("bc:"):
-            msg = broadcasts.pop(data[3:], None)
-            if msg is None:
+            b = broadcasts.pop(data[3:], None)
+            if b is None:
                 return "Уже отправлено или устарело"
-            ok, total = await push_all({"type": "promo", "title": "Автодруг92", "body": msg})
-            log.info("broadcast sent %s/%s", ok, total)
+            ok, total = await push_all({"type": "promo", "title": "Автодруг92", "body": b["text"]}, b["uids"])
+            log.info("broadcast sent %s/%s%s", ok, total, "" if b["uids"] is None else " (адресно)")
             return f"✅ Отправлено: {ok} из {total}"
         return None
 

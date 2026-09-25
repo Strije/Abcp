@@ -542,3 +542,18 @@ def test_bitrix_chat_flow(tmp_path):
         assert msgs[1]["author"] == "Светлана"
         assert len(pushes) == 1 and pushes[0]["message"]["data"]["type"] == "chat"
         assert any(m == "imconnector.send.status.delivery" for m, _ in calls)
+
+
+def test_pushto_recipients():
+    from app.push import match_recipients, split_recipients
+    assert split_recipients("9497384, +7 978 123-45-67 Заказ 10% готов") == ("9497384,+7978123-45-67", "Заказ 10% готов")
+    assert split_recipients("9497384: 2 дня скидка") == ("9497384", "2 дня скидка")
+    found, missing = match_recipients("9497384,+79781234567,111", {"9497384": "", "5": "8 (978) 123-45-67"})
+    assert found == {"9497384", "5"} and missing == ["111"]
+
+
+def test_push_notification_payload():
+    from app.push import notification_for
+    assert notification_for({"type": "promo", "title": "Автодруг92", "body": "Скидка"})["channel_id"] == "promo"
+    assert notification_for({"type": "chat", "body": "Да"})["click_action"] == "ru.avtodrug92.OPEN_CHAT"
+    assert notification_for({"type": "order_status", "body": "x"}) is None  # у заказов свои кнопки в приложении

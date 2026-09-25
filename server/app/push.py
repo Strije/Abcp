@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from datetime import datetime, timedelta
@@ -150,6 +151,21 @@ def special_push(number: str, items: list, order: dict, now: datetime | None = N
     return None
 
 
+# Тип push → канал уведомлений в приложении (каналы приложение создаёт при запуске)
+NOTIFY_CHANNELS = {"promo": "promo", "chat": "chat", "access_granted": "order_status"}
+OPEN_CHAT_ACTION = "ru.avtodrug92.OPEN_CHAT"  # intent-filter у ChatActivity
+
+
+def notification_for(data: dict) -> dict | None:
+    channel = NOTIFY_CHANNELS.get(data.get("type", ""))
+    if not channel:
+        return None
+    n = {"title": data.get("title") or "Автодруг92", "body": data.get("body") or "", "channel_id": channel}
+    if data.get("type") == "chat":
+        n["click_action"] = OPEN_CHAT_ACTION
+    return n
+
+
 class RuStorePush:
     def __init__(self, http: httpx.AsyncClient, host: str, project_id: str, service_token: str):
         self.http, self.host, self.project, self.token = http, host.rstrip("/"), project_id, service_token
@@ -159,8 +175,14 @@ class RuStorePush:
         return bool(self.project and self.token)
 
     async def send(self, device_token: str, data: dict[str, str]) -> int:
-        """Только data — уведомление рисует само приложение (и кладёт в ленту). Возвращает HTTP-код."""
-        body = {"message": {"token": device_token, "data": data, "android": {"ttl": "86400s"}}}
+        """data — для приложения (лента, кнопки). Рассылкам, чату и «доступ включён» добавляем готовое
+        уведомление: его показывает сам RuStore, не дожидаясь, пока система разбудит приложение.
+        Статусы заказов — только data: там у приложения свои кнопки («Маршрут», «Оплатить»). Возвращает HTTP-код."""
+        android: dict = {"ttl": "86400s"}
+        notice = notification_for(data)
+        if notice:
+            android["notification"] = notice
+        body = {"message": {"token": device_token, "data": data, "android": android}}
         try:
             r = await self.http.post(f"{self.host}/v1/projects/{self.project}/messages:send",
                                      json=body, headers={"Authorization": f"Bearer {self.token}"})
@@ -231,3 +253,35 @@ class OrderWatcher:
             except Exception as e:  # сеть/ABCP — попробуем в следующий раз
                 log.info("order watch error: %s", type(e).__name__)
             await asyncio.sleep(self.interval)
+
+
+# ---------- адресные рассылки из бота: /pushto ----------
+
+def split_recipients(arg: str) -> tuple[str, str]:
+    """«9497384, +7 978 123-45-67 Текст» → («9497384,+79781234567», «Текст»). Можно явно через двоеточие."""
+    head, sep, tail = arg.partition(":")
+    if sep and re.fullmatch(r"[\d+()\-,\s]+", head):
+        return re.sub(r"\s", "", head), tail.strip()
+    words = arg.split()
+    i = 0
+    while i < len(words) and re.fullmatch(r"[\d+()\-,]+", words[i]):
+        i += 1
+    return "".join(words[:i]), " ".join(words[i:])
+
+
+def phone_digits(s: str) -> str:
+    d = re.sub(r"\D", "", s or "")
+    return d[-10:] if len(d) >= 10 else ""
+
+
+def match_recipients(who: str, mobiles: dict[str, str]) -> tuple[set[str], list[str]]:
+    """Кого нашли среди клиентов с push (ID ABCP или телефон) и кого нет."""
+    found, missing = set(), []
+    for key in filter(None, who.split(",")):
+        d = re.sub(r"\D", "", key)
+        hit = {d} & set(mobiles) or {u for u, m in mobiles.items() if len(d) >= 10 and phone_digits(m) == phone_digits(d)}
+        if hit:
+            found |= hit
+        else:
+            missing.append(key)
+    return found, missing
