@@ -88,6 +88,21 @@ class AppServer(ctx: Context) {
         }
     }
 
+    // ---------- чат через Битрикс24 ----------
+
+    suspend fun chatEnabled(): Boolean = publicGet("/v1/chat/status").asJsonObject["enabled"]?.asBoolean == true
+
+    suspend fun chatMessages(after: Long): List<com.example.myapplication.ChatMessage> =
+        get("/v1/chat/messages?after=$after").asJsonObject.getAsJsonArray("messages").map {
+            val o = it.asJsonObject
+            com.example.myapplication.ChatMessage(
+                o["id"].asLong, o["dir"].asString, o["text"].asString, o["author"]?.asString.orEmpty(), o["ts"].asLong
+            )
+        }
+
+    suspend fun chatSend(text: String): Long =
+        post("/v1/chat/send", Gson().toJson(mapOf("text" to text))).asJsonObject["id"].asLong
+
     // ---------- push RuStore ----------
 
     /** Возвращает, включён ли push на сервере. */

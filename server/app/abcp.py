@@ -109,6 +109,13 @@ class Abcp:
             "profile": await self.profile_name(profile_id) if profile_id else None,
         }
 
+    async def client_card(self, uid: str) -> dict:
+        """Имя, телефон, email клиента — только для карточки в CRM Битрикс24 при сообщении в чат (у нас не храним)."""
+        data = await self._get("cp/users", self._admin({"customersIds[]": uid}))
+        u = next((x for x in items(data) if str(x.get("userId")) == uid), None) or {}
+        return {"name": (u.get("name") or "").strip(), "surname": (u.get("surname") or "").strip(),
+                "mobile": u.get("mobile") or "", "email": u.get("email") or ""}
+
     async def profile_name(self, profile_id: str) -> str | None:
         if profile_id not in self._profiles:
             try:

@@ -237,3 +237,29 @@ fun showPromoNotification(ctx: Context, title: String, text: String) {
 }
 
 private const val PROMO_CHANNEL = "promo"
+
+/** Ответ менеджера в чате — отдельный канал «Чат с магазином», нажатие открывает чат. */
+fun showChatNotification(ctx: Context, title: String, text: String) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val ch = NotificationChannel("chat", "Чат с магазином", NotificationManager.IMPORTANCE_HIGH)
+        ch.description = "Ответы менеджера"
+        ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+    }
+    val open = PendingIntent.getActivity(
+        ctx, 7002,
+        Intent(ctx, com.example.myapplication.ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    val n = NotificationCompat.Builder(ctx, "chat")
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentTitle(title)
+        .setContentText(text)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .build()
+    runCatching { NotificationManagerCompat.from(ctx).notify(7002, n) }
+}

@@ -34,6 +34,12 @@ class Settings:
     rustore_push_host: str = "https://vkpns.rustore.ru"
     # Как часто смотреть изменённые заказы, секунд (0 — не следить)
     order_watch_interval: int = 180
+    # Чат с Битрикс24 (локальное приложение-коннектор). Пусто — в приложении остаётся веб-чат.
+    bitrix_client_id: str = ""
+    bitrix_client_secret: str = ""
+    bitrix_domain: str = "bitrix.freno.ru"
+    # Наш адрес снаружи — на него Битрикс шлёт события
+    public_url: str = "https://9077635-oy742028.twc1.net:8446"
     # Где хранить очередь заявок
     state_dir: str = "/var/lib/avtodrug-api"
 
@@ -60,6 +66,10 @@ def load() -> Settings:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
         state_dir=os.environ.get("STATE_DIR", "/var/lib/avtodrug-api"),
+        bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
+        bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
+        bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),
+        public_url=os.environ.get("PUBLIC_URL", "https://9077635-oy742028.twc1.net:8446").strip(),
         rustore_project_id=os.environ.get("RUSTORE_PROJECT_ID", "").strip(),
         rustore_push_token=os.environ.get("RUSTORE_PUSH_TOKEN", "").strip(),
         rustore_push_host=os.environ.get("RUSTORE_PUSH_HOST", "https://vkpns.rustore.ru").strip(),

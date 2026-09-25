@@ -485,3 +485,60 @@ def test_brand_warranty(client):
     z = d["brands"]["ZEKKERT"]
     assert z["rating"] == 4.5 and "1 год" in z["warranty"] and d["page"].endswith("/garantija")
     assert any(c["url"].startswith("http") for b in d["brands"].values() for c in b["conditions"])
+
+
+
+def test_bitrix_chat_flow(tmp_path):
+    from dataclasses import replace
+    import json as J
+    calls, pushes = [], []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        if host == "bitrix.freno.ru":
+            method = path.rsplit("/", 1)[-1].removesuffix(".json")
+            body = J.loads(request.content or b"{}")
+            calls.append((method, body))
+            if method == "app.info":
+                return httpx.Response(200, json={"result": {"CODE": "local.app1"}})
+            return httpx.Response(200, json={"result": True})
+        if host == "push.test":
+            pushes.append(J.loads(request.content))
+            return httpx.Response(200, json={})
+        if path.strip("/") == "cp/orders":
+            return httpx.Response(200, json=[])
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), bitrix_client_id="local.app1", bitrix_client_secret="sec",
+                rustore_project_id="p", rustore_push_token="t", rustore_push_host="https://push.test", order_watch_interval=0)
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        h = login(c)
+        assert c.get("/v1/chat/status").json() == {"enabled": False}
+        # чужой портал не принимаем
+        assert c.post("/v1/bitrix/install", data={"auth[domain]": "evil.bitrix24.ru", "auth[access_token]": "x"}).status_code == 403
+        r = c.post("/v1/bitrix/install", data={
+            "event": "ONAPPINSTALL", "auth[domain]": "bitrix.freno.ru", "auth[access_token]": "AT", "auth[refresh_token]": "RT",
+            "auth[expires_in]": "3600", "auth[client_endpoint]": "https://bitrix.freno.ru/rest/", "auth[application_token]": "APPTOK"})
+        assert r.status_code == 200, r.text
+        assert [m for m, _ in calls][:3] == ["app.info", "imconnector.register", "event.bind"]
+        r = c.post("/v1/bitrix/placement", data={"DOMAIN": "bitrix.freno.ru", "PLACEMENT_OPTIONS": '{"LINE":"7","ACTIVE_STATUS":0}'})
+        assert r.status_code == 200 and any(m == "imconnector.activate" and b["LINE"] == 7 for m, b in calls)
+        assert c.get("/v1/chat/status").json() == {"enabled": True}
+        c.post("/v1/push/token", headers=h, json={"token": "device-token-1"})
+        # клиент пишет → в открытую линию с именем клиента
+        assert c.post("/v1/chat/send", headers=h, json={"text": "Нужен фильтр на Polo"}).status_code == 200
+        sent = [b for m, b in calls if m == "imconnector.send.messages"][-1]
+        assert sent["MESSAGES"][0]["chat"]["id"] == "101" and sent["MESSAGES"][0]["message"]["text"] == "Нужен фильтр на Polo"
+        # событие без правильного application_token — отказ
+        assert c.post("/v1/bitrix/event", data={"event": "ONIMCONNECTORMESSAGEADD", "auth[application_token]": "bad"}).status_code == 403
+        ev = {"event": "ONIMCONNECTORMESSAGEADD", "auth[application_token]": "APPTOK", "data[LINE]": "7",
+              "data[MESSAGES][0][im][chat_id]": "1807", "data[MESSAGES][0][im][message_id]": "86497",
+              "data[MESSAGES][0][message][text]": "[b]Светлана:[/b] [br]Есть Knecht OC90, 320 ₽",
+              "data[MESSAGES][0][chat][id]": "101"}
+        assert c.post("/v1/bitrix/event", data=ev).status_code == 200
+        c.post("/v1/bitrix/event", data=ev)  # повтор события — без дубля
+        msgs = c.get("/v1/chat/messages", headers=h).json()["messages"]
+        assert [(m["dir"], m["text"]) for m in msgs] == [("in", "Нужен фильтр на Polo"), ("out", "Есть Knecht OC90, 320 ₽")]
+        assert msgs[1]["author"] == "Светлана"
+        assert len(pushes) == 1 and pushes[0]["message"]["data"]["type"] == "chat"
+        assert any(m == "imconnector.send.status.delivery" for m, _ in calls)

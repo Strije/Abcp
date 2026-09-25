@@ -30,6 +30,8 @@ import com.example.myapplication.ui.theme.AvtodrugTheme
 import com.google.gson.Gson
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 
 /**
  * Чат с менеджером: онлайн-чат открытой линии Битрикс24 (тот же, что на сайте, сообщения идут в CRM).
@@ -51,13 +53,20 @@ class ChatActivity : ComponentActivity() {
     private var loading by mutableStateOf(true)
     private var pageProgress by mutableFloatStateOf(0f)
     private var failed by mutableStateOf(false)
+    private var native by mutableStateOf<Boolean?>(null)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val chatHost = Uri.parse(StoreInfo.managerChatUrl).host
 
-        val web = WebView(this).apply {
+        // Свой чат (через Битрикс24) — для вошедших, когда сервер говорит, что канал подключён; иначе веб-чат сайта
+        val loggedIn = SessionManager(this).isLoggedIn()
+        lifecycleScope.launch {
+            native = loggedIn && runCatching { com.example.myapplication.server.AppServer(this@ChatActivity).chatEnabled() }.getOrDefault(false)
+        }
+
+        val web by lazy { WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptCookie(true)
@@ -109,11 +118,11 @@ class ChatActivity : ComponentActivity() {
             }
             loadUrl(StoreInfo.managerChatUrl)
             com.example.myapplication.Analytics.event("chat_open", mapOf("guest" to !SessionManager(this@ChatActivity).isLoggedIn()))
-        }
+        } }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (web.canGoBack()) web.goBack() else finish()
+                if (native == false && web.canGoBack()) web.goBack() else finish()
             }
         })
 
@@ -151,7 +160,10 @@ class ChatActivity : ComponentActivity() {
                         )
                     }
                 ) { padding ->
-                    Box(Modifier.padding(padding).imePadding().fillMaxSize()) {
+                    if (native == null) Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        CircularProgressIndicator()
+                    } else if (native == true) NativeChat(Modifier.padding(padding).imePadding())
+                    else Box(Modifier.padding(padding).imePadding().fillMaxSize()) {
                         AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                         if (loading && !failed) LinearProgressIndicator(progress = { pageProgress }, modifier = Modifier.fillMaxWidth())
                         if (failed) Surface(Modifier.fillMaxSize()) {

@@ -15,6 +15,12 @@ POST /v1/push/token           push-токен устройства (RuStore) д�
 DELETE /v1/push/token         забыть токен (выход из аккаунта)
 POST /v1/admin/push-test      тестовый push клиенту (X-Upload-Token)
 GET  /v1/brands/warranty       гарантии избранных брендов (срок, рейтинг, условия) — app/data/brand_warranty.json
+POST /v1/bitrix/install       установка локального приложения Битрикс24 (токены, регистрация канала)
+POST /v1/bitrix/placement     администратор включил канал на открытой линии
+POST /v1/bitrix/event         ответ оператора (OnImConnectorMessageAdd) → история + push клиенту
+GET  /v1/chat/status          доступен ли чат через Битрикс24
+GET  /v1/chat/messages        переписка клиента (after=id)
+POST /v1/chat/send            сообщение клиента в открытую линию
 GET  /v1/app/latest           последняя сборка приложения (автообновление)
 GET  /v1/app/apk/{code}       скачать сборку
 PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
@@ -32,7 +38,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from . import access, push, releases, tokens
+from . import access, bitrix, push, releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
@@ -64,6 +70,10 @@ class RegisterIn(BaseModel):
     email: str = Field(default="", max_length=120)
     password: str = Field(min_length=8, max_length=64)  # правило ABCP: 8+, цифры, строчные и заглавные
     office: str = Field(pattern=r"^\d{1,10}$")
+
+
+class ChatIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
 
 
 class PushTokenIn(BaseModel):
@@ -117,6 +127,10 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["pusher"] = push.RuStorePush(state["abcp"].http, s.rustore_push_host, s.rustore_project_id, s.rustore_push_token)
         state["watcher"] = push.OrderWatcher(state["abcp"], state["pusher"], state["tokens"], folder, s.order_watch_interval)
         app.state.watcher = state["watcher"]  # для тестов и ручного запуска
+        state["bx"] = bitrix.Bitrix(state["abcp"].http, bitrix.BitrixState(folder), s.bitrix_client_id,
+                                    s.bitrix_client_secret, s.public_url)
+        state["chat"] = bitrix.ChatStore(folder)
+        app.state.bx = state["bx"]
         tasks = []
         if state["pusher"].enabled and s.order_watch_interval > 0:
             tasks.append(asyncio.create_task(state["watcher"].run()))
@@ -482,6 +496,134 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if req:
             await notify_managers(f"✅ Доступ из приложения работает: клиент ID {uid}")
         return {"closed": req is not None}
+
+    # ---------- чат через Битрикс24 ----------
+    chat_limit = RateLimiter(limit=30, window=60)
+
+    async def bitrix_body(request: Request) -> dict:
+        raw = await request.body()
+        if request.headers.get("content-type", "").startswith("application/json"):
+            try:
+                return json.loads(raw or b"{}")
+            except ValueError:
+                return {}
+        return bitrix.parse_form(raw)
+
+    def html(text: str) -> Response:
+        page = ("<!doctype html><meta charset=utf-8><script src=//api.bitrix24.com/api/v1/></script>"
+                f"<body style='font:16px sans-serif;padding:24px'>{text}"
+                "<script>try{BX24.init(function(){BX24.installFinish()})}catch(e){}</script></body>")
+        return Response(page, media_type="text/html; charset=utf-8")
+
+    @app.post("/v1/bitrix/install")
+    async def bitrix_install(request: Request):
+        bx: bitrix.Bitrix = state["bx"]
+        d = await bitrix_body(request)
+        auth = d.get("auth") or {
+            "access_token": d.get("AUTH_ID"), "refresh_token": d.get("REFRESH_ID"), "expires_in": d.get("AUTH_EXPIRES"),
+            "domain": d.get("DOMAIN"), "member_id": d.get("member_id"),
+            "client_endpoint": f"https://{d.get('DOMAIN')}/rest/" if d.get("DOMAIN") else None,
+        }
+        # Только наш Битрикс и только наше приложение — иначе чужой портал мог бы перехватить сообщения клиентов
+        if not bx.configured or str(auth.get("domain") or "").lower() != state["s"].bitrix_domain.lower():
+            raise HTTPException(403, "Чужой портал")
+        before = bx.state.load()
+        bx.save_auth({k: v for k, v in auth.items() if v})
+        try:
+            info = (await bx.call("app.info", {})).get("result", {})
+            if str(info.get("CODE") or info.get("client_id") or "") != bx.client_id:
+                raise RuntimeError("чужое приложение")
+            if auth.get("application_token"):
+                bx.state.update(application_token=auth["application_token"])
+            await bx.setup()
+        except Exception as e:
+            bx.state.save(before)  # проверка не прошла — токены не принимаем
+            log.info("bitrix install failed: %s", e)
+            raise HTTPException(403, "Установка не подтверждена")
+        log.info("bitrix installed on %s", auth.get("domain"))
+        return html("✅ Приложение Автодруг подключено. Включите канал «Приложение Автодруг» в настройках открытой линии.")
+
+    @app.post("/v1/bitrix/placement")
+    async def bitrix_placement(request: Request):
+        bx: bitrix.Bitrix = state["bx"]
+        d = await bitrix_body(request)
+        if str(d.get("DOMAIN") or "").lower() != state["s"].bitrix_domain.lower():
+            raise HTTPException(403, "Чужой портал")
+        try:
+            opts = json.loads(d.get("PLACEMENT_OPTIONS") or "{}")
+        except ValueError:
+            opts = {}
+        line = str(opts.get("LINE") or "")
+        if not line.isdigit():
+            return html("Не удалось определить открытую линию.")
+        try:
+            await bx.activate(line)
+        except Exception as e:
+            log.info("bitrix activate failed: %s", e)
+            return html("Не удалось включить канал. Попробуйте ещё раз.")
+        log.info("bitrix connector active on line %s", line)
+        return html(f"✅ Канал «{bitrix.CONNECTOR_NAME}» включён на линии {line}. Сообщения из приложения будут приходить сюда.")
+
+    @app.post("/v1/bitrix/event")
+    async def bitrix_event(request: Request):
+        bx: bitrix.Bitrix = state["bx"]
+        d = await bitrix_body(request)
+        auth = d.get("auth") or {}
+        saved = bx.state.load()
+        # Подлинность события — по application_token, который Битрикс выдал при установке
+        if not saved.get("application_token") or auth.get("application_token") != saved["application_token"]:
+            raise HTTPException(403, "Нет доступа")
+        if str(d.get("event", "")).upper() != "ONIMCONNECTORMESSAGEADD":
+            return {"ok": True}
+        data = d.get("data") or {}
+        line = str(data.get("LINE") or saved.get("line") or "")
+        delivered = []
+        for m in bitrix.as_list(data.get("MESSAGES")):
+            uid = str((m.get("chat") or {}).get("id") or "")
+            im = m.get("im") or {}
+            who, text = bitrix.clean_bb(str((m.get("message") or {}).get("text") or ""))
+            if not uid.isdigit() or not text:
+                continue
+            mid = state["chat"].add(uid, "out", text, who, str(im.get("chat_id") or ""), str(im.get("message_id") or ""))
+            delivered.append({"im": {"chat_id": im.get("chat_id"), "message_id": im.get("message_id")},
+                              "message": {"id": [str(mid)]}, "chat": {"id": uid}})
+            if mid and state["pusher"].enabled:
+                body = text if len(text) <= 150 else text[:147] + "…"
+                for t in state["tokens"].tokens(uid):
+                    await state["pusher"].send(t, {"type": "chat", "title": f"{who or 'Менеджер'} ответил в чате", "body": body})
+        try:
+            await bx.delivered(line, delivered)
+        except Exception as e:
+            log.info("bitrix delivery status failed: %s", e)
+        return {"ok": True}
+
+    @app.get("/v1/chat/status")
+    async def chat_status():
+        return {"enabled": state["bx"].ready}
+
+    @app.get("/v1/chat/messages")
+    async def chat_messages(after: int = 0, uid: str = Depends(current_uid)):
+        return {"messages": state["chat"].since(uid, after)}
+
+    @app.post("/v1/chat/send")
+    async def chat_send(body: ChatIn, uid: str = Depends(current_uid)):
+        bx: bitrix.Bitrix = state["bx"]
+        if not bx.ready:
+            raise HTTPException(503, "Чат временно недоступен — позвоните в магазин")
+        if not chat_limit.allow("chat:" + uid):
+            raise HTTPException(429, "Слишком часто — подождите минуту")
+        text = body.text.strip()
+        mid = state["chat"].add(uid, "in", text)
+        try:
+            client = await state["abcp"].client_card(uid)
+        except AbcpError:
+            client = {}
+        try:
+            await bx.send_client_message(uid, mid, text, client)
+        except Exception as e:
+            log.info("bitrix send failed: %s", e)
+            raise HTTPException(502, "Сообщение не дошло до менеджера — попробуйте ещё раз")
+        return {"id": mid}
 
     MAX_APK = 150 * 1024 * 1024
 

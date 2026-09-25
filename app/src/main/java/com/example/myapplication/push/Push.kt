@@ -68,6 +68,10 @@ object Push {
         val items = data["items"]?.let {
             runCatching { Gson().fromJson<List<List<String>>>(it, object : TypeToken<List<List<String>>>() {}.type) }.getOrNull()
         }
+        if (data["type"] == "chat") {
+            com.example.myapplication.abcp.showChatNotification(ctx, data["title"] ?: "Менеджер ответил", data["body"].orEmpty())
+            return
+        }
         if (data["type"] == "promo") {
             showPromoNotification(ctx, data["title"] ?: "Автодруг92", data["body"].orEmpty())
             return
