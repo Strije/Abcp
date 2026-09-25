@@ -364,6 +364,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         data = {"type": "access_granted", "title": "Доступ включён",
                 "body": "Поиск, корзина и заказы в приложении работают. Откройте «Автодруг»."}
         codes = [await state["pusher"].send(t, data) for t in state["tokens"].tokens(uid)] if state["pusher"].enabled else []
+        log.info("access granted push %s -> %s", uid, codes)
         return 200 in codes
 
     @app.post("/v1/access-request")
@@ -383,6 +384,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     @app.delete("/v1/access-request")
     async def access_done(uid: str = Depends(current_uid)):
         req = queue().close(uid)
+        log.info("access ok from app: %s (was pending: %s)", uid, req is not None)
         if req:
             await notify_managers(f"✅ Доступ из приложения работает: клиент ID {uid}")
         return {"closed": req is not None}

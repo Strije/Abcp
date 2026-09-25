@@ -141,6 +141,7 @@ class ButtonListener:
         uid = data[len(GRANTED):]
         who = (cb.get("from") or {}).get("first_name") or "менеджер"
         delivered = await self.on_granted(uid)
+        log.info("access granted by button: %s delivered=%s", uid, delivered)
         note = "клиенту отправлено уведомление" if delivered else "уведомление не доставлено (нет push) — клиент увидит при входе"
         await self.http.post(self._url("answerCallbackQuery"), json={"callback_query_id": cb.get("id"), "text": note})
         await self.http.post(self._url("editMessageText"), json={
