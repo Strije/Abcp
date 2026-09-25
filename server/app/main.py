@@ -36,6 +36,8 @@ from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("avtodrug")
+# httpx пишет в журнал полный адрес запроса, а в нём админский доступ ABCP и токен бота — только предупреждения
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class SessionIn(BaseModel):
