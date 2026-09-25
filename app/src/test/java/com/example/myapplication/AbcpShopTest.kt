@@ -59,4 +59,20 @@ class AbcpShopTest {
         assertEquals("Неизвестная ошибка X", com.example.myapplication.abcp.explainAbcpError("Неизвестная ошибка X"))
         assertTrue(com.example.myapplication.abcp.prettifyAbcpError("<html>502</html>", 502).contains("временно недоступен"))
     }
+
+    private fun offer(brand: String, number: String, provider: String, own: String? = null) =
+        com.example.myapplication.abcp.Offer(brand, number, number, "", 100.0, 1, 1, if (own != null) 0 else 48, 0, "s$provider", "k", "", false,
+            deadlineLabel = own, distributorId = provider)
+
+    @Test
+    fun confirmStars() {
+        val w = com.example.myapplication.abcp::withConfirmations
+        assertEquals(listOf(2, 2), w(listOf(offer("MANN", "OC90", "A"), offer("MANN", "OC90", "B"))).map { it.confirm })
+        assertEquals(listOf(1, 1), w(listOf(offer("MANN", "OC90", "A"), offer("MANN", "OC90", "A"))).map { it.confirm })
+        assertEquals(listOf(2, 2), w(listOf(offer("MANN", "OC-90", "A"), offer("mann", "oc90", "B"))).map { it.confirm })
+        assertEquals(listOf(2, 2), w(listOf(offer("MANN", "OC90", "A"), offer("MANN-FILTER", "OC90", "B"))).map { it.confirm })
+        assertEquals(listOf(3, 3, 3, 1), w(listOf(offer("M", "1", "A"), offer("M", "1", "B"), offer("M", "1", "C"), offer("X", "2", "D"))).map { it.confirm })
+        // Склады АвтоДруг — один поставщик
+        assertEquals(listOf(1, 1), w(listOf(offer("Z", "OF4063", "1", "Хрусталева 111 (самовывоз)"), offer("Z", "OF4063", "2", "ПОР20 (самовывоз)"))).map { it.confirm })
+    }
 }

@@ -52,7 +52,8 @@ private fun Term?.accepts(o: Offer): Boolean = when (this) {
 }
 
 private fun Sort.comparator(): Comparator<Offer> = when (this) {
-    Sort.Fast -> compareBy<Offer> { it.deliveryHours }.thenBy { it.price }
+    // Быстрее, при равном сроке — больше ★ (поставщиков), потом дешевле
+    Sort.Fast -> compareBy<Offer> { it.deliveryHours }.thenByDescending { it.confirm }.thenBy { it.price }
     Sort.Price -> compareBy<Offer> { it.price }.thenBy { it.deliveryHours }
 }
 
@@ -83,19 +84,17 @@ class OffersActivity : ComponentActivity() {
                 var showAll by remember { mutableStateOf(false) }
                 var advices by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
 
-                var reliable by remember { mutableStateOf<Set<String>>(emptySet()) }
-                var onlyReliable by remember { mutableStateOf(false) }
+                var onlyConfirmed by remember { mutableStateOf(false) }
 
                 LaunchedEffect(Unit) { if (!shop.isGuest) advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
                 // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
-                LaunchedEffect(Unit) { if (!shop.isGuest) reliable = runCatching { server.reliable(brand, number) }.getOrDefault(emptySet()) }
 
                 LaunchedEffect(Unit) { com.example.myapplication.Analytics.event("offers_open", mapOf("brand" to brand, "number" to number, "guest" to shop.isGuest)) }
                 LaunchedEffect(showAll, reload) {
                     loading = true
                     error = null
                     try {
-                        offers = shop.offers(number, brand, all = showAll)
+                        offers = withConfirmations(shop.offers(number, brand, all = showAll))
                     } catch (e: Exception) {
                         com.example.myapplication.Analytics.error("Выдача → загрузка предложений", e)
                         error = e.message ?: "Не удалось загрузить предложения. Проверьте интернет."
@@ -119,13 +118,12 @@ class OffersActivity : ComponentActivity() {
                 val cmp = sort.comparator()
                 // Одна выдача: искомый номер закреплён сверху, ниже аналоги. Сортировка и фильтры — на весь список.
                 // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
-                fun isReliable(o: Offer) = "${o.brand.uppercase()}|${o.numberFix.uppercase()}" in reliable
                 fun grouped(list: List<Offer>) = list.filter { term.accepts(it) }
                     .groupBy { "${it.brand}|${it.numberFix}" }
                     .values.map { it.sortedWith(cmp) }
                     .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
                 val ownGroups = grouped(own)
-                val analogGroups = grouped(analogs.filter { !onlyReliable || isReliable(it) })
+                val analogGroups = grouped(analogs.filter { !onlyConfirmed || it.confirm >= 2 })
 
                 val snackbar = remember { SnackbarHostState() }
                 Scaffold(
@@ -159,10 +157,10 @@ class OffersActivity : ComponentActivity() {
                                     label = { Text(t.title) }
                                 )
                             }
-                            if (reliable.isNotEmpty()) {
+                            if (analogs.any { it.confirm >= 2 }) {
                                 FilterChip(
-                                    selected = onlyReliable, onClick = { onlyReliable = !onlyReliable },
-                                    label = { Text("★ Только достоверные") }
+                                    selected = onlyConfirmed, onClick = { onlyConfirmed = !onlyConfirmed },
+                                    label = { Text("★ От 2 поставщиков") }
                                 )
                             }
                         }
@@ -175,7 +173,7 @@ class OffersActivity : ComponentActivity() {
                                 Text(
                                     when {
                                         term != null -> "С условием «${term!!.title}» ничего нет — снимите фильтр."
-                                        onlyReliable -> "Достоверных аналогов нет — снимите фильтр «★»."
+                                        onlyConfirmed -> "Аналогов от 2 и более поставщиков нет — снимите фильтр «★»."
                                         else -> "Предложений не найдено. Спросите менеджера в чате — подберём."
                                     }
                                 )
@@ -191,7 +189,7 @@ class OffersActivity : ComponentActivity() {
                                 if (ownGroups.isNotEmpty()) {
                                     item(key = "h_own") { SectionTitle("Вы искали") }
                                     items(ownGroups, key = { "o_" + it.first().brand + it.first().numberFix }) { list ->
-                                        ArticleCard(list, reliable = false, onImage = { viewer = it }, onPick = { picked = it })
+                                        ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
                                     }
                                 } else if (own.isNotEmpty() || term != null) {
                                     item(key = "h_own_empty") {
@@ -212,7 +210,7 @@ class OffersActivity : ComponentActivity() {
                                         SectionTitle("Аналоги · ${analogGroups.size} арт., $n предл.")
                                     }
                                     items(analogGroups, key = { "a_" + it.first().brand + it.first().numberFix }) { list ->
-                                        ArticleCard(list, reliable = isReliable(list.first()), onImage = { viewer = it }, onPick = { picked = it })
+                                        ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
                                     }
                                 }
                                 if (!showAll) item {
@@ -269,7 +267,7 @@ class OffersActivity : ComponentActivity() {
 
 /** Артикул: фото, номер, бренд, описание и под ним все предложения. */
 @Composable
-private fun ArticleCard(list: List<Offer>, reliable: Boolean = false, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
+private fun ArticleCard(list: List<Offer>, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
     val head = list.first()
     val images = list.flatMap { it.images }.distinct()
     // Сразу — 3 лучших предложения (список уже отсортирован), остальные по кнопке: иначе следующий артикул уезжает вниз
@@ -291,9 +289,11 @@ private fun ArticleCard(list: List<Offer>, reliable: Boolean = false, onImage: (
                 Text(head.number, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(head.brand, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                    if (reliable) {
-                        Text(" ★", color = Color(0xFFF2B01E), style = MaterialTheme.typography.bodyMedium)
-                        Text(" достоверный аналог", style = MaterialTheme.typography.labelSmall, color = DeliveryColors.later)
+                    // ★N — этот бренд+артикул есть у N разных поставщиков (склады АвтоДруг — один поставщик)
+                    val n = list.maxOf { it.confirm }
+                    if (n >= 2) {
+                        Text("  ★$n", color = Color(0xFFF2B01E), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Text(" у $n поставщ.", style = MaterialTheme.typography.labelSmall, color = DeliveryColors.later)
                     }
                 }
                 if (head.description.isNotBlank()) {

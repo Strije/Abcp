@@ -75,7 +75,11 @@ data class Offer(
     val probabilityText: String? = null,
     val isUsed: Boolean = false,
     /** Когда обновлён прайс поставщика */
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    /** Поставщик в ABCP (distributorId) — для подсчёта ★ */
+    val distributorId: String = "",
+    /** ★N: у скольких разных поставщиков есть этот бренд+артикул (гостям считает сервер) */
+    val confirm: Int = 0
 ) {
     /** Товар лежит в нашем магазине — забрать можно сегодня */
     val inStore: Boolean get() = deliveryHours <= 0
@@ -400,8 +404,44 @@ private fun JsonElement.toOffer(): Offer? {
             ?.let { if (it <= 1.0) it * 100 else it }?.toInt()?.takeIf { it > 0 },
         probabilityText = o.str("descriptionOfDeliveryProbability")?.let(::stripHtml)?.takeIf { it.isNotBlank() },
         isUsed = o.str("isUsed").let { it == "1" || it.equals("true", true) },
-        updatedAt = o.str("lastUpdateTime")
+        updatedAt = o.str("lastUpdateTime"),
+        distributorId = o.str("distributorId").orEmpty(),
+        confirm = o.int("confirmCount")
     )
+}
+
+// ---------- ★N: сколько разных поставщиков предлагают тот же бренд+артикул ----------
+
+/** Бренды, которые разные поставщики пишут по-разному (ключ — после нормализации). */
+private val BRAND_ALIASES = mapOf(
+    "MANNFILTER" to "MANN", "HYUNDAIKIA" to "HYUNDAIKIA", "HYUNDAIMOBIS" to "HYUNDAIKIA", "MOBIS" to "HYUNDAIKIA",
+    "GENERALMOTORS" to "GM", "MERCEDESBENZ" to "MERCEDES", "LEMFORDER" to "LEMFOERDER", "TRW" to "TRW",
+)
+
+fun offerArticleKey(s: String) = s.uppercase().filter { it in 'A'..'Z' || it in '0'..'9' || it in 'А'..'Я' || it == 'Ё' }
+
+fun offerBrandKey(s: String): String {
+    val k = s.uppercase().filter { it in 'A'..'Z' || it in '0'..'9' || it in 'А'..'Я' || it == 'Ё' }
+    return BRAND_ALIASES[k] ?: k
+}
+
+/** Склады АвтоДруг (Хрусталёва, ПОР) в ABCP — разные поставщики, но для ★ это один поставщик. */
+fun offerProvider(o: Offer): String =
+    if (o.inStore && o.deadlineLabel?.contains("самовывоз", ignoreCase = true) == true) "AVTODRUG"
+    else o.distributorId.ifBlank { o.supplierCode }
+
+/**
+ * ★N по всей выдаче сразу (до сворачивания «ещё N»): для каждого бренда+артикула — сколько разных
+ * поставщиков. Нет данных о поставщиках (гость) — оставляем посчитанное сервером.
+ */
+fun withConfirmations(offers: List<Offer>): List<Offer> {
+    if (offers.all { it.distributorId.isBlank() }) return offers
+    val groups = HashMap<Pair<String, String>, MutableSet<String>>()
+    offers.forEach { o ->
+        val key = offerBrandKey(o.brand) to offerArticleKey(o.number)
+        if (key.first.isNotEmpty() && key.second.isNotEmpty()) groups.getOrPut(key) { HashSet() } += offerProvider(o)
+    }
+    return offers.map { o -> o.copy(confirm = groups[offerBrandKey(o.brand) to offerArticleKey(o.number)]?.size ?: 0) }
 }
 
 private fun JsonElement.toBasketItem(): BasketItem? {

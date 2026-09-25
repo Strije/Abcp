@@ -301,9 +301,36 @@ async def guest_brands(a: "Abcp", number: str) -> list[dict]:
     return [only(x, GUEST_BRAND_FIELDS) for x in items(data)]
 
 
+BRAND_ALIASES = {"MANNFILTER": "MANN", "HYUNDAIMOBIS": "HYUNDAIKIA", "MOBIS": "HYUNDAIKIA",
+                 "GENERALMOTORS": "GM", "MERCEDESBENZ": "MERCEDES", "LEMFORDER": "LEMFOERDER"}
+
+
+def _key(s: Any) -> str:
+    return re.sub(r"[^A-ZА-ЯЁ0-9]", "", str(s or "").upper())
+
+
+def confirm_counts(rows: list[dict]) -> list[int]:
+    """★N: сколько разных поставщиков предлагают тот же бренд+артикул. Склады самовывоза АвтоДруг — один поставщик."""
+    def provider(x: dict) -> str:
+        own = str(x.get("deliveryPeriod") or "0") in ("0", "") and "самовывоз" in str(x.get("deadlineReplace") or "").lower()
+        return "AVTODRUG" if own else str(x.get("distributorId") or x.get("supplierCode") or "")
+
+    def key(x: dict) -> tuple[str, str]:
+        b = _key(x.get("brand"))
+        return BRAND_ALIASES.get(b, b), _key(x.get("number"))
+
+    groups: dict[tuple[str, str], set] = {}
+    for x in rows:
+        k = key(x)
+        if k[0] and k[1]:
+            groups.setdefault(k, set()).add(provider(x))
+    return [len(groups.get(key(x), ())) for x in rows]
+
+
 async def guest_offers(a: "Abcp", number: str, brand: str, profile_id: str, all_: bool) -> list[dict]:
     data = await a._get("search/articles", a._admin({
         "number": number, "brand": brand, "useOnlineStocks": 1,
         "disableFiltering": 1 if all_ else 0, "profileId": profile_id,
     }))
-    return [only(x, GUEST_OFFER_FIELDS) for x in items(data)]
+    rows = items(data)
+    return [{**only(x, GUEST_OFFER_FIELDS), "confirmCount": n} for x, n in zip(rows, confirm_counts(rows))]

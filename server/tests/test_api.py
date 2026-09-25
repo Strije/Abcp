@@ -461,3 +461,19 @@ def test_special_push_texts():
     assert special_push("1", [("A", "Ожидает оплаты")], {})["kind"] == "pay"
     assert special_push("1", [("A", "Задерживается")], {})["kind"] == "delay"
     assert special_push("1", [("A", "В пути (товар заказан)")], {}) is None
+
+
+
+def test_confirm_counts_table():
+    from app.abcp import confirm_counts
+    r = lambda b, n, p, **kw: {"brand": b, "number": n, "distributorId": p, **kw}
+    assert confirm_counts([r("MANN", "OC90", "A"), r("MANN", "OC90", "B")]) == [2, 2]
+    assert confirm_counts([r("MANN", "OC90", "A"), r("MANN", "OC90", "A")]) == [1, 1]          # один поставщик, 2 склада
+    assert confirm_counts([r("MANN", "OC-90", "A"), r("mann", "oc90", "B")]) == [2, 2]         # нормализация
+    assert confirm_counts([r("MANN", "OC90", "A"), r("MANN-FILTER", "OC90", "B")]) == [2, 2]   # алиас
+    assert confirm_counts([r("", "OC90", "A"), r("", "OC90", "B")]) == [0, 0]                  # пустой бренд
+    assert confirm_counts([r("M", "1", "A"), r("M", "1", "B"), r("M", "1", "C"), r("X", "2", "D")]) == [3, 3, 3, 1]
+    own = dict(deliveryPeriod="0")
+    # Хрусталёва и ПОР — разные distributorId, но это склады АвтоДруг: один поставщик
+    assert confirm_counts([r("Z", "OF4063", "1591411", deadlineReplace="Хрусталева 111 (самовывоз)", **own),
+                           r("Z", "OF4063", "1791689", deadlineReplace="ПОР20 (самовывоз)", **own)]) == [1, 1]
