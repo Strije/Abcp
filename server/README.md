@@ -40,3 +40,10 @@ curl https://api.avtodrug92.ru/health
 ```bash
 pip install -r requirements-dev.txt && pytest -q
 ```
+
+## Слежение
+
+- `deploy/watchdog.py` + `avtodrug-watchdog.timer` — каждые 5 минут: API, диск, срок HTTPS-сертификата, VPN-подписка
+  (`WATCH_SUBSCRIPTION_URL`). В Telegram — только «сломалось» / «починилось». Раз в сутки копия данных сервиса
+  в `/var/backups/avtodrug-api` (14 последних).
+- `.github/workflows/uptime.yml` — проверка снаружи раз в 15 минут (секреты `TG_BOT_TOKEN`, `TG_CHAT_ID`).

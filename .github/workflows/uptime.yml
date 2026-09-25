@@ -1,0 +1,33 @@
+name: Uptime
+
+# Проверка сервера снаружи: если лёг весь VPS, сторож на нём самом написать не сможет.
+# Секреты: TG_BOT_TOKEN, TG_CHAT_ID (тот же бот, что и для заявок). Пока секретов нет — только лог.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check API
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          ok=0
+          # Три попытки с паузой — не тревожить из-за одного случайного сбоя сети
+          for i in 1 2 3; do
+            if curl -fsS --max-time 20 https://9077635-oy742028.twc1.net:8446/health > /dev/null; then ok=1; break; fi
+            sleep 60
+          done
+          if [ "$ok" = 1 ]; then echo "API в порядке"; exit 0; fi
+          echo "::error::API недоступен снаружи"
+          # Пока сервер лежит — напоминаем не чаще раза в час (первая проверка каждого часа)
+          if [ -n "$TG_BOT_TOKEN" ] && [ "$(date -u +%M)" -lt 15 -o "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            curl -sS -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+              --data-urlencode "chat_id=$TG_CHAT_ID" \
+              --data-urlencode "text=🔴 Сервер Автодруг недоступен снаружи (проверка GitHub). Приложение не может получить баланс, оплату, подбор по авто." > /dev/null
+          fi
+          exit 1

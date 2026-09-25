@@ -1,0 +1,7 @@
+[Unit]
+Description=Сторож сервера Автодруг (проверки + суточная копия данных)
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/avtodrug-api.env
+ExecStart=/opt/avtodrug-api/venv/bin/python /opt/avtodrug-api/deploy/watchdog.py
