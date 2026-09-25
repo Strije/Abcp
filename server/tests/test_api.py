@@ -35,7 +35,7 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
     assert admin, f"админский запрос {p} без админского доступа"
     if p == "cp/users":
         # как у ABCP: объект по индексам
-        return httpx.Response(200, json={"0": {"userId": "101", "balance": "0", "debt": "1826.50",
+        return httpx.Response(200, json={"0": {"userId": "101", "name": "Иван", "surname": "Петров", "mobile": "79781112233", "balance": "0", "debt": "1826.50",
                                                "saldo": "1826.5", "creditLimit": "5000", "profileId": "7"}})
     if p == "cp/users/profiles":
         return httpx.Response(200, json=[{"profileId": "7", "name": "Опт2"}])
@@ -235,3 +235,31 @@ def test_laximo_proxy():
 
 def test_laximo_off_without_credentials(client):
     assert client.post("/v1/laximo/findVehicle", json={"identString": "X"}).status_code == 503
+
+
+
+def test_access_request_queue(tmp_path):
+    from dataclasses import replace
+    sent = []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.telegram.org":
+            sent.append(__import__("json").loads(request.content)["text"])
+            return httpx.Response(200, json={"ok": True})
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), telegram_bot_token="t", telegram_chat_id="-100")
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        assert c.post("/v1/access-request", json={"missing": ["brands"]}).status_code == 401
+        h = login(c)
+        assert c.get("/v1/access-request", headers=h).json()["pending"] is False
+        r = c.post("/v1/access-request", headers=h, json={"missing": ["brands", "basket", "hack"]})
+        assert r.status_code == 200 and r.json()["notified"] is True
+        assert "101" in sent[0] and "hack" not in sent[0]
+        assert "79781112233" not in sent[0] and "Петров" not in sent[0]  # телефонов и имён в Telegram не шлём
+        assert "79781112233" not in (tmp_path / "access_requests.json").read_text(encoding="utf-8")
+        c.post("/v1/access-request", headers=h, json={"missing": ["brands"]})
+        assert len(sent) == 1  # повтор сразу — без второго сообщения
+        assert c.get("/v1/access-request", headers=h).json()["pending"] is True
+        assert c.delete("/v1/access-request", headers=h).json()["closed"] is True
+        assert "✅" in sent[-1] and c.get("/v1/access-request", headers=h).json()["pending"] is False

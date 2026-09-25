@@ -39,6 +39,8 @@ import com.example.myapplication.abcp.AbcpShop
 import com.example.myapplication.abcp.formatRub
 import com.example.myapplication.abcp.ApiClient
 import com.example.myapplication.abcp.MemoryCache
+import com.example.myapplication.abcp.ApiAccess
+import com.example.myapplication.abcp.ApiAccessCard
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import com.example.myapplication.laximo.normalizeRuPlate
@@ -94,6 +96,7 @@ class MainShellActivity : ComponentActivity() {
             OrderStatusWatch.stop(this)
             AppServer.clearCache()
             MemoryCache.clear()
+            ApiAccess.reset()
             session.clear()
             message?.let { android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_LONG).show() }
             startActivity(Intent(this, MainActivity::class.java))
@@ -112,8 +115,12 @@ class MainShellActivity : ComponentActivity() {
                     val fresh = resp.body()
                     when {
                         resp.isSuccessful && fresh != null -> { user = fresh; session.saveUser(Gson().toJson(fresh)) }
-                        resp.code() == 401 || resp.code() == 403 -> logout("Пароль изменился — войдите заново")
+                        // 102 — неверный логин/пароль (103 «нет прав» сюда не относится — это заявка на доступ)
+                        com.example.myapplication.abcp.abcpErrorCode(resp.errorBody()?.string()) == 102 ->
+                            logout("Пароль изменился — войдите заново")
                     }
+                    // Вход прошёл — проверяем, включены ли клиенту права на поиск/корзину/заказы
+                    ApiAccess.check(this@MainShellActivity)
                 }
                 var tab by rememberSaveable { mutableStateOf(HomeTab.Home) }
                 // Каждая вкладка помнит своё (введённый номер, прокрутку) при переключении
@@ -231,6 +238,8 @@ private fun HomeScreen(
             if (userName.isNullOrBlank()) "Здравствуйте!" else "Здравствуйте, ${userName.substringBefore(' ')}!",
             style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold
         )
+
+        if (!guest) ApiAccessCard()
 
         // Одно поле на всё: артикул, VIN, номер кузова или госномер
         OutlinedTextField(

@@ -7,6 +7,9 @@ GET  /v1/topup?amount=        ссылка на пополнение балан�
 POST /v1/images               картинки товаров для выдачи
 POST /v1/reliable             достоверные аналоги (звёздочка)
 POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
+POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
+GET  /v1/access-request       отправлена ли заявка
+DELETE /v1/access-request     доступ появился — закрыть заявку
 GET  /v1/app/latest           последняя сборка приложения (автообновление)
 GET  /v1/app/apk/{code}       скачать сборку
 PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
@@ -23,7 +26,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from . import releases, tokens
+from . import access, releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
@@ -53,6 +56,10 @@ class RegisterIn(BaseModel):
     email: str = Field(default="", max_length=120)
     password: str = Field(min_length=6, max_length=64)
     office: str = Field(pattern=r"^\d{1,10}$")
+
+
+class AccessIn(BaseModel):
+    missing: list[str] = Field(default_factory=list, max_length=10)
 
 
 class RestoreIn(BaseModel):
@@ -271,6 +278,34 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             raise HTTPException(502, "Каталог не ответил, попробуйте ещё раз")
         # Ответ как есть (и ошибки E_… тоже), но 5xx Laximo — это 502 для приложения
         return Response(text, status_code=502 if code >= 500 else code, media_type="application/json")
+
+    def queue() -> access.AccessQueue:
+        return access.AccessQueue(Path(state["s"].state_dir))
+
+    async def notify_managers(text: str) -> bool:
+        s = state["s"]
+        return await access.telegram(state["abcp"].http, s.telegram_bot_token, s.telegram_chat_id, text)
+
+    @app.post("/v1/access-request")
+    async def access_request(body: AccessIn, uid: str = Depends(current_uid)):
+        missing = [m for m in body.missing if m in access.FEATURES]
+        old = queue().get(uid)
+        req, notify = queue().add(uid, missing)
+        sent = await notify_managers(access.request_text(uid, req, repeat=old is not None)) if notify else False
+        log.info("access request %s notify=%s sent=%s", uid, notify, sent)
+        return {"createdAt": req["createdAt"], "notified": sent or not notify}
+
+    @app.get("/v1/access-request")
+    async def access_status(uid: str = Depends(current_uid)):
+        req = queue().get(uid)
+        return {"pending": req is not None, "createdAt": req["createdAt"] if req else None}
+
+    @app.delete("/v1/access-request")
+    async def access_done(uid: str = Depends(current_uid)):
+        req = queue().close(uid)
+        if req:
+            await notify_managers(f"✅ Доступ из приложения работает: клиент ID {uid}")
+        return {"closed": req is not None}
 
     MAX_APK = 150 * 1024 * 1024
 

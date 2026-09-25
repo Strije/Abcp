@@ -12,13 +12,17 @@ private fun parseAbcpError(rawBody: String?): AbcpErrorDto? {
     }
 }
 
+/** Код ошибки ABCP (102 — логин/пароль, 103 — нет прав на операцию) или null. */
+fun abcpErrorCode(rawBody: String?): Int? = parseAbcpError(rawBody)?.errorCode
+
 fun prettifyAbcpError(rawBody: String?): String {
     val err = parseAbcpError(rawBody)
 
     val message = err?.errorMessage?.takeIf { it.isNotBlank() }
 
     return when (err?.errorCode) {
-        103 -> "Доступ запрещён для этого IP.\nОтключите VPN или попросите менеджера добавить IP."
+        // IP-фильтр у магазина выключен, так что 103 — это не включённые клиенту права на API
+        103 -> "Для вашего аккаунта ещё не включён доступ из приложения. Отправьте заявку на главном экране — менеджер включит."
         102 -> message ?: "Неправильный логин или пароль!"
         else -> message ?: (rawBody ?: "Ошибка")
     }

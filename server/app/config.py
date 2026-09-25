@@ -24,6 +24,11 @@ class Settings:
     # Laximo (подбор по авто) — доступ только здесь, в приложении его нет
     laximo_user: str = ""
     laximo_pass: str = ""
+    # Заявки на доступ к API — менеджерам в Telegram. Пусто — заявки копятся без уведомлений.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    # Где хранить очередь заявок
+    state_dir: str = "/var/lib/avtodrug-api"
 
 
 def load() -> Settings:
@@ -45,4 +50,7 @@ def load() -> Settings:
         app_upload_token=os.environ.get("APP_UPLOAD_TOKEN", "").strip(),
         laximo_user=os.environ.get("LAXIMO_USER", "").strip(),
         laximo_pass=os.environ.get("LAXIMO_PASS", "").strip(),
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        state_dir=os.environ.get("STATE_DIR", "/var/lib/avtodrug-api"),
     )

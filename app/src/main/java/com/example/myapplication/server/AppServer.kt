@@ -79,6 +79,16 @@ class AppServer(ctx: Context) {
         return post("/v1/reliable", body.toString()).asJsonObject["reliable"].asJsonArray.map { it.asString }.toSet()
     }
 
+    // ---------- права на API ABCP (включает менеджер вручную) ----------
+
+    suspend fun accessRequest(missing: List<String>) {
+        post("/v1/access-request", Gson().toJson(mapOf("missing" to missing)))
+    }
+
+    suspend fun accessDone() {
+        call { token -> Request.Builder().url("$base/v1/access-request").delete().auth(token).build() }
+    }
+
     // ---------- без входа: регистрация и восстановление пароля (ABCP пускает их только с IP сервера) ----------
 
     suspend fun register(name: String, surname: String, mobile: String, email: String, password: String, office: String): Boolean {
