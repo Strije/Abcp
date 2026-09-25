@@ -2,6 +2,7 @@ package com.example.myapplication.abcp
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -67,18 +68,20 @@ fun RatingCups(rating: Double, size: androidx.compose.ui.text.TextStyle = Materi
     }
 }
 
-/** Значок в карточке артикула: «🛡 Гарантия 1 год» + кубки; нажатие — условия. */
+/** Плашка в карточке артикула, как на сайте: оранжевая «Гарантия 2 года*» (с переносом) + кубки рейтинга. */
 @Composable
 fun WarrantyBadge(w: BrandWarranty, onClick: () -> Unit) {
     Row(
-        Modifier.padding(top = 4.dp).clickable(onClick = onClick),
+        Modifier.padding(vertical = 3.dp).clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
-            "🛡 ${w.warranty.replace("Гарантия ", "")}*",
-            style = MaterialTheme.typography.labelMedium,
-            color = com.example.myapplication.ui.theme.DeliveryColors.today
+            w.warranty + "*",
+            style = MaterialTheme.typography.labelMedium, color = androidx.compose.ui.graphics.Color.White,
+            modifier = Modifier.weight(1f, fill = false)
+                .background(androidx.compose.ui.graphics.Color(0xFFF7941D), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                .padding(horizontal = 8.dp, vertical = 3.dp)
         )
         RatingCups(w.rating)
     }
@@ -109,10 +112,18 @@ fun WarrantySheet(w: BrandWarranty, onDismiss: () -> Unit) {
                 }
             }
             HorizontalDivider()
+            Text("Как воспользоваться гарантией*", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Text(
-                "* Гарантия действует при наличии документов о покупке и установке (заказ-наряд СТО). " +
-                    "При дефекте сохраните упаковку и свяжитесь с магазином.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                "Понадобятся:\n" +
+                    "• акт выполненных работ на установку и снятие детали;\n" +
+                    "• кассовый чек СТО — подтверждение, что работы сделаны на квалифицированном сервисе;\n" +
+                    "• акт дефектовки (заключение по рекламации) с технически грамотным описанием неисправности;\n" +
+                    "• фото детали и маркировки — будут плюсом.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                "Чек о покупке у нас не нужен — продажу найдём сами. Поможем оформить акты на установку, снятие и заключение.",
+                style = MaterialTheme.typography.bodyMedium, color = com.example.myapplication.ui.theme.DeliveryColors.today
             )
             TextButton(onClick = { open(Warranties.page) }, contentPadding = PaddingValues(0.dp)) {
                 Text("Гарантия и возврат на avtodrug92.ru ↗")

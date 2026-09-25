@@ -90,6 +90,7 @@ class OffersActivity : ComponentActivity() {
                 var onlyWarranty by remember { mutableStateOf(false) }
                 var warrantyShown by remember { mutableStateOf<BrandWarranty?>(null) }
                 var starsShown by remember { mutableStateOf<Int?>(null) }
+                var newSearch by remember { mutableStateOf<Offer?>(null) }
                 LaunchedEffect(Unit) { warranties = Warranties.load() }
                 fun warrantyOf(o: Offer) = warranties[Warranties.key(o.brand)]
 
@@ -173,7 +174,7 @@ class OffersActivity : ComponentActivity() {
                             if (analogs.any { it.confirm >= 2 }) {
                                 FilterChip(
                                     selected = onlyConfirmed, onClick = { onlyConfirmed = !onlyConfirmed },
-                                    label = { Text("★ Ходовые") }
+                                    label = { Text("★ Частые замены") }
                                 )
                             }
                         }
@@ -203,7 +204,7 @@ class OffersActivity : ComponentActivity() {
                                     item(key = "h_own") { SectionTitle("Вы искали") }
                                     items(ownGroups, key = { "o_" + it.first().brand + it.first().numberFix }) { list ->
                                         ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { picked = it },
-                                            onWarranty = { warrantyShown = it }, onStars = { starsShown = it })
+                                            onWarranty = { warrantyShown = it }, onStars = { starsShown = it }, onNumber = { newSearch = it })
                                     }
                                 } else if (own.isNotEmpty() || term != null) {
                                     item(key = "h_own_empty") {
@@ -225,7 +226,7 @@ class OffersActivity : ComponentActivity() {
                                     }
                                     items(analogGroups, key = { "a_" + it.first().brand + it.first().numberFix }) { list ->
                                         ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { picked = it },
-                                            onWarranty = { warrantyShown = it }, onStars = { starsShown = it })
+                                            onWarranty = { warrantyShown = it }, onStars = { starsShown = it }, onNumber = { newSearch = it })
                                     }
                                 }
                                 if (!showAll) item {
@@ -241,17 +242,51 @@ class OffersActivity : ComponentActivity() {
                 }
 
                 warrantyShown?.let { WarrantySheet(it) { warrantyShown = null } }
+                newSearch?.let { o ->
+                    AlertDialog(
+                        onDismissRequest = { newSearch = null },
+                        title = { Text("Новый поиск по ${o.number} ${o.brand}?") },
+                        text = {
+                            Text(
+                                "Откроется выдача по этому номеру. Предложения и отметки ★ будут относиться уже к нему, " +
+                                    "а не к исходной детали $number, и носят справочный характер."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                newSearch = null
+                                startActivity(
+                                    android.content.Intent(this@OffersActivity, OffersActivity::class.java)
+                                        .putExtra(EXTRA_BRAND, o.brand).putExtra(EXTRA_NUMBER, o.number)
+                                        .putExtra(EXTRA_DESCRIPTION, o.description)
+                                )
+                            }) { Text("Искать") }
+                        },
+                        dismissButton = { TextButton(onClick = { newSearch = null }) { Text("Отмена") } }
+                    )
+                }
                 starsShown?.let { n ->
                     AlertDialog(
                         onDismissRequest = { starsShown = null },
-                        title = { Text("★ Ходовая позиция") },
+                        title = { Text("★ Частая замена") },
                         text = {
-                            Text(
-                                "Эту деталь сейчас предлагают $n разных поставщика(ов). Значит, её охотно возят и покупают — " +
-                                    "обычно это проверенный рынком вариант. Склады нашего магазина считаются одним поставщиком."
-                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Эту деталь как замену предлагают сразу несколько поставщиков ($n) — высокая вероятность, что она подойдёт.")
+                                Text(
+                                    "Но это подсказка, а не проверка. Сверяйте оригинальный OEM-номер по каталогу производителя " +
+                                        "с учётом комплектации и модификации вашей машины и возможных нештатных деталей.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text("Не уверены — спросите менеджера, проверим по VIN.", style = MaterialTheme.typography.bodySmall)
+                            }
                         },
-                        confirmButton = { TextButton(onClick = { starsShown = null }) { Text("Понятно") } }
+                        confirmButton = { TextButton(onClick = { starsShown = null }) { Text("Понятно") } },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                starsShown = null
+                                startActivity(android.content.Intent(this@OffersActivity, com.example.myapplication.ChatActivity::class.java))
+                            }) { Text("Спросить менеджера") }
+                        }
                     )
                 }
 
@@ -295,114 +330,131 @@ class OffersActivity : ComponentActivity() {
     }
 }
 
-/** Артикул: фото, номер, бренд, описание и под ним все предложения. */
+/**
+ * Артикул — как мобильная выдача сайта: фото, подчёркнутый номер (нажатие — новый поиск), бренд, ★,
+ * оранжевая плашка гарантии + кубки, описание; ниже — предложения цветными плашками; «Показать ещё N».
+ */
 @Composable
 private fun ArticleCard(
     list: List<Offer>, warranty: BrandWarranty?, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit,
-    onWarranty: (BrandWarranty) -> Unit, onStars: (Int) -> Unit
+    onWarranty: (BrandWarranty) -> Unit, onStars: (Int) -> Unit, onNumber: (Offer) -> Unit
 ) {
     val head = list.first()
     val images = list.flatMap { it.images }.distinct()
-    // Сразу — 3 лучших предложения (список уже отсортирован), остальные по кнопке: иначе следующий артикул уезжает вниз
+    // Сразу — 3 лучших предложения (список уже отсортирован), остальные по кнопке, как «Показать ещё» на сайте
     var expanded by remember(head.brand, head.numberFix) { mutableStateOf(false) }
     val shown = if (expanded) list else list.take(3)
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (images.isNotEmpty()) {
-                AsyncImage(
-                    model = images.first(),
-                    contentDescription = "Фото",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(64.dp).clip(RoundedCornerShape(10.dp))
-                        .background(Color.White).clickable { onImage(images) }
-                )
-                Spacer(Modifier.width(12.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(head.number, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(head.brand, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                    // ★ — этот бренд+артикул есть у 2+ разных поставщиков; число — только в пояснении по нажатию
-                    val n = list.maxOf { it.confirm }
-                    if (n >= 2) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                // Фото (своих у ABCP почти нет — значок камеры: фото в Яндексе/Google)
+                if (images.isNotEmpty()) {
+                    AsyncImage(
+                        model = images.first(), contentDescription = "Фото", contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)).background(Color.White).clickable { onImage(images) }
+                    )
+                } else PhotoSearchButton(head.brand, head.number)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "  ★", color = Color(0xFFF2B01E), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clickable { onStars(n) }
+                            head.number, style = MaterialTheme.typography.titleMedium,
+                            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                            modifier = Modifier.clickable { onNumber(head) }
                         )
+                        Text("  ${head.brand}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        // ★ — частая замена (у 2+ поставщиков); подробности по нажатию
+                        val n = list.maxOf { it.confirm }
+                        if (n >= 2) Text(" ★", color = Color(0xFFF2B01E), style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.clickable { onStars(n) })
+                    }
+                    warranty?.let { w -> WarrantyBadge(w) { onWarranty(w) } }
+                    if (head.description.isNotBlank()) {
+                        Text(head.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                warranty?.let { w -> WarrantyBadge(w) { onWarranty(w) } }
-                if (head.description.isNotBlank()) {
-                    Text(head.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
             }
-            // Своих фото нет (ABCP даёт их только через articles/info с лимитом 10 в сутки) —
-            // маленькая кнопка: фото детали в поиске картинок Яндекса / Google
-            if (images.isEmpty()) PhotoSearchButton(head.brand, head.number)
-        }
-        shown.forEach { o ->
-            HorizontalDivider()
-            OfferRow(o) { onPick(o) }
-        }
-        if (list.size > 3) {
-            HorizontalDivider()
-            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (expanded) "Свернуть" else "Ещё ${list.size - 3} предложений ▾")
+            shown.forEach { o -> OfferRow(o) { onPick(o) } }
+            if (list.size > 3) {
+                Button(
+                    onClick = { expanded = !expanded },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC52E), contentColor = Color.White),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                ) {
+                    Text(if (expanded) "Свернуть" else "Показать ещё", fontWeight = FontWeight.Bold)
+                    if (!expanded) {
+                        Spacer(Modifier.width(8.dp))
+                        Text("${list.size - 3}", color = Color.Black, style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.background(Color.White, RoundedCornerShape(10.dp)).padding(horizontal = 7.dp, vertical = 1.dp))
+                    }
+                }
             }
         }
     }
 }
 
+/** Предложение — цветная плашка поставщика (как на сайте): срок/склад, значки, цена, количество, корзина. */
 @Composable
 private fun OfferRow(o: Offer, onClick: () -> Unit) {
-    val stripe = parseAbcpColor(o.supplierColor) ?: Color.Transparent
-    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).clickable(onClick = onClick)) {
-        // Цвет поставщика, как фон строки на сайте — здесь узкой полосой слева
-        Box(Modifier.width(5.dp).fillMaxHeight().background(stripe))
-        Column(Modifier.weight(1f).padding(start = 10.dp, top = 10.dp, bottom = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    o.deliveryText(),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = if (o.inStore) FontWeight.Bold else FontWeight.Normal,
-                    color = when {
-                        o.inStore -> DeliveryColors.today
-                        o.deliveryHours <= 72 -> DeliveryColors.soon
-                        else -> DeliveryColors.later
-                    },
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-            }
-            val pack = if (o.packing > 1) " · партия ${o.packing} шт." else ""
-            Text(formatAvailability(o.availability) + pack, style = MaterialTheme.typography.bodySmall)
-            o.probability?.let { p ->
-                Text(
-                    "Вероятность поставки $p%",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = when {
-                        p >= 90 -> DeliveryColors.today
-                        p >= 70 -> DeliveryColors.soon
-                        else -> MaterialTheme.colorScheme.error
-                    }
-                )
-            }
-            if (o.badges.isNotEmpty() || o.noReturn || o.isUsed) Badges(o)
+    // Цвет поставщика из ABCP — фоном; тёмный текст на нём читается (цвета у магазина светлые)
+    val bg = parseAbcpColor(o.supplierColor) ?: MaterialTheme.colorScheme.surfaceVariant
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(bg).clickable(onClick = onClick)
+            .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(o.deliveryText(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF1B1B1B), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            SupplierIcons(o)
         }
-        Column(
-            Modifier.padding(10.dp).align(Alignment.CenterVertically),
-            horizontalAlignment = Alignment.End
-        ) {
-            Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.ShoppingCart, "В корзину", Modifier.size(18.dp))
+        Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF1B1B1B))
+        Text(
+            if (o.availability > 0) "${o.availability} шт." else "",
+            style = MaterialTheme.typography.labelSmall, color = Color(0xFF5F6368),
+            modifier = Modifier.widthIn(min = 44.dp).padding(horizontal = 8.dp)
+        )
+        Box(
+            Modifier.size(38.dp).background(Color(0xFFFFC52E), RoundedCornerShape(6.dp)).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) { Icon(Icons.Default.ShoppingCart, "В корзину", tint = Color.White, modifier = Modifier.size(20.dp)) }
+    }
+}
+
+/** Значки поставщика, как на сайте: 🏠✓ надёжный, склад ✕ сторонний, ↩ без возврата, ₽ предоплата, Б/у. Текст — в шторке заказа. */
+@Composable
+private fun SupplierIcons(o: Offer) {
+    val list = buildList {
+        addAll(o.badges)
+        if (o.noReturn && o.badges.none { "возврат" in it.text.lowercase() }) add(SupplierBadge("Возврат невозможен", BadgeKind.Bad))
+        if (o.isUsed) add(SupplierBadge("Б/у", BadgeKind.Bad))
+    }
+    if (list.isEmpty()) return
+    Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        list.forEach { b ->
+            val t = b.text.lowercase()
+            val (glyph, color) = when {
+                "возврат" in t -> "↩" to Color(0xFFD32F2F)
+                "сторон" in t || "под заказ" in t -> "⌂✕" to Color(0xFFD32F2F)
+                "предоплат" in t || "оплат" in t -> "₽" to Color(0xFF1B1B1B)
+                "б/у" in t -> "Б/у" to Color(0xFFD32F2F)
+                b.kind == BadgeKind.Good -> "⌂✓" to Color(0xFF1E6FD9)
+                b.kind == BadgeKind.Bad -> "!" to Color(0xFFD32F2F)
+                else -> "•" to Color(0xFF5F6368)
             }
+            Text(glyph, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
 
-/** Метки поставщика цветом: надёжный — зелёная, сторонний склад/без возврата — красная. */
+/** Метки поставщика текстом — в шторке «В корзину», где есть место объяснить. */
 @Composable
 private fun Badges(o: Offer) {
     val list = buildList {
