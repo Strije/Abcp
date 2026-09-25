@@ -104,6 +104,7 @@ fun GarageScreen() {
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                item { com.example.myapplication.OneTimeHint("garage_star", "Нажмите ☆ у машины — она станет «Моей машиной» на главной, и запчасти для неё будут в одно касание.") }
                 items(list.sortedByDescending { it.vin == favorite }) { car ->
                     val isFav = car.vin == favorite
                     ElevatedCard(Modifier.fillMaxWidth().clickable { openCar(ctx, car) }) {

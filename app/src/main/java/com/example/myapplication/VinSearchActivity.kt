@@ -206,6 +206,7 @@ class VinSearchActivity : ComponentActivity() {
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
+                        OneTimeHint("vin_photo", "Нажмите 📷 в поле — и сфотографируйте табличку VIN, СТС или номер машины. Вводить руками не нужно.")
                         Text(
                             "Можно сфотографировать табличку VIN, СТС или номер машины — распознаем сами",
                             style = MaterialTheme.typography.bodySmall

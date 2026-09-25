@@ -60,6 +60,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".OnboardingActivity" android:exported="false" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -168,6 +168,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 modifier = Modifier.fillMaxWidth()
             )
 
+            if (query.isBlank()) OneTimeHint("label_photo", "Нет номера под рукой? Нажмите 📷 и сфотографируйте упаковку детали — найдём по штрихкоду или надписи.")
             candidates?.let { list ->
                 AlertDialog(
                     onDismissRequest = { candidates = null },

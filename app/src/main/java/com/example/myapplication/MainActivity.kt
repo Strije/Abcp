@@ -40,6 +40,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AvtodrugTheme {
+                var showOnboarding by remember { mutableStateOf(!Tips.onboardingDone(this@MainActivity)) }
+                if (showOnboarding) {
+                    Surface { OnboardingScreen(onFinish = { showOnboarding = false }) }
+                    return@AvtodrugTheme
+                }
                 var checkingAutoLogin by remember { mutableStateOf(true) }
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
                 var inFlight by remember { mutableStateOf(false) }

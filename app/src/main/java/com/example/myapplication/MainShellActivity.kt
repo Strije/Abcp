@@ -339,6 +339,7 @@ private fun HomeScreen(
                 user?.organization?.takeIf { it.isNotBlank() }?.let { Text("Организация: $it") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
+                TextButton(onClick = { ctx.startActivity(Intent(ctx, OnboardingActivity::class.java)) }) { Text("Как пользоваться") }
                 AppVersionRow(onCheckUpdate)
             }
         }

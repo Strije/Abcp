@@ -85,6 +85,10 @@ fun OrdersScreen() {
 
     Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            com.example.myapplication.OneTimeHint(
+                "orders_pull", "Потяните список вниз, чтобы обновить статусы. Когда заказ будет готов, придёт уведомление.",
+                Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
             TabRow(selectedTabIndex = tab) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("Активные (${active.size})") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("Завершённые (${done.size})") })
