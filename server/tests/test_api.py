@@ -23,11 +23,12 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
         if q.get("userlogin") == "ivan" and q.get("userpsw") == GOOD_MD5:
             return httpx.Response(200, json={"id": "101", "name": "Иван Петров"})
         return httpx.Response(403, json={"errorCode": 102, "errorMessage": "Wrong name or password!"})
-    if p == "user/new":
+    if p == "cp/user/new":
         f = dict(httpx.QueryParams(request.content.decode()))
+        assert f.get("userlogin") == "admin"  # регистрация — от имени API-администратора
         if f.get("mobile") == "79780000000":
             return httpx.Response(200, json={"status": 0, "errorMessage": {"mobile": "Номер уже зарегистрирован"}})
-        assert f["office"] == "27993" and f["marketType"] == "1" and "userlogin" not in f
+        assert f["office"] == "27993" and f["marketType"] == "1"
         return httpx.Response(200, json={"status": 1, "userCode": "555"})
     if p == "user/restore":
         f = dict(httpx.QueryParams(request.content.decode()))

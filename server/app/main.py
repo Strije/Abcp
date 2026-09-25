@@ -284,6 +284,9 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
                 "email": body.email.strip(), "password": body.password, "office": body.office,
             })
         except AbcpError as e:
+            if e.status in (401, 403):  # ABCP не пустил операцию — клиенту по-русски и что делать
+                log.info("register denied by ABCP: %s", e.message)
+                raise HTTPException(503, "Регистрация в приложении временно недоступна. Позвоните в магазин — зарегистрируем вас по телефону.")
             raise HTTPException(400 if e.status < 500 else 502, e.message)
         return {"ok": True, "needsActivation": bool(r.get("activationCode"))}
 

@@ -252,7 +252,9 @@ class Abcp:
     async def register(self, form: dict) -> dict:
         data = {k: v for k, v in form.items() if v not in (None, "")}
         data.setdefault("marketType", "1")  # розница
-        body = await self._post_public("user/new", data)
+        # Клиентский user/new без входа у магазина запрещён («Access to requested operation is denied») —
+        # регистрируем от имени API-администратора (cp/user/new, те же поля)
+        body = await self._post_public("cp/user/new", dict(self._admin(data)))
         if isinstance(body, dict) and str(body.get("status")) == "0":
             raise AbcpError(400, _msg(body.get("errorMessage")) or "Регистрация не прошла")
         return body if isinstance(body, dict) else {}
