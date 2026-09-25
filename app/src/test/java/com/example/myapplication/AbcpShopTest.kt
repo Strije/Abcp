@@ -66,7 +66,7 @@ class AbcpShopTest {
 
     @Test
     fun confirmStars() {
-        val w = com.example.myapplication.abcp::withConfirmations
+        val w: (List<com.example.myapplication.abcp.Offer>) -> List<com.example.myapplication.abcp.Offer> = { com.example.myapplication.abcp.withConfirmations(it) }
         assertEquals(listOf(2, 2), w(listOf(offer("MANN", "OC90", "A"), offer("MANN", "OC90", "B"))).map { it.confirm })
         assertEquals(listOf(1, 1), w(listOf(offer("MANN", "OC90", "A"), offer("MANN", "OC90", "A"))).map { it.confirm })
         assertEquals(listOf(2, 2), w(listOf(offer("MANN", "OC-90", "A"), offer("mann", "oc90", "B"))).map { it.confirm })
