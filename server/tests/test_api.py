@@ -144,7 +144,7 @@ def test_reliable(client):
 
 
 def test_register(client):
-    ok = {"name": "Иван", "mobile": "+7 (978) 123-45-67", "password": "secret1", "office": "27993"}
+    ok = {"name": "Иван", "mobile": "+7 (978) 123-45-67", "password": "Secret123", "office": "27993"}
     assert client.post("/v1/register", json=ok).json() == {"ok": True, "needsActivation": False}
     dup = client.post("/v1/register", json={**ok, "mobile": "79780000000"})
     assert dup.status_code == 400 and "уже зарегистрирован" in dup.json()["detail"]
@@ -271,10 +271,10 @@ def test_access_request_queue(tmp_path):
 
 
 def test_register_existing_client_offers_login(client):
-    r = client.post("/v1/register", json={"name": "Иван", "mobile": "+7 978 000-00-09", "password": "123456", "office": "27993"})
+    r = client.post("/v1/register", json={"name": "Иван", "mobile": "+7 978 000-00-09", "password": "Pass12345", "office": "27993"})
     assert r.status_code == 409 and "уже зарегистрирован" in r.json()["detail"]
     r = client.post("/v1/register", json={"name": "Иван", "mobile": "79781111111", "email": "ivan@test.ru",
-                                          "password": "123456", "office": "27993"})
+                                          "password": "Pass12345", "office": "27993"})
     assert r.status_code == 409
 
 

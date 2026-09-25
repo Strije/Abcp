@@ -104,11 +104,7 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
         email, { email = it }, label = { Text("Email (необязательно)") }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.fillMaxWidth()
     )
-    OutlinedTextField(
-        pass, { pass = it }, label = { Text("Пароль (от 6 символов)") }, singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth()
-    )
+    PasswordField(pass, { pass = it }, "Пароль")
     Text("Ваш магазин", style = MaterialTheme.typography.titleSmall)
     StoreInfo.stores.forEach { s ->
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -134,7 +130,7 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
             error = when {
                 name.isBlank() -> "Укажите имя"
                 mobile == null -> "Укажите мобильный номер, например +7 978 123-45-67"
-                pass.length < 6 -> "Пароль — не короче 6 символов"
+                passwordProblem(pass) != null -> "Пароль: ${passwordProblem(pass)}"
                 else -> null
             }
             if (error != null) return@Button
@@ -187,10 +183,7 @@ private fun RestoreForm(server: AppServer, prefill: String, onDone: (String?) ->
             code, { code = it }, label = { Text("Код из SMS") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth()
         )
-        OutlinedTextField(
-            pass, { pass = it }, label = { Text("Новый пароль") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
-        )
+        PasswordField(pass, { pass = it }, "Новый пароль")
     }
     info?.let { Text(it) }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -205,7 +198,8 @@ private fun RestoreForm(server: AppServer, prefill: String, onDone: (String?) ->
             error = null
             notFound = false
             if (target.length < 5) { error = "Укажите телефон или email"; return@Button }
-            if (codeSent && (code.isBlank() || pass.length < 6)) { error = "Введите код и пароль от 6 символов"; return@Button }
+            if (codeSent && code.isBlank()) { error = "Введите код из SMS"; return@Button }
+            if (codeSent && passwordProblem(pass) != null) { error = "Пароль: ${passwordProblem(pass)}"; return@Button }
             busy = true
             scope.launch {
                 try {
@@ -229,4 +223,40 @@ private fun RestoreForm(server: AppServer, prefill: String, onDone: (String?) ->
             }
         }
     ) { Text(if (busy) "Отправляем…" else if (codeSent) "Сохранить пароль" else "Получить код") }
+}
+
+/** Правило пароля ABCP: от 8 символов, цифры, строчные и заглавные буквы. null — пароль подходит. */
+fun passwordProblem(p: String): String? {
+    val missing = buildList {
+        if (p.length < 8) add("не короче 8 символов")
+        if (p.none { it.isDigit() }) add("цифра")
+        if (p.none { it.isLowerCase() }) add("строчная буква")
+        if (p.none { it.isUpperCase() }) add("заглавная буква")
+    }
+    return if (missing.isEmpty()) null else "нужно — " + missing.joinToString(", ")
+}
+
+/** Пароль с «глазом» и живой проверкой правил ABCP — чтобы не узнавать о них после отказа. */
+@Composable
+private fun PasswordField(value: String, onChange: (String) -> Unit, label: String) {
+    var visible by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value, onChange, label = { Text(label) }, singleLine = true,
+        visualTransformation = if (visible) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = { TextButton(onClick = { visible = !visible }) { Text(if (visible) "Скрыть" else "Показать") } },
+        supportingText = {
+            fun mark(ok: Boolean, t: String) = (if (ok) "✓ " else "○ ") + t
+            Text(
+                listOf(
+                    mark(value.length >= 8, "8 символов"),
+                    mark(value.any { it.isDigit() }, "цифра"),
+                    mark(value.any { it.isLowerCase() }, "строчная"),
+                    mark(value.any { it.isUpperCase() }, "заглавная")
+                ).joinToString("   "),
+                color = if (passwordProblem(value) == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.fillMaxWidth()
+    )
 }

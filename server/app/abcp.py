@@ -256,13 +256,14 @@ class Abcp:
         # регистрируем от имени API-администратора (cp/user/new, те же поля)
         body = await self._post_public("cp/user/new", dict(self._admin(data)))
         if isinstance(body, dict) and str(body.get("status")) == "0":
-            raise AbcpError(400, _msg(body.get("errorMessage")) or "Регистрация не прошла")
+            # cp/user/new присылает errorMessages (список), user/new — errorMessage
+            raise AbcpError(400, _msg(body.get("errorMessages") or body.get("errorMessage")) or "Регистрация не прошла")
         return body if isinstance(body, dict) else {}
 
     async def restore(self, data: dict) -> dict:
         body = await self._post_public("user/restore", {k: v for k, v in data.items() if v})
         if isinstance(body, dict) and str(body.get("status")) == "0":
-            raise AbcpError(400, _msg(body.get("errorMessage")) or "Не получилось")
+            raise AbcpError(400, _msg(body.get("errorMessages") or body.get("errorMessage")) or "Не получилось")
         return body if isinstance(body, dict) else {}
 
 

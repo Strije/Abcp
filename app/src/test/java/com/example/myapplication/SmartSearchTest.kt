@@ -32,4 +32,11 @@ class SmartSearchTest {
         assertEquals("(978) 12", com.example.myapplication.ui.formatPhoneDigits("97812"))
         assertEquals("79781234567", normalizeMobile("9781234567"))
     }
+
+    @Test
+    fun passwordRules() {
+        assertEquals(null, passwordProblem("Avtodrug2026"))
+        assertTrue(passwordProblem("test123456")!!.contains("заглавная"))
+        assertTrue(passwordProblem("Ab1")!!.contains("8 символов"))
+    }
 }

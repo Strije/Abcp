@@ -60,7 +60,7 @@ class RegisterIn(BaseModel):
     surname: str = Field(default="", max_length=60)
     mobile: str = Field(min_length=10, max_length=20)
     email: str = Field(default="", max_length=120)
-    password: str = Field(min_length=6, max_length=64)
+    password: str = Field(min_length=8, max_length=64)  # правило ABCP: 8+, цифры, строчные и заглавные
     office: str = Field(pattern=r"^\d{1,10}$")
 
 
