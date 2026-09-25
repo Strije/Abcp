@@ -31,7 +31,7 @@ android {
 
         // ID проекта push в Консоли RuStore — не секрет (он зашивается в любое приложение с push)
         // AppMetrica (Яндекс): вылеты и ошибки. Ключ приложения — не секрет. Пусто — ничего не отправляем.
-        buildConfigField("String", "APPMETRICA_KEY", "\"${localProperties.getProperty("APPMETRICA_KEY", "")}\"")
+        buildConfigField("String", "APPMETRICA_KEY", "\"${localProperties.getProperty("APPMETRICA_KEY", "717eaca7-de59-4828-aac1-11882fe2fe31")}\"")
         buildConfigField("String", "RUSTORE_PROJECT_ID", "\"ENyKTeW4scP40-pocP1gWiOTC-kB89sT\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
