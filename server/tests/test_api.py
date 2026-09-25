@@ -33,6 +33,9 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
         f = dict(httpx.QueryParams(request.content.decode()))
         return httpx.Response(200, json={"status": 2 if f.get("code") else 1, "message": "ok"})
     assert admin, f"админский запрос {p} без админского доступа"
+    if p == "cp/users" and ("phone" in q or "email" in q):
+        found = q.get("phone") == "79780000009" or q.get("email") == "ivan@test.ru"
+        return httpx.Response(200, json=[{"userId": "101"}] if found else [])
     if p == "cp/users":
         # как у ABCP: объект по индексам
         return httpx.Response(200, json={"0": {"userId": "101", "name": "Иван", "surname": "Петров", "mobile": "79781112233", "balance": "0", "debt": "1826.50",
@@ -263,3 +266,29 @@ def test_access_request_queue(tmp_path):
         assert c.get("/v1/access-request", headers=h).json()["pending"] is True
         assert c.delete("/v1/access-request", headers=h).json()["closed"] is True
         assert "✅" in sent[-1] and c.get("/v1/access-request", headers=h).json()["pending"] is False
+
+
+
+def test_register_existing_client_offers_login(client):
+    r = client.post("/v1/register", json={"name": "Иван", "mobile": "+7 978 000-00-09", "password": "123456", "office": "27993"})
+    assert r.status_code == 409 and "уже зарегистрирован" in r.json()["detail"]
+    r = client.post("/v1/register", json={"name": "Иван", "mobile": "79781111111", "email": "ivan@test.ru",
+                                          "password": "123456", "office": "27993"})
+    assert r.status_code == 409
+
+
+def test_abcp_html_error_is_plain_text():
+    from app.abcp import _msg
+    assert _msg('<div class="fr-alert">Не найден&nbsp;пользователь</div>') == "Не найден пользователь"
+
+
+
+def test_access_request_not_marked_notified_when_telegram_fails(tmp_path):
+    from dataclasses import replace
+    s = replace(S, state_dir=str(tmp_path))  # бот не настроен
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake_abcp)))) as c:
+        h = login(c)
+        assert c.post("/v1/access-request", headers=h, json={"missing": ["brands"]}).json()["notified"] is False
+        # Бота настроили — повторная заявка сразу уходит менеджерам, а не через 12 часов
+        from app.access import AccessQueue
+        assert "notifiedAt" not in AccessQueue(tmp_path).get("101")

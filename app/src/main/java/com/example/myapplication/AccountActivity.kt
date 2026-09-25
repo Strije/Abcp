@@ -23,17 +23,30 @@ class AccountActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val restoreMode = intent.getBooleanExtra(EXTRA_RESTORE, false)
         val server = AppServer(this)
+
+        // Вернуться ко входу с подставленным логином
+        fun toLogin(login: String?) {
+            setResult(RESULT_OK, android.content.Intent().putExtra(EXTRA_LOGIN, login.orEmpty()))
+            finish()
+        }
 
         setContent {
             AvtodrugTheme {
+                var restoreMode by remember { mutableStateOf(intent.getBooleanExtra(EXTRA_RESTORE, false)) }
+                var prefill by remember { mutableStateOf(intent.getStringExtra(EXTRA_LOGIN).orEmpty()) }
                 Scaffold(topBar = { TopAppBar(title = { Text(if (restoreMode) "Восстановление пароля" else "Регистрация") }) }) { p ->
                     Column(
-                        Modifier.padding(p).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                        Modifier.padding(p).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        if (restoreMode) RestoreForm(server) { finish() } else RegisterForm(server) { finish() }
+                        if (restoreMode) RestoreForm(
+                            server, prefill, onDone = ::toLogin,
+                            onRegister = { prefill = it; restoreMode = false }
+                        ) else RegisterForm(
+                            server, prefill, onDone = ::toLogin,
+                            onRestore = { prefill = it; restoreMode = true }
+                        )
                     }
                 }
             }
@@ -42,6 +55,8 @@ class AccountActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_RESTORE = "extra_restore"
+        /** Телефон/email: на вход — подставить в форму, на выход — в поле логина */
+        const val EXTRA_LOGIN = "extra_login"
     }
 }
 
@@ -54,11 +69,12 @@ fun normalizeMobile(input: String): String? {
 }
 
 @Composable
-private fun RegisterForm(server: AppServer, onDone: () -> Unit) {
+private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -> Unit, onRestore: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
     var surname by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf(prefill.takeIf { !it.contains('@') }.orEmpty()) }
+    var exists by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var office by remember { mutableStateOf(StoreInfo.stores.first().abcpOfficeId) }
@@ -68,8 +84,8 @@ private fun RegisterForm(server: AppServer, onDone: () -> Unit) {
 
     if (done) {
         Text("Готово! Аккаунт создан.", style = MaterialTheme.typography.titleMedium)
-        Text("Войдите с номером телефона (или email) и паролем, который вы указали.")
-        Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Ко входу") }
+        Text("Войдите с номером телефона и паролем, который вы указали.")
+        Button(onClick = { onDone(normalizeMobile(phone)) }, modifier = Modifier.fillMaxWidth()) { Text("Ко входу") }
         return
     }
 
@@ -96,10 +112,19 @@ private fun RegisterForm(server: AppServer, onDone: () -> Unit) {
         }
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    if (exists) {
+        // Аккаунт уже есть — вместо дубля предлагаем войти или вспомнить пароль
+        val login = normalizeMobile(phone) ?: email.trim()
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { onDone(login) }, modifier = Modifier.weight(1f)) { Text("Войти") }
+            OutlinedButton(onClick = { onRestore(login) }, modifier = Modifier.weight(1f)) { Text("Напомнить пароль") }
+        }
+    }
     Button(
         enabled = !busy,
         modifier = Modifier.fillMaxWidth().height(52.dp),
         onClick = {
+            exists = false
             val mobile = normalizeMobile(phone)
             error = when {
                 name.isBlank() -> "Укажите имя"
@@ -113,6 +138,9 @@ private fun RegisterForm(server: AppServer, onDone: () -> Unit) {
                 try {
                     server.register(name.trim(), surname.trim(), mobile!!, email.trim(), pass, office)
                     done = true
+                } catch (e: com.example.myapplication.server.ServerException) {
+                    exists = e.code == 409
+                    error = e.message ?: "Регистрация не прошла"
                 } catch (e: Exception) {
                     error = e.message ?: "Регистрация не прошла"
                 } finally {
@@ -124,9 +152,10 @@ private fun RegisterForm(server: AppServer, onDone: () -> Unit) {
 }
 
 @Composable
-private fun RestoreForm(server: AppServer, onDone: () -> Unit) {
+private fun RestoreForm(server: AppServer, prefill: String, onDone: (String?) -> Unit, onRegister: (String) -> Unit) {
     val scope = rememberCoroutineScope()
-    var login by remember { mutableStateOf("") }
+    var login by remember { mutableStateOf(prefill) }
+    var notFound by remember { mutableStateOf(false) }
     var code by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var codeSent by remember { mutableStateOf(false) }
@@ -137,7 +166,7 @@ private fun RestoreForm(server: AppServer, onDone: () -> Unit) {
 
     if (done) {
         Text("Пароль изменён.", style = MaterialTheme.typography.titleMedium)
-        Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Ко входу") }
+        Button(onClick = { onDone(normalizeMobile(login) ?: login.trim()) }, modifier = Modifier.fillMaxWidth()) { Text("Ко входу") }
         return
     }
 
@@ -158,12 +187,16 @@ private fun RestoreForm(server: AppServer, onDone: () -> Unit) {
     }
     info?.let { Text(it) }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    if (notFound) OutlinedButton(onClick = { onRegister(login.trim()) }, modifier = Modifier.fillMaxWidth()) {
+        Text("Зарегистрироваться с этим номером")
+    }
     Button(
         enabled = !busy,
         modifier = Modifier.fillMaxWidth().height(52.dp),
         onClick = {
             val target = normalizeMobile(login) ?: login.trim()
             error = null
+            notFound = false
             if (target.length < 5) { error = "Укажите телефон или email"; return@Button }
             if (codeSent && (code.isBlank() || pass.length < 6)) { error = "Введите код и пароль от 6 символов"; return@Button }
             busy = true
@@ -177,6 +210,9 @@ private fun RestoreForm(server: AppServer, onDone: () -> Unit) {
                         server.restore(target, code.trim(), pass)
                         done = true
                     }
+                } catch (e: com.example.myapplication.server.ServerException) {
+                    notFound = e.code == 404 && !codeSent
+                    error = if (notFound) "Такой номер или email у нас не зарегистрирован." else e.message ?: "Не получилось"
                 } catch (e: Exception) {
                     error = e.message ?: "Не получилось"
                 } finally {

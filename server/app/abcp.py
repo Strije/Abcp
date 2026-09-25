@@ -3,6 +3,7 @@
 Списки ABCP приходят то массивом, то объектом {"0": {...}} — разбираем оба варианта.
 """
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -206,6 +207,15 @@ class Abcp:
             raise AbcpError(r.status_code, _msg(msg) or "Ошибка ABCP")
         return body
 
+    async def client_exists(self, mobile: str, email: str = "") -> bool:
+        """Есть ли уже клиент с таким мобильным (79XXXXXXXXX — так ABCP их хранит) или email."""
+        for key, value in (("phone", mobile), ("email", email)):
+            if value:
+                data = await self._get("cp/users", self._admin({key: value, "limit": "1"}))
+                if items(data):
+                    return True
+        return False
+
     async def register(self, form: dict) -> dict:
         data = {k: v for k, v in form.items() if v not in (None, "")}
         data.setdefault("marketType", "1")  # розница
@@ -216,16 +226,21 @@ class Abcp:
 
     async def restore(self, data: dict) -> dict:
         body = await self._post_public("user/restore", {k: v for k, v in data.items() if v})
+        if isinstance(body, dict) and str(body.get("status")) == "0":
+            raise AbcpError(400, _msg(body.get("errorMessage")) or "Не получилось")
         return body if isinstance(body, dict) else {}
 
 
 def _msg(m: Any) -> str:
-    """errorMessage у ABCP бывает строкой, списком или словарём полей."""
+    """errorMessage у ABCP бывает строкой, списком или словарём полей, иногда с HTML-разметкой сайта."""
     if isinstance(m, dict):
-        return "; ".join(str(v) for v in m.values())
-    if isinstance(m, list):
-        return "; ".join(str(v) for v in m)
-    return str(m) if m else ""
+        s = "; ".join(str(v) for v in m.values())
+    elif isinstance(m, list):
+        s = "; ".join(str(v) for v in m)
+    else:
+        s = str(m) if m else ""
+    s = re.sub(r"<[^>]+>", " ", s).replace("&nbsp;", " ")
+    return re.sub(r"\s+", " ", s).strip()
 
 
 # ---------- гостевой поиск (без входа): от имени API-админа с профилем цен гостя ----------

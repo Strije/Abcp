@@ -56,11 +56,15 @@ class AccessQueue:
             "missing": missing,
             "updatedAt": now,
         }
-        if notify:
-            req["notifiedAt"] = now
         data[uid] = req
         self._save(data)
         return req, notify
+
+    def mark_notified(self, uid: str, now: float | None = None):
+        data = self.load()
+        if uid in data:
+            data[uid]["notifiedAt"] = now or time.time()
+            self._save(data)
 
     def get(self, uid: str) -> dict | None:
         return self.load().get(uid)

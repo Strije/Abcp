@@ -228,6 +228,12 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             raise HTTPException(429, "Слишком много попыток, попробуйте через час")
         mobile = "".join(ch for ch in body.mobile if ch.isdigit())
         try:
+            # Уже есть аккаунт — не плодим дубль, приложение предложит войти или напомнить пароль
+            if await state["abcp"].client_exists(mobile, body.email.strip()):
+                raise HTTPException(409, "Этот номер или email уже зарегистрирован. Войдите или восстановите пароль.")
+        except AbcpError:
+            pass  # проверка не удалась — пусть решает сам ABCP
+        try:
             r = await state["abcp"].register({
                 "name": body.name.strip(), "surname": body.surname.strip(), "mobile": mobile,
                 "email": body.email.strip(), "password": body.password, "office": body.office,
@@ -244,7 +250,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         try:
             r = await state["abcp"].restore(body.model_dump())
         except AbcpError as e:
-            raise HTTPException(400 if e.status < 500 else 502, e.message)
+            # 404 — такого клиента нет: приложение предложит зарегистрироваться
+            raise HTTPException(404 if e.status == 404 else 400 if e.status < 500 else 502, e.message)
         return {"ok": True, "message": r.get("message")}
 
     @app.post("/v1/reliable")
@@ -292,6 +299,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         old = queue().get(uid)
         req, notify = queue().add(uid, missing)
         sent = await notify_managers(access.request_text(uid, req, repeat=old is not None)) if notify else False
+        if sent:
+            queue().mark_notified(uid)  # не ушло (бот не настроен, Telegram недоступен) — повторим при следующей заявке
         log.info("access request %s notify=%s sent=%s", uid, notify, sent)
         return {"createdAt": req["createdAt"], "notified": sent or not notify}
 

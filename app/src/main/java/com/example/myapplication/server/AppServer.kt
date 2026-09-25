@@ -81,8 +81,15 @@ class AppServer(ctx: Context) {
 
     // ---------- права на API ABCP (включает менеджер вручную) ----------
 
+    /** Заявку можно слать повторно (сервер не дублирует) — поэтому при обрыве связи пробуем ещё раз. */
     suspend fun accessRequest(missing: List<String>) {
-        post("/v1/access-request", Gson().toJson(mapOf("missing" to missing)))
+        val body = Gson().toJson(mapOf("missing" to missing))
+        try {
+            post("/v1/access-request", body)
+        } catch (e: ServerException) {
+            if (e.code != 0) throw e
+            post("/v1/access-request", body)
+        }
     }
 
     suspend fun accessDone() {
@@ -174,8 +181,13 @@ class AppServer(ctx: Context) {
         return token
     }
 
-    private fun execute(req: Request): Pair<Int, String> =
+    private fun execute(req: Request): Pair<Int, String> = try {
         http.newCall(req).execute().use { it.code to (it.body?.string().orEmpty()) }
+    } catch (e: java.io.InterruptedIOException) {
+        throw ServerException("Сервер не ответил. Проверьте интернет и попробуйте ещё раз.")
+    } catch (e: java.io.IOException) {
+        throw ServerException("Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.")
+    }
 
     private fun detail(text: String): String? =
         runCatching { JsonParser.parseString(text).asJsonObject["detail"].asString }.getOrNull()
@@ -187,10 +199,13 @@ class AppServer(ctx: Context) {
         /** При выходе из аккаунта — чтобы следующий клиент не увидел чужой баланс */
         fun clearCache() { financeCache = null }
         private val JSON = "application/json".toMediaType()
+        // Простаивающие соединения держим недолго: мобильная сеть молча рвёт их через минуту-другую,
+        // и запрос по такому «мёртвому» соединению висел до Read timed out
         private val http = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .callTimeout(40, TimeUnit.SECONDS)
+            .connectionPool(okhttp3.ConnectionPool(4, 30, TimeUnit.SECONDS))
             .build()
     }
 }

@@ -223,9 +223,20 @@ private fun HomeScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Вместо логотипа — приветствие: мы и так в приложении магазина, а имя делает экран «своим»
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.logo), "Автодруг", Modifier.height(40.dp).weight(1f, fill = false))
-            Spacer(Modifier.weight(1f))
+            val first = userName?.trim()?.substringBefore(' ')?.takeIf { it.isNotBlank() }
+            Column(Modifier.weight(1f)) {
+                if (first != null) {
+                    Text("Здравствуйте,", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "$first!", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                } else {
+                    Text("Здравствуйте!", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 1)
+                }
+            }
             if (guest) TextButton(onClick = onLogin) { Text("Войти") }
             if (!guest) IconButton(onClick = { ctx.startActivity(Intent(ctx, NotificationsActivity::class.java)) }) {
                 BadgedBox(badge = { if (unread > 0) Badge { Text(unread.toString()) } }) {
@@ -234,10 +245,6 @@ private fun HomeScreen(
             }
             if (!guest) IconButton(onClick = { showProfile = true }) { Icon(Icons.Default.AccountCircle, "Профиль") }
         }
-        Text(
-            if (userName.isNullOrBlank()) "Здравствуйте!" else "Здравствуйте, ${userName.substringBefore(' ')}!",
-            style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold
-        )
 
         if (!guest) ApiAccessCard()
 
