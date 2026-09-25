@@ -14,7 +14,12 @@ import tempfile
 import time
 from pathlib import Path
 
+import asyncio
+import logging
+
 import httpx
+
+log = logging.getLogger("avtodrug")
 
 REPEAT_NOTIFY = 12 * 3600  # повторная заявка того же клиента — напоминание не чаще раза в 12 часов
 
@@ -66,6 +71,10 @@ class AccessQueue:
             data[uid]["notifiedAt"] = now or time.time()
             self._save(data)
 
+    def unsent(self) -> list[str]:
+        """Заявки, которые менеджерам так и не ушли (бот не был настроен, Telegram недоступен)."""
+        return [uid for uid, r in self.load().items() if "notifiedAt" not in r]
+
     def get(self, uid: str) -> dict | None:
         return self.load().get(uid)
 
@@ -85,16 +94,75 @@ def request_text(uid: str, req: dict, repeat: bool) -> str:
         f"Не хватает прав: {missing}",
         "",
         "Панель ABCP → клиенты → найти по ID → доступ к API → включить поиск, корзину, заказы.",
+        "Потом нажмите кнопку ниже — клиенту придёт уведомление.",
     ]
     return "\n".join(lines)
 
 
-async def telegram(http: httpx.AsyncClient, token: str, chat_id: str, text: str) -> bool:
+GRANTED = "granted:"
+
+
+def granted_button(uid: str) -> dict:
+    return {"inline_keyboard": [[{"text": "✅ Доступ включён", "callback_data": GRANTED + uid}]]}
+
+
+async def telegram(http: httpx.AsyncClient, token: str, chat_id: str, text: str, markup: dict | None = None) -> bool:
     if not token or not chat_id:
         return False
+    body = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if markup:
+        body["reply_markup"] = markup
     try:
-        r = await http.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
+        r = await http.post(f"https://api.telegram.org/bot{token}/sendMessage", json=body)
         return r.status_code == 200
     except httpx.HTTPError:
         return False
+
+
+class ButtonListener:
+    """Ждёт нажатий «✅ Доступ включён» в чате менеджеров (long polling getUpdates, вебхук не нужен).
+
+    Принимает кнопки только из настроенного чата: закрывает заявку и вызывает on_granted(uid) — push клиенту.
+    """
+
+    def __init__(self, http: httpx.AsyncClient, token: str, chat_id: str, on_granted):
+        self.http, self.token, self.chat_id, self.on_granted = http, token, str(chat_id), on_granted
+        self.offset = 0
+
+    def _url(self, method: str) -> str:
+        return f"https://api.telegram.org/bot{self.token}/{method}"
+
+    async def handle(self, update: dict):
+        cb = update.get("callback_query") or {}
+        data = str(cb.get("data") or "")
+        msg = cb.get("message") or {}
+        if not data.startswith(GRANTED) or str((msg.get("chat") or {}).get("id")) != self.chat_id:
+            return
+        uid = data[len(GRANTED):]
+        who = (cb.get("from") or {}).get("first_name") or "менеджер"
+        delivered = await self.on_granted(uid)
+        note = "клиенту отправлено уведомление" if delivered else "уведомление не доставлено (нет push) — клиент увидит при входе"
+        await self.http.post(self._url("answerCallbackQuery"), json={"callback_query_id": cb.get("id"), "text": note})
+        await self.http.post(self._url("editMessageText"), json={
+            "chat_id": msg["chat"]["id"], "message_id": msg.get("message_id"),
+            "text": f"{msg.get('text', '')}\n\n✅ Включено ({who}): {note}",
+        })
+
+    async def poll_once(self, timeout: int = 25):
+        r = await self.http.get(self._url("getUpdates"), params={
+            "offset": self.offset, "timeout": timeout, "allowed_updates": '["callback_query"]'},
+            timeout=timeout + 10)
+        updates = r.json().get("result", [])
+        for u in updates:
+            self.offset = u["update_id"] + 1
+            await self.handle(u)
+        if not updates:
+            await asyncio.sleep(1)  # на случай, если Telegram ответил сразу, а не через timeout
+
+    async def run(self):
+        while True:
+            try:
+                await self.poll_once()
+            except Exception as e:  # сеть/Telegram — подождём и снова
+                log.info("telegram poll error: %s", type(e).__name__)
+                await asyncio.sleep(10)

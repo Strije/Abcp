@@ -112,12 +112,16 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["pusher"] = push.RuStorePush(state["abcp"].http, s.rustore_push_host, s.rustore_project_id, s.rustore_push_token)
         state["watcher"] = push.OrderWatcher(state["abcp"], state["pusher"], state["tokens"], folder, s.order_watch_interval)
         app.state.watcher = state["watcher"]  # для тестов и ручного запуска
-        task = None
+        tasks = []
         if state["pusher"].enabled and s.order_watch_interval > 0:
-            task = asyncio.create_task(state["watcher"].run())
+            tasks.append(asyncio.create_task(state["watcher"].run()))
+        if s.telegram_bot_token and s.telegram_chat_id:
+            app.state.buttons = access.ButtonListener(state["abcp"].http, s.telegram_bot_token, s.telegram_chat_id, access_granted)
+            tasks.append(asyncio.create_task(app.state.buttons.run()))
+            tasks.append(asyncio.create_task(resend_unsent()))
         yield
-        if task:
-            task.cancel()
+        for t in tasks:
+            t.cancel()
         await state["abcp"].close()
         await state["laximo"].close()
 
@@ -338,18 +342,34 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     def queue() -> access.AccessQueue:
         return access.AccessQueue(Path(state["s"].state_dir))
 
-    async def notify_managers(text: str) -> bool:
+    async def notify_managers(text: str, markup: dict | None = None) -> bool:
         s = state["s"]
-        return await access.telegram(state["abcp"].http, s.telegram_bot_token, s.telegram_chat_id, text)
+        return await access.telegram(state["abcp"].http, s.telegram_bot_token, s.telegram_chat_id, text, markup)
+
+    async def send_request(uid: str, req: dict, repeat: bool) -> bool:
+        sent = await notify_managers(access.request_text(uid, req, repeat), access.granted_button(uid))
+        if sent:
+            queue().mark_notified(uid)  # не ушло (бот не настроен, Telegram недоступен) — повторим позже
+        return sent
+
+    async def resend_unsent():
+        for uid in queue().unsent():
+            await send_request(uid, queue().get(uid) or {}, repeat=False)
+
+    async def access_granted(uid: str) -> bool:
+        """Менеджер нажал «Доступ включён»: закрыть заявку и сказать клиенту push-уведомлением."""
+        queue().close(uid)
+        data = {"type": "access_granted", "title": "Доступ включён",
+                "body": "Поиск, корзина и заказы в приложении работают. Откройте «Автодруг»."}
+        codes = [await state["pusher"].send(t, data) for t in state["tokens"].tokens(uid)] if state["pusher"].enabled else []
+        return 200 in codes
 
     @app.post("/v1/access-request")
     async def access_request(body: AccessIn, uid: str = Depends(current_uid)):
         missing = [m for m in body.missing if m in access.FEATURES]
         old = queue().get(uid)
         req, notify = queue().add(uid, missing)
-        sent = await notify_managers(access.request_text(uid, req, repeat=old is not None)) if notify else False
-        if sent:
-            queue().mark_notified(uid)  # не ушло (бот не настроен, Telegram недоступен) — повторим при следующей заявке
+        sent = await send_request(uid, req, repeat=old is not None) if notify else False
         log.info("access request %s notify=%s sent=%s", uid, notify, sent)
         return {"createdAt": req["createdAt"], "notified": sent or not notify}
 

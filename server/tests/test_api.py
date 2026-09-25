@@ -342,3 +342,38 @@ def test_push_token_and_watch(tmp_path):
         c.request("DELETE", "/v1/push/token", json={"token": "device-token-1"})
         assert c.post("/v1/admin/push-test", json={"uid": "101"}, headers={"X-Upload-Token": "u" * 40}).json()["devices"] == 0
 
+
+
+
+def test_manager_button_grants_access_and_pushes(tmp_path):
+    from dataclasses import replace
+    from app.access import ButtonListener
+    tg, pushes = [], []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.telegram.org":
+            tg.append((request.url.path.rsplit("/", 1)[-1], request.content))
+            return httpx.Response(200, json={"ok": True, "result": []})
+        if request.url.host == "push.test":
+            pushes.append(__import__("json").loads(request.content))
+            return httpx.Response(200, json={})
+        if request.url.path.strip("/") == "cp/orders":
+            return httpx.Response(200, json=[])
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), telegram_bot_token="t", telegram_chat_id="-100",
+                rustore_project_id="p", rustore_push_token="t", rustore_push_host="https://push.test", order_watch_interval=0)
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        h = login(c)
+        c.post("/v1/push/token", headers=h, json={"token": "device-token-1"})
+        c.post("/v1/access-request", headers=h, json={"missing": ["brands"]})
+        assert b"granted:101" in [b for m, b in tg if m == "sendMessage"][-1]  # кнопка в сообщении
+        buttons: ButtonListener = c.app.state.buttons
+        # нажатие не из нашего чата игнорируем
+        c.portal.call(buttons.handle, {"callback_query": {"id": "1", "data": "granted:101", "message": {"chat": {"id": 666}}}})
+        assert pushes == [] and c.get("/v1/access-request", headers=h).json()["pending"] is True
+        c.portal.call(buttons.handle, {"callback_query": {"id": "2", "data": "granted:101", "from": {"first_name": "Оля"},
+                                                          "message": {"chat": {"id": -100}, "message_id": 5, "text": "заявка"}}})
+        assert pushes[-1]["message"]["data"]["type"] == "access_granted"
+        assert c.get("/v1/access-request", headers=h).json()["pending"] is False
+        assert any(m == "editMessageText" and "Оля".encode() in b for m, b in tg)
