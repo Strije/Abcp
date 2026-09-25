@@ -1,5 +1,6 @@
 """Проверка API без настоящего ABCP: запросы уходят в заглушку MockTransport."""
 import hashlib
+import tempfile
 
 import httpx
 import pytest
@@ -11,7 +12,8 @@ from app.config import Settings
 from app.main import RateLimiter, create_app
 
 S = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
-             articles_info_per_day=100, guest_profile_id="156077169")
+             articles_info_per_day=100, guest_profile_id="156077169",
+             state_dir=tempfile.mkdtemp(prefix="avtodrug-test-"))  # /var/lib/… в CI недоступна
 GOOD_MD5 = hashlib.md5(b"secret").hexdigest()
 
 
