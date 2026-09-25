@@ -163,6 +163,7 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .systemBarsPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(24.dp),

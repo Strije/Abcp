@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,6 +45,9 @@ fun GarageScreen() {
     var error by remember { mutableStateOf<String?>(null) }
     var cars by remember { mutableStateOf(MemoryCache.garage) }
     var reload by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    var favorite by remember { mutableStateOf(com.example.myapplication.abcp.GarageFavorite.get(ctx)) }
+    var toDelete by remember { mutableStateOf<GarageCar?>(null) }
 
     LaunchedEffect(reload) {
         loading = true
@@ -58,6 +63,22 @@ fun GarageScreen() {
     }
     // Вернулись из подбора, где могли добавить машину, — перечитать
     OnResume { reload++ }
+
+    toDelete?.let { car ->
+        DeleteCarDialog(car, onDismiss = { toDelete = null }) {
+            toDelete = null
+            scope.launch {
+                try {
+                    com.example.myapplication.abcp.AbcpShop(SessionManager(ctx)).deleteFromGarage(car.id)
+                    if (favorite == car.vin) { favorite = null; com.example.myapplication.abcp.GarageFavorite.set(ctx, null) }
+                    reload++
+                } catch (e: Exception) {
+                    com.example.myapplication.Analytics.error("Гараж → удалить", e)
+                    android.widget.Toast.makeText(ctx, e.message ?: "Не удалось удалить", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Мой гараж") }) },
@@ -83,19 +104,46 @@ fun GarageScreen() {
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(list) { car ->
+                items(list.sortedByDescending { it.vin == favorite }) { car ->
+                    val isFav = car.vin == favorite
                     ElevatedCard(Modifier.fillMaxWidth().clickable { openCar(ctx, car) }) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(car.title, style = MaterialTheme.typography.titleMedium)
-                            Spacer(Modifier.height(4.dp))
-                            Text(car.vin, style = MaterialTheme.typography.bodySmall)
-                            Text("Подобрать запчасти →", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        Row(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                                Text(car.title, style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.height(4.dp))
+                                Text(car.vin, style = MaterialTheme.typography.bodySmall)
+                                if (isFav) Text("На главной — «Моя машина»", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Подобрать запчасти →", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                            }
+                            // ★ — избранная: её показывает главная
+                            IconButton(onClick = {
+                                favorite = if (isFav) null else car.vin
+                                com.example.myapplication.abcp.GarageFavorite.set(ctx, favorite)
+                            }) {
+                                Text(if (isFav) "★" else "☆", style = MaterialTheme.typography.headlineSmall,
+                                    color = if (isFav) androidx.compose.ui.graphics.Color(0xFFF2B01E) else MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            if (car.id.isNotBlank()) IconButton(onClick = { toDelete = car }) {
+                                Icon(Icons.Default.Delete, "Удалить из гаража", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun DeleteCarDialog(car: GarageCar, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Удалить из гаража?") },
+        text = { Text("${car.title}\n${car.vin}") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Удалить") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }
 
 suspend fun loadGarage(ctx: Context): List<GarageCar> {

@@ -7,8 +7,25 @@ import okhttp3.Request
 
 data class GarageCar(
     val vin: String,
-    val title: String = vin
+    val title: String = vin,
+    /** id машины в гараже ABCP — для удаления */
+    val id: String = ""
 )
+
+/** Избранная машина — только на телефоне (в ABCP такого признака нет); её показывает «Моя машина» на главной. */
+object GarageFavorite {
+    private fun prefs(ctx: android.content.Context) = ctx.getSharedPreferences("garage_fav", android.content.Context.MODE_PRIVATE)
+    fun get(ctx: android.content.Context): String? = prefs(ctx).getString("vin", null)
+    fun set(ctx: android.content.Context, vin: String?) { prefs(ctx).edit().putString("vin", vin).apply() }
+    /** Избранная первой, остальные как были */
+    fun sorted(ctx: android.content.Context, cars: List<GarageCar>): List<GarageCar> {
+        val fav = get(ctx)
+        return cars.sortedByDescending { it.vin == fav }
+    }
+}
+
+/** VIN / кузов / госномер для сравнения: без пробелов и дефисов, заглавными */
+fun garageKey(s: String) = s.uppercase().filter { it.isLetterOrDigit() }
 
 class AbcpGarageRepository(
     private val client: OkHttpClient = OkHttpClient()
@@ -54,7 +71,7 @@ class AbcpGarageRepository(
                     ?.takeIf { it.isNotBlank() }
                     ?: vin
 
-                GarageCar(vin = vin, title = title)
+                GarageCar(vin = vin, title = title, id = o.get("id")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty())
             }
         }
     }

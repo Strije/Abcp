@@ -86,8 +86,9 @@ fun CartScreen(reloadKey: Int) {
         bottomBar = {
             if (items.isNotEmpty()) {
                 Surface(tonalElevation = 3.dp) {
+                    // Android 15+ рисует экран до самого низа — отступ от панели навигации
                     Row(
-                        Modifier.fillMaxWidth().padding(16.dp),
+                        Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {

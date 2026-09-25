@@ -193,6 +193,10 @@ class AbcpShop(private val session: SessionManager) {
         call(retry = false) { api.garageAdd(fields) }
     }
 
+    suspend fun deleteFromGarage(carId: String) {
+        call(retry = false) { api.garageDelete(auth() + mapOf("carId" to carId)) }
+    }
+
     /** Запрос на отмену позиции; возвращает текст ответа ABCP. */
     suspend fun cancelPosition(positionId: String): String {
         val r = call(retry = false) { api.cancelPosition(auth() + mapOf("positionId" to positionId)) }

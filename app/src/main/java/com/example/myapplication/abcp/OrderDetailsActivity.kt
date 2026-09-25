@@ -87,7 +87,11 @@ class OrderDetailsActivity : ComponentActivity() {
                     ) {
                             OrderDetailsContent(
                                 details = details!!,
-                                canCancel = { p -> !p.positionId.isNullOrBlank() && p.statusId !in finalIds },
+                                // Выданное и уже готовое к выдаче отменять нельзя — это уже возврат
+                                canCancel = { p ->
+                                    val st = p.status?.lowercase().orEmpty()
+                                    !p.positionId.isNullOrBlank() && p.statusId !in finalIds && "выдан" !in st && "выдач" !in st
+                                },
                                 onCancel = { toCancel = it },
                                 onPay = if (server.enabled) {
                                     { payOrder(ctx, scope, server, orderNumber) }

@@ -478,11 +478,13 @@ private val QUICK_PARTS = listOf("Фильтры" to "фильтр", "Тормо
 @Composable
 private fun MyCarCard(onOpenGarage: () -> Unit) {
     val ctx = LocalContext.current
-    var car by remember { mutableStateOf(com.example.myapplication.abcp.MemoryCache.garage?.firstOrNull()) }
+    fun pick(list: List<com.example.myapplication.abcp.GarageCar>?) =
+        list?.let { com.example.myapplication.abcp.GarageFavorite.sorted(ctx, it) }?.firstOrNull()
+    var car by remember { mutableStateOf(pick(com.example.myapplication.abcp.MemoryCache.garage)) }
     LaunchedEffect(Unit) {
         runCatching { loadGarage(ctx) }.getOrNull()?.let {
             com.example.myapplication.abcp.MemoryCache.garage = it
-            car = it.firstOrNull()
+            car = pick(it)
         }
     }
     val c = car ?: return

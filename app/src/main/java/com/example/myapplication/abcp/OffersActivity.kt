@@ -127,7 +127,9 @@ class OffersActivity : ComponentActivity() {
                 val ownGroups = grouped(own)
                 val analogGroups = grouped(analogs.filter { !onlyReliable || isReliable(it) })
 
+                val snackbar = remember { SnackbarHostState() }
                 Scaffold(
+                    snackbarHost = { SnackbarHost(snackbar) },
                     topBar = {
                         TopAppBar(
                             title = {
@@ -205,7 +207,10 @@ class OffersActivity : ComponentActivity() {
                                     }
                                 }
                                 if (analogGroups.isNotEmpty()) {
-                                    item(key = "h_an") { SectionTitle("Аналоги (${analogGroups.size})") }
+                                    item(key = "h_an") {
+                                        val n = analogGroups.sumOf { it.size }
+                                        SectionTitle("Аналоги · ${analogGroups.size} арт., $n предл.")
+                                    }
                                     items(analogGroups, key = { "a_" + it.first().brand + it.first().numberFix }) { list ->
                                         ArticleCard(list, reliable = isReliable(list.first()), onImage = { viewer = it }, onPick = { picked = it })
                                     }
@@ -239,7 +244,8 @@ class OffersActivity : ComponentActivity() {
                                     shop.addToBasket(o, qty)
                                     com.example.myapplication.Analytics.event("add_to_cart", mapOf("brand" to o.brand, "number" to o.number, "qty" to qty, "in_store" to o.inStore))
                                     CartState.refresh(shop)
-                                    Toast.makeText(this@OffersActivity, "Добавлено в корзину", Toast.LENGTH_SHORT).show()
+                                    val r = snackbar.showSnackbar("Добавлено в корзину", actionLabel = "Перейти", duration = SnackbarDuration.Short)
+                                    if (r == SnackbarResult.ActionPerformed) startActivity(android.content.Intent(this@OffersActivity, CartActivity::class.java))
                                 } catch (e: Exception) {
                                     com.example.myapplication.Analytics.error("Выдача → в корзину", e)
                                     Toast.makeText(this@OffersActivity, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()

@@ -153,6 +153,10 @@ interface AbcpApi {
     @POST("user/garage/add")
     suspend fun garageAdd(@FieldMap fields: Map<String, String>): Response<JsonElement>
 
+    @FormUrlEncoded
+    @POST("user/garage/delete")
+    suspend fun garageDelete(@FieldMap fields: Map<String, String>): Response<JsonElement>
+
     /** «Запрос на отмену» позиции заказа */
     @FormUrlEncoded
     @POST("orders/cancelPosition")

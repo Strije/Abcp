@@ -77,7 +77,10 @@ fun OrdersScreen() {
 
     val list = orders.orEmpty()
     // Заказ завершён, когда у него общий статус и он конечный. Позиции в разных статусах — заказ ещё в работе.
-    val (done, active) = list.partition { o -> o.statusId != null && o.statusId in finalIds }
+    // «Выдано» в ABCP не помечено конечным статусом, но для клиента заказ завершён
+    val (done, active) = list.partition { o ->
+        (o.statusId != null && o.statusId in finalIds) || o.status?.lowercase()?.contains("выдано") == true
+    }
     val shown = if (tab == 0) active else done
 
     Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }) }) { padding ->

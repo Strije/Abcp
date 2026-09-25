@@ -151,7 +151,7 @@ class ChatActivity : ComponentActivity() {
                         )
                     }
                 ) { padding ->
-                    Box(Modifier.padding(padding).fillMaxSize()) {
+                    Box(Modifier.padding(padding).imePadding().fillMaxSize()) {
                         AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                         if (loading && !failed) LinearProgressIndicator(progress = { pageProgress }, modifier = Modifier.fillMaxWidth())
                         if (failed) Surface(Modifier.fillMaxSize()) {

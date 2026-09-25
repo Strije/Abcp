@@ -50,6 +50,14 @@ class VinSearchActivity : ComponentActivity() {
                 var searched by remember { mutableStateOf(false) } // «Ничего не найдено» — только после поиска
                 val guest = remember { !SessionManager(ctx).isLoggedIn() }
                 val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+                // Что уже в гараже — чтобы не предлагать «В мой гараж» повторно
+                var garageKeys by remember { mutableStateOf(com.example.myapplication.abcp.MemoryCache.garage.orEmpty().map { com.example.myapplication.abcp.garageKey(it.vin) }.toSet()) }
+                LaunchedEffect(Unit) {
+                    if (!guest) runCatching { loadGarage(ctx) }.getOrNull()?.let { list ->
+                        com.example.myapplication.abcp.MemoryCache.garage = list
+                        garageKeys = list.map { com.example.myapplication.abcp.garageKey(it.vin) }.toSet()
+                    }
+                }
 
                 fun onSearchClick() {
                     val vin = vinText.trim()
@@ -254,7 +262,12 @@ class VinSearchActivity : ComponentActivity() {
                                                 )
                                                 Spacer(Modifier.height(4.dp))
                                                 Text("Запрос: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
-                                                if (!guest) TextButton(
+                                                val inGarage = com.example.myapplication.abcp.garageKey(
+                                                    com.example.myapplication.laximo.normalizeRuPlate(vinText.trim()) ?: vinText.trim()
+                                                ) in garageKeys
+                                                if (!guest && inGarage) Text("✓ В гараже", style = MaterialTheme.typography.labelLarge,
+                                                    color = com.example.myapplication.ui.theme.DeliveryColors.today, modifier = Modifier.padding(vertical = 8.dp))
+                                                if (!guest && !inGarage) TextButton(
                                                     contentPadding = PaddingValues(0.dp),
                                                     onClick = {
                                                         val q = vinText.trim()
@@ -269,6 +282,8 @@ class VinSearchActivity : ComponentActivity() {
                                                                 com.example.myapplication.abcp.AbcpShop(SessionManager(ctx))
                                                                     .addToGarage("${r.brand.orEmpty()} ${r.name.orEmpty()}".trim(), value, kind)
                                                                 com.example.myapplication.Analytics.event("garage_add", mapOf("kind" to kind))
+                                                                garageKeys = garageKeys + com.example.myapplication.abcp.garageKey(value)
+                                                                com.example.myapplication.abcp.MemoryCache.garage = null
                                                                 android.widget.Toast.makeText(ctx, "Машина добавлена в гараж", android.widget.Toast.LENGTH_SHORT).show()
                                                             } catch (e: Exception) {
                                                                 com.example.myapplication.Analytics.error("Подбор → в гараж", e)
@@ -277,7 +292,6 @@ class VinSearchActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 ) { Text("＋ В мой гараж") }
-                                                Text("Каталог: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
                                                 if (r.attributes.isNotEmpty()) {
                                                     Spacer(Modifier.height(6.dp))
                                                     // Первые характеристики сразу, остальные — по нажатию: иначе карточка на весь экран
