@@ -119,7 +119,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if state["pusher"].enabled and s.order_watch_interval > 0:
             tasks.append(asyncio.create_task(state["watcher"].run()))
         if s.telegram_bot_token and s.telegram_chat_id:
-            app.state.buttons = access.ButtonListener(state["abcp"].http, s.telegram_bot_token, s.telegram_chat_id, access_granted)
+            app.state.buttons = access.ButtonListener(state["abcp"].http, s.telegram_bot_token, s.telegram_chat_id,
+                                                      access_granted, bot_command, bot_callback)
             tasks.append(asyncio.create_task(app.state.buttons.run()))
             tasks.append(asyncio.create_task(resend_unsent()))
         yield
@@ -377,6 +378,64 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     async def resend_unsent():
         for uid in queue().unsent():
             await send_request(uid, queue().get(uid) or {}, repeat=False)
+
+    # ---------- команды бота: рассылки и статистика ----------
+    broadcasts: dict[str, str] = {}  # черновики рассылок до подтверждения кнопкой
+
+    async def push_all(data: dict) -> tuple[int, int]:
+        """Push всем устройствам. Возвращает (доставлено в RuStore, всего устройств); мёртвые токены убираем."""
+        pairs = [(uid, t) for uid in state["tokens"].uids() for t in state["tokens"].tokens(uid)]
+        sem = asyncio.Semaphore(10)
+
+        async def one(t: str) -> int:
+            async with sem:
+                code = await state["pusher"].send(t, data)
+                if code in (400, 404):
+                    state["tokens"].remove(t)
+                return code
+
+        codes = await asyncio.gather(*(one(t) for _, t in pairs))
+        return sum(1 for c in codes if c == 200), len(pairs)
+
+    async def bot_command(text: str):
+        cmd, _, arg = text.strip().partition(" ")
+        cmd = cmd.split("@")[0].lower()
+        devices = sum(len(state["tokens"].tokens(u)) for u in state["tokens"].uids())
+        if cmd == "/push":
+            arg = arg.strip()
+            if not arg:
+                return ("Напишите текст после команды, например:\n/push Скидка 10% на моторные масла до воскресенья",)
+            if len(arg) > 300:
+                return ("Слишком длинно для уведомления — до 300 символов.",)
+            if not state["pusher"].enabled:
+                return ("Push не настроен на сервере.",)
+            bid = str(int(time.time() * 1000))
+            broadcasts[bid] = arg
+            return (f"📣 Рассылка на {devices} устр.\n\nАвтодруг92\n{arg}\n\nОтправить?",
+                    {"inline_keyboard": [[{"text": f"✅ Отправить ({devices})", "callback_data": f"bc:{bid}"},
+                                          {"text": "✖ Отмена", "callback_data": f"bcx:{bid}"}]]})
+        if cmd == "/stats":
+            pending = len(queue().load())
+            return (f"📊 Приложение\nКлиентов с push: {len(state['tokens'].uids())}\nУстройств: {devices}\n"
+                    f"Заявок на доступ ждут: {pending}",)
+        if cmd in ("/help", "/start"):
+            return ("Команды:\n/push текст — уведомление всем клиентам с приложением (с подтверждением)\n"
+                    "/stats — сколько клиентов с push, заявки на доступ\n\n"
+                    "Сюда же приходят заявки на доступ и сообщения о сбоях сервера.",)
+        return ("Не знаю такой команды. /help — список.",)
+
+    async def bot_callback(data: str) -> str | None:
+        if data.startswith("bcx:"):
+            broadcasts.pop(data[4:], None)
+            return "✖ Отменено"
+        if data.startswith("bc:"):
+            msg = broadcasts.pop(data[3:], None)
+            if msg is None:
+                return "Уже отправлено или устарело"
+            ok, total = await push_all({"type": "promo", "title": "Автодруг92", "body": msg})
+            log.info("broadcast sent %s/%s", ok, total)
+            return f"✅ Отправлено: {ok} из {total}"
+        return None
 
     async def access_granted(uid: str) -> bool:
         """Менеджер нажал «Доступ включён»: закрыть заявку и сказать клиенту push-уведомлением."""

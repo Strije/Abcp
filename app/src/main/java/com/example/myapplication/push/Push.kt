@@ -6,6 +6,7 @@ import com.example.myapplication.SessionManager
 import com.example.myapplication.abcp.OrderStatusWatch
 import com.example.myapplication.abcp.PositionStatus
 import com.example.myapplication.abcp.showOrderNotification
+import com.example.myapplication.abcp.showPromoNotification
 import com.example.myapplication.server.AppServer
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -66,6 +67,10 @@ object Push {
         val order = data["order"]
         val items = data["items"]?.let {
             runCatching { Gson().fromJson<List<List<String>>>(it, object : TypeToken<List<List<String>>>() {}.type) }.getOrNull()
+        }
+        if (data["type"] == "promo") {
+            showPromoNotification(ctx, data["title"] ?: "Автодруг92", data["body"].orEmpty())
+            return
         }
         if (order != null && !items.isNullOrEmpty()) {
             val changed = items.mapIndexed { i, (title, status) -> PositionStatus("$order#$i", order, title, status) }

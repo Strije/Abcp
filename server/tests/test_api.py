@@ -408,3 +408,40 @@ def test_app_note_only_own_order_and_once(tmp_path):
         assert "приложение" in posted[0]["order[notes][0][value]"] and "1.0.55" in posted[0]["order[notes][0][value]"]
         assert c.post("/v1/orders/5001/app-note", headers=h).json() == {"added": False}  # второй раз — нет
         assert len(posted) == 1
+
+
+
+def test_bot_broadcast_with_confirmation(tmp_path):
+    from dataclasses import replace
+    tg, pushes = [], []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.telegram.org":
+            tg.append((request.url.path.rsplit("/", 1)[-1], __import__("json").loads(request.content or b"{}")))
+            return httpx.Response(200, json={"ok": True, "result": []})
+        if request.url.host == "push.test":
+            pushes.append(__import__("json").loads(request.content))
+            return httpx.Response(200, json={})
+        if request.url.path.strip("/") == "cp/orders":
+            return httpx.Response(200, json=[])
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), telegram_bot_token="t", telegram_chat_id="-100",
+                rustore_project_id="p", rustore_push_token="t", rustore_push_host="https://push.test", order_watch_interval=0)
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        c.post("/v1/push/token", headers=login(c), json={"token": "device-token-1"})
+        b = c.app.state.buttons
+        # чужой чат — игнор
+        c.portal.call(b.handle, {"message": {"chat": {"id": 1}, "text": "/push Взлом"}})
+        assert not any(m == "sendMessage" and "Взлом" in str(j) for m, j in tg)
+        c.portal.call(b.handle, {"message": {"chat": {"id": -100}, "text": "/push Скидка 10% на масла"}})
+        preview = [j for m, j in tg if m == "sendMessage"][-1]
+        assert "Скидка 10%" in preview["text"] and pushes == []  # без подтверждения не шлём
+        bid = preview["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+        c.portal.call(b.handle, {"callback_query": {"id": "1", "data": bid, "message": {"chat": {"id": -100}, "message_id": 7, "text": "p"}}})
+        assert pushes[-1]["message"]["data"]["body"] == "Скидка 10% на масла"
+        assert pushes[-1]["message"]["data"]["type"] == "promo"
+        c.portal.call(b.handle, {"callback_query": {"id": "2", "data": bid, "message": {"chat": {"id": -100}, "message_id": 7, "text": "p"}}})
+        assert len(pushes) == 1  # повторное нажатие не шлёт второй раз
+        c.portal.call(b.handle, {"message": {"chat": {"id": -100}, "text": "/stats"}})
+        assert "Устройств: 1" in [j for m, j in tg if m == "sendMessage"][-1]["text"]

@@ -196,3 +196,31 @@ fun showOrderNotification(
         .build()
     runCatching { NotificationManagerCompat.from(ctx).notify((order ?: "push").hashCode(), n) }
 }
+
+/** Акции из рассылки — отдельный канал «Акции и новости»: его можно выключить, не теряя статусы заказов. */
+fun showPromoNotification(ctx: Context, title: String, text: String) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val ch = NotificationChannel(PROMO_CHANNEL, "Акции и новости", NotificationManager.IMPORTANCE_DEFAULT)
+        ch.description = "Скидки и новости магазина"
+        ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+    }
+    val open = PendingIntent.getActivity(
+        ctx, 7001,
+        Intent(ctx, com.example.myapplication.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    val n = NotificationCompat.Builder(ctx, PROMO_CHANNEL)
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentTitle(title)
+        .setContentText(text)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .build()
+    runCatching { NotificationManagerCompat.from(ctx).notify(("promo" + text).hashCode(), n) }
+}
+
+private const val PROMO_CHANNEL = "promo"

@@ -125,18 +125,45 @@ class ButtonListener:
     Принимает кнопки только из настроенного чата: закрывает заявку и вызывает on_granted(uid) — push клиенту.
     """
 
-    def __init__(self, http: httpx.AsyncClient, token: str, chat_id: str, on_granted):
+    def __init__(self, http: httpx.AsyncClient, token: str, chat_id: str, on_granted, on_command=None, on_callback=None):
+        """on_command(text) -> (ответ, кнопки|None) — команды из чата (/push, /stats…);
+        on_callback(data) -> текст для отметки в сообщении, или None — чужая кнопка."""
         self.http, self.token, self.chat_id, self.on_granted = http, token, str(chat_id), on_granted
+        self.on_command, self.on_callback = on_command, on_callback
         self.offset = 0
 
     def _url(self, method: str) -> str:
         return f"https://api.telegram.org/bot{self.token}/{method}"
 
+    async def send(self, text: str, markup: dict | None = None):
+        body = {"chat_id": self.chat_id, "text": text, "disable_web_page_preview": True}
+        if markup:
+            body["reply_markup"] = markup
+        await self.http.post(self._url("sendMessage"), json=body)
+
     async def handle(self, update: dict):
+        # Команды — только из нашего чата: чужой, нашедший бота, ничего разослать не сможет
+        message = update.get("message") or {}
+        if message:
+            text = str(message.get("text") or "")
+            if str((message.get("chat") or {}).get("id")) == self.chat_id and text.startswith("/") and self.on_command:
+                reply = await self.on_command(text)
+                if reply:
+                    await self.send(*reply)
+            return
         cb = update.get("callback_query") or {}
         data = str(cb.get("data") or "")
         msg = cb.get("message") or {}
-        if not data.startswith(GRANTED) or str((msg.get("chat") or {}).get("id")) != self.chat_id:
+        if str((msg.get("chat") or {}).get("id")) != self.chat_id:
+            return
+        if not data.startswith(GRANTED):
+            note = await self.on_callback(data) if self.on_callback else None
+            if note:
+                await self.http.post(self._url("answerCallbackQuery"), json={"callback_query_id": cb.get("id"), "text": note[:190]})
+                await self.http.post(self._url("editMessageText"), json={
+                    "chat_id": msg["chat"]["id"], "message_id": msg.get("message_id"),
+                    "text": f"{msg.get('text', '')}\n\n{note}",
+                })
             return
         uid = data[len(GRANTED):]
         who = (cb.get("from") or {}).get("first_name") or "менеджер"
@@ -151,7 +178,7 @@ class ButtonListener:
 
     async def poll_once(self, timeout: int = 25):
         r = await self.http.get(self._url("getUpdates"), params={
-            "offset": self.offset, "timeout": timeout, "allowed_updates": '["callback_query"]'},
+            "offset": self.offset, "timeout": timeout, "allowed_updates": '["callback_query","message"]'},
             timeout=timeout + 10)
         updates = r.json().get("result", [])
         for u in updates:
