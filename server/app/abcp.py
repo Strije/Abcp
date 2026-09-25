@@ -53,7 +53,6 @@ class Abcp:
         self._img_cache: dict[str, tuple[float, list[str]]] = {}
         self._profiles: dict[str, str] = {}
         self._img_sem = asyncio.Semaphore(6)
-        self._rel_cache: dict[str, tuple[float, list[str]]] = {}
         self._ai_day = ""
         self._ai_used = 0
 
@@ -200,35 +199,6 @@ class Abcp:
         if len(self._img_cache) > 20000:  # не даём кэшу расти бесконечно
             self._img_cache.clear()
         return urls
-
-    # ---------- достоверные аналоги (articles/info, format=c: crosses[].reliable) ----------
-
-    async def reliable_crosses(self, brand: str, number: str, ttl: float = 24 * 3600) -> list[str]:
-        """Ключи «БРЕНД|НОМЕР» (numberFix, верхний регистр) аналогов, которые ABCP считает достоверными."""
-        key = f"{brand.upper()}|{number.upper()}"
-        hit = self._rel_cache.get(key)
-        if hit and hit[0] > time.time():
-            return hit[1]
-        if not self._articles_info_allowed():
-            return []
-        try:
-            data = await self._get("articles/info", self._admin({"brand": brand, "number": number, "format": "bnc"}))
-        except (AbcpError, httpx.HTTPError) as e:
-            log.warning("crosses %s %s: %s", brand, number, getattr(e, "message", e))
-            return []
-        out: list[str] = []
-        for art in items(data) or ([data] if isinstance(data, dict) else []):
-            for c in items(art.get("crosses") or []):
-                if str(c.get("reliable")) in ("1", "true", "True"):
-                    num = str(c.get("numberFix") or c.get("number") or "")
-                    fix = "".join(ch for ch in num.upper() if ch.isalnum())
-                    if fix:
-                        out.append(f"{str(c.get('brand', '')).upper()}|{fix}")
-        out = list(dict.fromkeys(out))
-        self._rel_cache[key] = (time.time() + ttl, out)
-        if len(self._rel_cache) > 5000:
-            self._rel_cache.clear()
-        return out
 
     # ---------- регистрация и восстановление пароля (клиентские операции без входа) ----------
     # ABCP выполняет их только с разрешённых IP — поэтому идут через сервер, а не с телефона.

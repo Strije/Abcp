@@ -6,7 +6,6 @@ GET  /v1/orders/{number}/pay  ссылка на оплату заказа (то�
 GET  /v1/topup?amount=        ссылка на пополнение баланса
 POST /v1/orders/{number}/app-note  служебная заметка «оформлен через приложение» (для статистики)
 POST /v1/images               картинки товаров для выдачи
-POST /v1/reliable             достоверные аналоги (звёздочка)
 POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
@@ -325,17 +324,15 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         """Без code — отправить SMS/письмо; с code и passwordNew — сохранить новый пароль."""
         if not body.code and not public_limit.allow("restore:" + client_ip(request)):
             raise HTTPException(429, "Слишком много запросов кода, попробуйте через час")
+        # Код из SMS — не перебором: как попытки входа, 10 в минуту с IP
+        if body.code and not login_limit.allow("code:" + client_ip(request)):
+            raise HTTPException(429, "Слишком много попыток, подождите минуту")
         try:
             r = await state["abcp"].restore(body.model_dump())
         except AbcpError as e:
             # 404 — такого клиента нет: приложение предложит зарегистрироваться
             raise HTTPException(404 if e.status == 404 else 400 if e.status < 500 else 502, e.message)
         return {"ok": True, "message": r.get("message")}
-
-    @app.post("/v1/reliable")
-    async def reliable(body: Article, uid: str = Depends(current_uid)):
-        """Достоверные аналоги артикула — для звёздочки, как на сайте."""
-        return {"reliable": await state["abcp"].reliable_crosses(body.brand, body.number)}
 
     # Подбор по авто: гостям — как гостевой поиск; вошедшим — отдельный, щедрее
     laximo_user_limit = RateLimiter(limit=120, window=60)

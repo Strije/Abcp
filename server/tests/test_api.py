@@ -65,10 +65,6 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[{"brand": "Knecht", "number": "OC90", "numberFix": "OC90", "price": "320",
                                           "priceIn": "150", "priceRate": "1", "distributorId": "77",
                                           "availability": "6", "deliveryPeriod": "0", "itemKey": "k"}])
-    if p == "articles/info" and q.get("format") == "bnc":
-        return httpx.Response(200, json=[{"brand": q["brand"], "number": q["number"], "crosses": [
-            {"brand": "Zekkert", "number": "OF-4063", "numberFix": "OF4063", "reliable": True},
-            {"brand": "Noname", "number": "X1", "numberFix": "X1", "reliable": False}]}])
     if p == "articles/info":
         return httpx.Response(200, json=[{"brand": q["brand"], "number": q["number"],
                                           "images": [{"name": "abc0002.jpeg"}, "https://x.test/b.jpg"]}])
@@ -140,11 +136,6 @@ def test_rate_limit():
     assert rl.allow("ip", now=200)
 
 
-def test_reliable(client):
-    r = client.post("/v1/reliable", headers=login(client), json={"brand": "Knecht", "number": "OC90"})
-    assert r.json()["reliable"] == ["ZEKKERT|OF4063"]
-
-
 def test_register(client):
     ok = {"name": "Иван", "mobile": "+7 (978) 123-45-67", "password": "Secret123", "office": "27993"}
     assert client.post("/v1/register", json=ok).json() == {"ok": True, "needsActivation": False}
@@ -167,7 +158,7 @@ def test_articles_info_budget():
                   articles_info_per_day=1)
     b = Abcp(s2, transport=httpx.MockTransport(fake_abcp))
     assert asyncio.run(b.images("Knecht", "OC90"))            # первый — можно
-    assert asyncio.run(b.reliable_crosses("Knecht", "OC90")) == []  # лимит суток исчерпан
+    assert asyncio.run(b.images("Mann", "W712")) == []  # лимит суток исчерпан
 
 
 def test_guest_search_hides_purchase_price(client):
