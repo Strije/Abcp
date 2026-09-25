@@ -7,7 +7,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,8 +44,9 @@ class MainActivity : ComponentActivity() {
                 var autoLoginError by remember { mutableStateOf<String?>(null) }
                 var inFlight by remember { mutableStateOf(false) }
 
-                fun goToCabinet(user: UserInfoDto) {
-                    val json = Gson().toJson(user)
+                fun goToCabinet(user: UserInfoDto?) {
+                    val json = user?.let { Gson().toJson(it) } ?: session.userJson()
+                    if (user != null && json != null) session.saveUser(json)
                     startActivity(
                         Intent(this@MainActivity, MainShellActivity::class.java)
                             .putExtra(MainShellActivity.EXTRA_USER_JSON, json)
@@ -47,9 +54,11 @@ class MainActivity : ComponentActivity() {
                     finish()
                 }
 
-                // Автологин
+                // Автологин. Профиль с прошлого раза есть — открываемся сразу, пароль главный экран проверит сам.
                 LaunchedEffect(Unit) {
-                    if (session.isLoggedIn() && !inFlight) {
+                    if (session.isLoggedIn() && session.userJson() != null) {
+                        goToCabinet(null)
+                    } else if (session.isLoggedIn() && !inFlight) {
                         inFlight = true
                         try {
                             val resp = performRequestWithRetry {
@@ -69,9 +78,8 @@ class MainActivity : ComponentActivity() {
                                 checkingAutoLogin = false
                             }
                         } catch (_: Exception) {
-                            session.clear()
-                            autoLoginError = "Не удалось подключиться к серверу."
-                            checkingAutoLogin = false
+                            // Нет интернета — это не повод выходить из аккаунта
+                            goToCabinet(null)
                         } finally {
                             inFlight = false
                         }
@@ -112,10 +120,44 @@ fun LoginScreen(
     var error by remember { mutableStateOf(initialError) }
 
     val scope = rememberCoroutineScope()
+    var showPassword by remember { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+
+    fun submit() {
+        val l = login.trim()
+        val p = password.trim()
+        if (loading) return
+        if (l.isEmpty() || p.isEmpty()) {
+            error = "Введите логин и пароль"
+            return
+        }
+        focus.clearFocus()
+        loading = true
+        error = null
+        scope.launch {
+            try {
+                val passMd5 = md5(p)
+                val resp = performRequestWithRetry { api.userInfo(l, passMd5) }
+                val user = resp.body()
+                if (resp.isSuccessful && user != null) {
+                    session.save(l, passMd5)
+                    onSuccess(user)
+                } else {
+                    error = prettifyAbcpError(resp.errorBody()?.string())
+                }
+            } catch (_: Exception) {
+                error = "Не удалось подключиться к серверу. Проверьте интернет."
+            } finally {
+                loading = false
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -125,8 +167,8 @@ fun LoginScreen(
             painter = painterResource(id = R.drawable.logo),
             contentDescription = "Логотип",
             modifier = Modifier
-                .size(240.dp)
-                .padding(bottom = 24.dp)
+                .size(200.dp)
+                .padding(bottom = 16.dp)
         )
 
         OutlinedTextField(
@@ -135,6 +177,7 @@ fun LoginScreen(
             label = { Text("Логин") },
             singleLine = true,
             enabled = !loading,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -146,8 +189,12 @@ fun LoginScreen(
             label = { Text("Пароль") },
             singleLine = true,
             enabled = !loading,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { submit() }),
+            trailingIcon = {
+                TextButton(onClick = { showPassword = !showPassword }) { Text(if (showPassword) "Скрыть" else "Показать") }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -161,40 +208,7 @@ fun LoginScreen(
         Button(
             enabled = !loading,
             modifier = Modifier.fillMaxWidth(),
-            onClick = {
-                val l = login.trim()
-                val p = password.trim()
-
-                if (l.isEmpty() || p.isEmpty()) {
-                    error = "Введите логин и пароль"
-                    return@Button
-                }
-
-                loading = true
-                error = null
-
-                scope.launch {
-                    try {
-                        val passMd5 = md5(p)
-                        val resp = performRequestWithRetry {
-                            api.userInfo(l, passMd5)
-                        }
-
-                        val user = resp.body()
-                        if (resp.isSuccessful && user != null) {
-                            session.save(l, passMd5)
-                            onSuccess(user)
-                        } else {
-                            val raw = resp.errorBody()?.string()
-                            error = prettifyAbcpError(raw)
-                        }
-                    } catch (_: Exception) {
-                        error = "Не удалось подключиться к серверу."
-                    } finally {
-                        loading = false
-                    }
-                }
-            }
+            onClick = { submit() }
         ) {
             if (loading) {
                 CircularProgressIndicator(

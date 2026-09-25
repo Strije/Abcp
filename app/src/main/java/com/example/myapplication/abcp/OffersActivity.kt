@@ -76,6 +76,8 @@ class OffersActivity : ComponentActivity() {
                 var error by remember { mutableStateOf<String?>(null) }
                 var offers by remember { mutableStateOf<List<Offer>>(emptyList()) }
                 var tab by remember { mutableIntStateOf(0) }
+                var tabTouched by remember { mutableStateOf(false) }
+                var reload by remember { mutableIntStateOf(0) }
                 var sort by remember { mutableStateOf(Sort.Fast) }
                 var term by remember { mutableStateOf<Term?>(null) }
                 var picked by remember { mutableStateOf<Offer?>(null) }
@@ -90,28 +92,33 @@ class OffersActivity : ComponentActivity() {
                 // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
                 LaunchedEffect(Unit) { if (!shop.isGuest) reliable = runCatching { server.reliable(brand, number) }.getOrDefault(emptySet()) }
 
-                LaunchedEffect(showAll) {
+                LaunchedEffect(showAll, reload) {
                     loading = true
+                    error = null
                     try {
                         offers = shop.offers(number, brand, all = showAll)
-                        // Картинки — с нашего сервера (articles/info доступен только API-админу)
-                        val need = offers.filter { it.images.isEmpty() }.map { it.brand to it.number }.distinct()
-                        if (need.isNotEmpty() && !shop.isGuest) {
-                            val imgs = runCatching { server.images(need) }.getOrDefault(emptyMap())
-                            if (imgs.isNotEmpty()) offers = offers.map { o ->
-                                if (o.images.isNotEmpty()) o else o.copy(images = imgs["${o.brand}|${o.number}"].orEmpty())
-                            }
-                        }
                     } catch (e: Exception) {
-                        error = e.message ?: "Ошибка загрузки"
+                        error = e.message ?: "Не удалось загрузить предложения. Проверьте интернет."
                     } finally {
                         loading = false
+                    }
+                    // Картинки — потом, список уже на экране (articles/info доступен только API-админу, через сервер)
+                    val need = offers.filter { it.images.isEmpty() }.map { it.brand to it.number }.distinct()
+                    if (need.isNotEmpty() && !shop.isGuest) {
+                        val imgs = runCatching { server.images(need) }.getOrDefault(emptyMap())
+                        if (imgs.isNotEmpty()) offers = offers.map { o ->
+                            if (o.images.isNotEmpty()) o else o.copy(images = imgs["${o.brand}|${o.number}"].orEmpty())
+                        }
                     }
                 }
 
                 val fix = cleanNumber(number)
                 val (own, analogs) = offers.partition {
                     it.numberFix.equals(fix, ignoreCase = true) && it.brand.equals(brand, ignoreCase = true)
+                }
+                // Самого номера нет, а аналоги есть — сразу показываем аналоги (пока пользователь сам не выбрал вкладку)
+                LaunchedEffect(offers) {
+                    if (!tabTouched && own.isEmpty() && analogs.isNotEmpty()) tab = 1
                 }
                 val cmp = sort.comparator()
                 // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
@@ -138,8 +145,8 @@ class OffersActivity : ComponentActivity() {
                 ) { padding ->
                     Column(Modifier.padding(padding).fillMaxSize()) {
                         TabRow(selectedTabIndex = tab) {
-                            Tab(tab == 0, { tab = 0 }, text = { Text("Искомый номер (${own.size})") })
-                            Tab(tab == 1, { tab = 1 }, text = { Text("Аналоги (${analogs.size})") })
+                            Tab(tab == 0, { tab = 0; tabTouched = true }, text = { Text("Искомый номер (${own.size})") })
+                            Tab(tab == 1, { tab = 1; tabTouched = true }, text = { Text("Аналоги (${analogs.size})") })
                         }
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
@@ -163,9 +170,11 @@ class OffersActivity : ComponentActivity() {
                                 )
                             }
                         }
+                        // «Показать все варианты» — старый список остаётся, сверху полоска загрузки
+                        if (loading && offers.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
                         when {
-                            loading -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
-                            error != null -> Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                            loading && offers.isEmpty() -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
+                            error != null && offers.isEmpty() -> com.example.myapplication.ui.ErrorState(error!!, onRetry = { reload++ })
                             groups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text(
                                     when {

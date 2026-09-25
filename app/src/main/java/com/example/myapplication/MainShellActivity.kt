@@ -37,6 +37,10 @@ import com.example.myapplication.abcp.OrderStatusWatch
 import com.example.myapplication.abcp.OrdersScreen
 import com.example.myapplication.abcp.AbcpShop
 import com.example.myapplication.abcp.formatRub
+import com.example.myapplication.abcp.ApiClient
+import com.example.myapplication.abcp.MemoryCache
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import com.example.myapplication.laximo.normalizeRuPlate
 import com.example.myapplication.server.AppServer
 import com.example.myapplication.server.Finance
@@ -82,13 +86,38 @@ class MainShellActivity : ComponentActivity() {
                 .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val user = intent.getStringExtra(EXTRA_USER_JSON)?.let {
+        val cachedUser = intent.getStringExtra(EXTRA_USER_JSON)?.let {
             runCatching { Gson().fromJson(it, UserInfoDto::class.java) }.getOrNull()
+        }
+
+        fun logout(message: String? = null) {
+            OrderStatusWatch.stop(this)
+            AppServer.clearCache()
+            MemoryCache.clear()
+            session.clear()
+            message?.let { android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_LONG).show() }
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
         }
 
         setContent {
             AvtodrugTheme {
-                var tab by remember { mutableStateOf(HomeTab.Home) }
+                var user by remember { mutableStateOf(cachedUser) }
+                // Экран открылся по сохранённому профилю — проверяем пароль и обновляем профиль в фоне
+                LaunchedEffect(Unit) {
+                    if (guest) return@LaunchedEffect
+                    val resp = runCatching {
+                        performRequestWithRetry { ApiClient.create().userInfo(session.login(), session.passMd5()) }
+                    }.getOrNull() ?: return@LaunchedEffect // нет сети — работаем с сохранённым
+                    val fresh = resp.body()
+                    when {
+                        resp.isSuccessful && fresh != null -> { user = fresh; session.saveUser(Gson().toJson(fresh)) }
+                        resp.code() == 401 || resp.code() == 403 -> logout("Пароль изменился — войдите заново")
+                    }
+                }
+                var tab by rememberSaveable { mutableStateOf(HomeTab.Home) }
+                // Каждая вкладка помнит своё (введённый номер, прокрутку) при переключении
+                val tabState = rememberSaveableStateHolder()
                 var visits by remember { mutableIntStateOf(0) } // для перечитывания корзины при входе на вкладку
                 LaunchedEffect(Unit) { if (!guest) CartState.refresh(AbcpShop(session)) }
                 val updater = remember { AppUpdate(this@MainShellActivity) }
@@ -121,20 +150,14 @@ class MainShellActivity : ComponentActivity() {
                     }
                 ) { padding ->
                     Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
-                        when (tab) {
+                        tabState.SaveableStateProvider(tab.name) { when (tab) {
                             HomeTab.Home -> HomeScreen(
                                 guest = guest,
                                 onLogin = toLogin,
                                 userName = user?.name,
                                 unread = unread,
                                 onOpenTab = { tab = it },
-                                onLogout = {
-                                    OrderStatusWatch.stop(this@MainShellActivity)
-                                    com.example.myapplication.server.AppServer.clearCache()
-                                    session.clear()
-                                    startActivity(Intent(this@MainShellActivity, MainActivity::class.java))
-                                    finish()
-                                },
+                                onLogout = { logout() },
                                 user = user,
                                 onCheckUpdate = {
                                     val found = runCatching { updater.check(force = true) }
@@ -150,7 +173,7 @@ class MainShellActivity : ComponentActivity() {
                             HomeTab.Garage -> if (guest) LoginPrompt("Гараж", toLogin) else GarageScreen()
                             HomeTab.Orders -> if (guest) LoginPrompt("Заказы", toLogin) else OrdersScreen()
                             HomeTab.Cart -> if (guest) LoginPrompt("Корзина", toLogin) else CartScreen(visits)
-                        }
+                        } }
                     }
                 }
             }

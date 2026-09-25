@@ -23,6 +23,10 @@ import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
 import com.example.myapplication.server.AppServer
 import com.example.myapplication.ui.theme.AvtodrugTheme
+import com.example.myapplication.ui.EmptyState
+import com.example.myapplication.ui.OnResume
+import com.example.myapplication.ui.RefreshableContent
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.launch
 
 class OrdersActivity : ComponentActivity() {
@@ -38,34 +42,42 @@ fun OrdersScreen() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val server = remember { AppServer(ctx) }
+    // Прошлый список показываем сразу, свежий подгружаем тихо
+    var orders by remember { mutableStateOf(MemoryCache.orders) }
+    var finalIds by remember { mutableStateOf(MemoryCache.finalStatusIds) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    var orders by remember { mutableStateOf<List<OrderDto>>(emptyList()) }
-    var finalIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var reload by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(reload) {
         val session = SessionManager(ctx)
+        loading = true
+        error = null
         try {
             val resp = performRequestWithRetry {
                 ApiClient.create().orders(userlogin = session.login(), userpsw = session.passMd5())
             }
             if (resp.isSuccessful) {
-                orders = resp.body()?.itemsList().orEmpty()
+                orders = resp.body()?.itemsList().orEmpty().also { MemoryCache.orders = it }
             } else {
                 error = prettifyAbcpError(resp.errorBody()?.string())
             }
             // Если справочник статусов не загрузился — все заказы окажутся в «Активных», это безопасно
-            finalIds = runCatching { AbcpShop(session).finalStatusIds() }.getOrDefault(emptySet())
+            finalIds = runCatching { AbcpShop(session).finalStatusIds() }.getOrDefault(finalIds)
+            MemoryCache.finalStatusIds = finalIds
         } catch (_: Exception) {
-            error = "Не удалось подключиться к серверу."
+            error = "Не удалось загрузить заказы. Проверьте интернет."
         } finally {
             loading = false
         }
     }
+    // Вернулись с оплаты или из заказа — статусы и долг могли измениться
+    OnResume { reload++ }
 
+    val list = orders.orEmpty()
     // Заказ завершён, когда у него общий статус и он конечный. Позиции в разных статусах — заказ ещё в работе.
-    val (done, active) = orders.partition { o -> o.statusId != null && o.statusId in finalIds }
+    val (done, active) = list.partition { o -> o.statusId != null && o.statusId in finalIds }
     val shown = if (tab == 0) active else done
 
     Scaffold(topBar = { TopAppBar(title = { Text("Заказы") }) }) { padding ->
@@ -74,36 +86,28 @@ fun OrdersScreen() {
                 Tab(tab == 0, { tab = 0 }, text = { Text("Активные (${active.size})") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("Завершённые (${done.size})") })
             }
-            Box(Modifier.fillMaxSize()) {
-                when {
-                    loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                    !error.isNullOrBlank() -> Text(
-                        error!!, color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.align(Alignment.Center).padding(16.dp)
-                    )
-                    shown.isEmpty() -> Text(
-                        if (tab == 0) "Активных заказов нет" else "Завершённых заказов нет",
-                        Modifier.align(Alignment.Center)
-                    )
-                    else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(shown) { order ->
-                            val payNumber = order.number
-                            OrderRow(
-                                order,
-                                onPay = if (server.enabled && payNumber != null) {
-                                    { payOrder(ctx, scope, server, payNumber) }
-                                } else null
-                            ) {
-                                order.number?.let { num ->
-                                    ctx.startActivity(
-                                        Intent(ctx, OrderDetailsActivity::class.java)
-                                            .putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
-                                    )
-                                }
+            RefreshableContent(hasData = orders != null, loading = loading, error = error, onRefresh = { reload++ }) {
+                if (shown.isEmpty()) EmptyState(if (tab == 0) "Активных заказов нет" else "Завершённых заказов нет")
+                else LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Список есть, но обновить не вышло — говорим об этом, не пряча заказы
+                    error?.let { e -> item { Text(e, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
+                    items(shown, key = { it.number ?: it.hashCode().toString() }) { order ->
+                        val payNumber = order.number
+                        OrderRow(
+                            order,
+                            onPay = if (server.enabled && payNumber != null) {
+                                { payOrder(ctx, scope, server, payNumber) }
+                            } else null
+                        ) {
+                            order.number?.let { num ->
+                                ctx.startActivity(
+                                    Intent(ctx, OrderDetailsActivity::class.java)
+                                        .putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, num)
+                                )
                             }
                         }
                     }

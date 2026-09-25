@@ -14,6 +14,11 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import com.example.myapplication.ui.ErrorState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,7 +58,9 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     val ctx = LocalContext.current
     val shop = remember { AbcpShop(SessionManager(ctx)) }
     val scope = rememberCoroutineScope()
-    var query by remember { mutableStateOf(prefillNumber) }
+    var query by rememberSaveable { mutableStateOf(prefillNumber) }
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     var tips by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
     var brands by remember { mutableStateOf<List<BrandHit>?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -65,6 +72,8 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     fun search() {
         val n = query.trim()
         if (n.isBlank()) return
+        keyboard?.hide()
+        focus.clearFocus()
         tips = emptyList()
         loading = true
         error = null
@@ -76,7 +85,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
                 autoPickBrand(found, preferredBrand)?.let { openOffers(ctx, it) }
             } catch (e: Exception) {
-                error = e.message ?: "Ошибка поиска"
+                error = e.message ?: "Не удалось выполнить поиск. Проверьте интернет."
             } finally {
                 loading = false
             }
@@ -105,8 +114,11 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 onValueChange = { query = it; brands = null },
                 label = { Text("Артикул или OEM-номер") },
                 singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = {
-                    IconButton(onClick = { search() }) { Icon(Icons.Default.Search, "Найти") }
+                    if (query.isNotEmpty()) IconButton(onClick = { query = ""; brands = null; error = null }) {
+                        Icon(Icons.Default.Close, "Очистить")
+                    }
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { search() }),
@@ -117,9 +129,9 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 loading -> Box(Modifier.fillMaxWidth().padding(24.dp)) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 }
-                error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
+                error != null -> ErrorState(error!!, onRetry = { search() })
                 brands != null && brands!!.isEmpty() ->
-                    Text("По номеру «${query.trim()}» ничего не найдено")
+                    Text("По номеру «${query.trim()}» ничего не найдено. Проверьте номер или спросите менеджера в чате.")
                 brands != null -> {
                     Text("Выберите производителя", style = MaterialTheme.typography.titleSmall)
                     HitList(brands!!) { openOffers(ctx, it) }

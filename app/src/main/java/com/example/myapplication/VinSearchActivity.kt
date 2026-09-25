@@ -45,6 +45,9 @@ class VinSearchActivity : ComponentActivity() {
                 var loading by remember { mutableStateOf(false) }
                 var error by remember { mutableStateOf<String?>(null) }
                 var results by remember { mutableStateOf<List<LaximoVehicleContext>>(emptyList()) }
+                var searched by remember { mutableStateOf(false) } // «Ничего не найдено» — только после поиска
+                val guest = remember { !SessionManager(ctx).isLoggedIn() }
+                val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
                 fun onSearchClick() {
                     val vin = vinText.trim()
@@ -53,9 +56,11 @@ class VinSearchActivity : ComponentActivity() {
                         return
                     }
 
+                    keyboard?.hide()
                     loading = true
                     error = null
                     results = emptyList()
+                    searched = true
 
                     scope.launch {
                         try {
@@ -146,6 +151,11 @@ class VinSearchActivity : ComponentActivity() {
                             label = { Text("VIN, номер кузова или госномер") },
                             placeholder = { Text("XTA21099… / SGL5-400683 / А123ВС92") },
                             singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = androidx.compose.ui.text.input.ImeAction.Search,
+                                capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Characters
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { onSearchClick() }),
                             trailingIcon = {
                                 Box {
                                     IconButton(onClick = { scanMenu = true }, enabled = !scanning) {
@@ -180,7 +190,7 @@ class VinSearchActivity : ComponentActivity() {
 
                         if (error != null) {
                             Text(
-                                text = "Ошибка: $error",
+                                text = error!!,
                                 color = MaterialTheme.colorScheme.error
                             )
                         }
@@ -191,9 +201,9 @@ class VinSearchActivity : ComponentActivity() {
                             }
                         }
 
-                        if (!loading && error == null) {
+                        if (!loading && error == null && searched) {
                             if (results.isEmpty()) {
-                                Text("Ничего не найдено")
+                                Text("Машина не найдена. Проверьте VIN или номер — или спросите менеджера в чате, подберём вручную.")
                             } else {
                                 LazyColumn(
                                     modifier = Modifier.fillMaxSize(),
@@ -221,7 +231,7 @@ class VinSearchActivity : ComponentActivity() {
                                                 )
                                                 Spacer(Modifier.height(4.dp))
                                                 Text("Запрос: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
-                                                TextButton(
+                                                if (!guest) TextButton(
                                                     contentPadding = PaddingValues(0.dp),
                                                     onClick = {
                                                         val q = vinText.trim()
@@ -245,13 +255,19 @@ class VinSearchActivity : ComponentActivity() {
                                                 Text("Каталог: ${r.catalog}", style = MaterialTheme.typography.bodySmall)
                                                 if (r.attributes.isNotEmpty()) {
                                                     Spacer(Modifier.height(6.dp))
-                                                    r.attributes.forEach { attr ->
+                                                    // Первые характеристики сразу, остальные — по нажатию: иначе карточка на весь экран
+                                                    var more by remember { mutableStateOf(false) }
+                                                    val attrs = r.attributes.filter { !it.value.isNullOrBlank() }
+                                                    (if (more) attrs else attrs.take(4)).forEach { attr ->
                                                         if (!attr.value.isNullOrBlank()) {
                                                             Text(
                                                                 "${attr.name ?: attr.key}: ${attr.value}",
                                                                 style = MaterialTheme.typography.bodySmall
                                                             )
                                                         }
+                                                    }
+                                                    if (attrs.size > 4) TextButton(onClick = { more = !more }, contentPadding = PaddingValues(0.dp)) {
+                                                        Text(if (more) "Свернуть" else "Все характеристики (${attrs.size})")
                                                     }
                                                 }
                                             }

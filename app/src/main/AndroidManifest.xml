@@ -7,6 +7,7 @@
     <!-- Автообновление: установка скачанного APK новой версии -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Поворот экрана и смена темы не пересоздают экраны: Compose перерисует сам, введённое не теряется -->
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -17,25 +18,25 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
 
-        <activity android:name=".abcp.OrdersActivity" android:exported="false" />
-        <activity android:name=".MainShellActivity" android:exported="false" />
-        <activity android:name=".abcp.OrderDetailsActivity" android:exported="false" />
-        <activity android:name=".SearchActivity" android:exported="false" />
-        <activity android:name=".abcp.OffersActivity" android:exported="false" />
-        <activity android:name=".abcp.CartActivity" android:exported="false" />
-        <activity android:name=".abcp.CheckoutActivity" android:exported="false" />
-        <activity android:name=".abcp.NotificationsActivity" android:exported="false" />
-        <activity android:name=".NewsActivity" android:exported="false" />
-        <activity android:name=".AccountActivity" android:exported="false" />
-        <activity android:name=".ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".VinSearchActivity" />
-        <activity android:name=".GarageActivity" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.OrdersActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".MainShellActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.OrderDetailsActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".SearchActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.OffersActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.CartActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.CheckoutActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.NotificationsActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".NewsActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".AccountActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".VinSearchActivity" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".GarageActivity" />
 
         <!-- Laximo -->
-        <activity android:name=".laximo.QuickGroupsActivity" />
-        <activity android:name=".laximo.CatalogCategoriesActivity" />
-        <activity android:name=".laximo.CatalogUnitsActivity" />
-        <activity android:name=".laximo.UnitDetailsActivity" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.QuickGroupsActivity" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.CatalogCategoriesActivity" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.CatalogUnitsActivity" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.UnitDetailsActivity" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -47,7 +48,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
