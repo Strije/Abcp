@@ -54,7 +54,7 @@ class OrderDetailsActivity : ComponentActivity() {
                 var reload by remember { mutableIntStateOf(0) }
                 var toCancel by remember { mutableStateOf<OrderPositionDto?>(null) }
                 var repeating by remember { mutableStateOf(false) }
-                var repeatResult by remember { mutableStateOf<Pair<List<String>, List<String>>?>(null) }
+                var repeatLines by remember { mutableStateOf<List<RepeatLine>?>(null) }
 
                 LaunchedEffect(orderNumber, reload) {
                     loading = true
@@ -97,12 +97,13 @@ class OrderDetailsActivity : ComponentActivity() {
                                     repeating = true
                                     scope.launch {
                                         val list = details?.positions.orEmpty().filter { !it.number.isNullOrBlank() }.map {
-                                            Triple(it.brand.orEmpty(), it.number.orEmpty(),
-                                                (it.quantity ?: it.quantityOrdered)?.let(::parseAbcpNumber)?.toInt() ?: 1)
+                                            RepeatSource(
+                                                it.brand.orEmpty(), it.number.orEmpty(),
+                                                (it.quantity ?: it.quantityOrdered)?.let(::parseAbcpNumber)?.toInt() ?: 1,
+                                                (it.priceInSiteCurrency ?: it.price)?.let(::parseAbcpNumber) ?: 0.0
+                                            )
                                         }
-                                        repeatResult = shop.repeatOrder(list)
-                                        CartState.refresh(shop)
-                                        com.example.myapplication.Analytics.event("repeat_order", mapOf("positions" to list.size))
+                                        repeatLines = shop.findRepeat(list)
                                         repeating = false
                                     }
                                 },
@@ -117,27 +118,24 @@ class OrderDetailsActivity : ComponentActivity() {
                     }
                 }
 
-                repeatResult?.let { (added, missing) ->
-                    AlertDialog(
-                        onDismissRequest = { repeatResult = null },
-                        title = { Text(if (added.isNotEmpty()) "Добавлено в корзину: ${added.size}" else "Не получилось добавить") },
-                        text = {
-                            Text(
-                                (if (missing.isNotEmpty()) "Сейчас нет в продаже:
-" + missing.joinToString("
-") + "
-
-" else "") +
-                                    "Цены и сроки — актуальные на сегодня, проверьте их в корзине."
-                            )
-                        },
-                        confirmButton = {
-                            if (added.isNotEmpty()) Button(onClick = {
-                                repeatResult = null
-                                ctx.startActivity(android.content.Intent(ctx, CartActivity::class.java))
-                            }) { Text("В корзину") }
-                        },
-                        dismissButton = { TextButton(onClick = { repeatResult = null }) { Text("Закрыть") } }
+                repeatLines?.let { lines ->
+                    RepeatOrderDialog(
+                        lines = lines,
+                        onDismiss = { repeatLines = null },
+                        onConfirm = { chosen ->
+                            repeatLines = null
+                            scope.launch {
+                                val failed = shop.addRepeat(chosen)
+                                CartState.refresh(shop)
+                                com.example.myapplication.Analytics.event("repeat_order", mapOf("positions" to chosen.size))
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    if (failed.isEmpty()) "Добавлено в корзину: ${chosen.size}" else "Не добавилось: ${failed.joinToString()}",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                                if (failed.size < chosen.size) ctx.startActivity(android.content.Intent(ctx, CartActivity::class.java))
+                            }
+                        }
                     )
                 }
 
@@ -275,4 +273,54 @@ private fun OrderDetailsContent(
             }
         }
     }
+}
+
+/** Предпросмотр «Повторить заказ»: старая цена → сегодняшняя, срок; галочками выбираем, что положить в корзину. */
+@Composable
+private fun RepeatOrderDialog(lines: List<RepeatLine>, onDismiss: () -> Unit, onConfirm: (List<RepeatLine>) -> Unit) {
+    // По умолчанию отмечено всё, что есть в продаже
+    var checked by remember { mutableStateOf(lines.indices.filter { lines[it].offer != null }.toSet()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Повторить заказ") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                item {
+                    Text("Цены и сроки — сегодняшние. Снимите галочку с того, что не нужно.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                items(lines.size) { i ->
+                    val l = lines[i]
+                    val o = l.offer
+                    Row(verticalAlignment = Alignment.Top) {
+                        Checkbox(
+                            checked = i in checked, enabled = o != null,
+                            onCheckedChange = { on -> checked = if (on) checked + i else checked - i }
+                        )
+                        Column(Modifier.weight(1f).padding(top = 12.dp)) {
+                            Text("${l.source.title} × ${l.qty}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                            if (o == null) {
+                                Text("Сейчас нет в продаже", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            } else {
+                                val old = l.source.oldPrice
+                                val diff = if (old > 0) o.price - old else 0.0
+                                Text(
+                                    (if (old > 0 && kotlin.math.abs(diff) >= 1) "${formatRub(old)} → " else "") + formatRub(o.price) + " · " + o.deliveryText(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (diff >= 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val chosen = checked.sorted().map { lines[it] }
+            Button(enabled = chosen.isNotEmpty(), onClick = { onConfirm(chosen) }) {
+                Text("В корзину (${chosen.size}) · ${formatRub(chosen.sumOf { it.offer!!.price * it.qty })}")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
+    )
 }

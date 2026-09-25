@@ -93,12 +93,20 @@ private fun UnitDetailsScreen(
         }
     }
 
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    // Нажали номер на схеме — выбранные детали наверх и прокрутка к ним (схема — первый элемент списка)
+    LaunchedEffect(selectedCode) { if (!selectedCode.isNullOrBlank()) listState.animateScrollToItem(1) }
+    val selectedDetails = details.filter { !selectedCode.isNullOrBlank() && it.codeOnImage == selectedCode }
+    val otherDetails = if (selectedDetails.isEmpty()) details else details - selectedDetails.toSet()
+    var showOthers by remember(selectedCode) { mutableStateOf(false) }
+
     fun onCartClick(oem: String) {
         com.example.myapplication.Analytics.event("catalog_prices", mapOf("catalog" to ctx.catalog))
         // OEM со схемы → поиск ABCP: бренды → цены и аналоги
         context.startActivity(
             Intent(context, SearchActivity::class.java).apply {
-                putExtra(SearchActivity.EXTRA_BRAND, "")
+                // Бренд оригинала по марке машины — поиск сразу откроет цены, без выбора бренда
+                putExtra(SearchActivity.EXTRA_BRAND, CurrentCar.brand.takeIf { it.isNotBlank() }?.let(::oemBrandFor).orEmpty())
                 putExtra(SearchActivity.EXTRA_NUMBER, oem)
             }
         )
@@ -113,7 +121,8 @@ private fun UnitDetailsScreen(
             modifier = Modifier
                 .padding(pad)
                 .fillMaxSize(),
-            userScrollEnabled = !isInteractingWithScheme
+            userScrollEnabled = !isInteractingWithScheme,
+            state = listState
         ) {
 
             item {
@@ -166,13 +175,26 @@ private fun UnitDetailsScreen(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }
-            items(details) { d ->
-                DetailCard(
-                    d = d,
-                    selected = !selectedCode.isNullOrBlank() && d.codeOnImage == selectedCode,
-                    onClick = { onDetailClick(d) },
-                    onCartClick = { onCartClick(it) }
-                )
+            if (selectedDetails.isNotEmpty()) {
+                item {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("№ $selectedCode на схеме", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { selectedCode = null }) { Text("Сбросить") }
+                    }
+                }
+                items(selectedDetails) { d ->
+                    DetailCard(d = d, selected = true, onClick = { onDetailClick(d) }, onCartClick = { onCartClick(it) })
+                }
+                item {
+                    TextButton(onClick = { showOthers = !showOthers }, modifier = Modifier.padding(horizontal = 4.dp)) {
+                        Text(if (showOthers) "Скрыть остальные детали" else "Остальные детали узла (${otherDetails.size}) ▾")
+                    }
+                }
+            }
+            if (selectedDetails.isEmpty() || showOthers) {
+                items(otherDetails) { d ->
+                    DetailCard(d = d, selected = false, onClick = { onDetailClick(d) }, onCartClick = { onCartClick(it) })
+                }
             }
 
             if (error != null) {

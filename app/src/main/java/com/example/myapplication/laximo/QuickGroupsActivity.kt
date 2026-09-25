@@ -41,6 +41,7 @@ class QuickGroupsActivity : ComponentActivity() {
         val ctx = LaximoVehicleContext(catalog = catalog, vehicleId = vehicleId, ssd = ssd)
         // Машина — в заголовке, чтобы было видно, для чего подбираем
         val car = "${intent.getStringExtra("brand").orEmpty()} ${intent.getStringExtra("name").orEmpty()}".trim()
+        CurrentCar.brand = intent.getStringExtra("brand").orEmpty()
 
         setContent {
             com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo, car, intent.getStringExtra("query").orEmpty()) }

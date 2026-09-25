@@ -21,4 +21,11 @@ class RuPlateTest {
         assertNull(normalizeRuPlate("SGL5-400683"))
         assertNull(normalizeRuPlate("Ж123ВС92")) // буквы Ж на номерах нет
     }
+
+    @org.junit.Test
+    fun oemBrand() {
+        org.junit.Assert.assertEquals("VAG", com.example.myapplication.laximo.oemBrandFor("Volkswagen"))
+        org.junit.Assert.assertEquals("TOYOTA", com.example.myapplication.laximo.oemBrandFor("LEXUS"))
+        org.junit.Assert.assertEquals("KIA", com.example.myapplication.laximo.oemBrandFor("KIA"))
+    }
 }

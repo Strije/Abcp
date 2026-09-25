@@ -252,6 +252,9 @@ class OffersActivity : ComponentActivity() {
 private fun ArticleCard(list: List<Offer>, reliable: Boolean = false, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
     val head = list.first()
     val images = list.flatMap { it.images }.distinct()
+    // Сразу — 3 лучших предложения (список уже отсортирован), остальные по кнопке: иначе следующий артикул уезжает вниз
+    var expanded by remember(head.brand, head.numberFix) { mutableStateOf(false) }
+    val shown = if (expanded) list else list.take(3)
     ElevatedCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             if (images.isNotEmpty()) {
@@ -276,14 +279,20 @@ private fun ArticleCard(list: List<Offer>, reliable: Boolean = false, onImage: (
                 if (head.description.isNotBlank()) {
                     Text(head.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                // Своих фото нет (ABCP даёт их только через articles/info с лимитом 10 в сутки) —
-                // даём посмотреть фото детали в поиске картинок
-                if (images.isEmpty()) PhotoSearchLinks(head.brand, head.number)
             }
+            // Своих фото нет (ABCP даёт их только через articles/info с лимитом 10 в сутки) —
+            // маленькая кнопка: фото детали в поиске картинок Яндекса / Google
+            if (images.isEmpty()) PhotoSearchButton(head.brand, head.number)
         }
-        list.forEach { o ->
+        shown.forEach { o ->
             HorizontalDivider()
             OfferRow(o) { onPick(o) }
+        }
+        if (list.size > 3) {
+            HorizontalDivider()
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (expanded) "Свернуть" else "Ещё ${list.size - 3} предложений ▾")
+            }
         }
     }
 }
@@ -466,6 +475,22 @@ fun ImageViewer(urls: List<String>, onClose: () -> Unit) {
             IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
                 Icon(Icons.Default.Close, "Закрыть", tint = Color.White)
             }
+        }
+    }
+}
+
+/** Кнопка 📷 в карточке артикула: меню «Фото в Яндексе / Google». */
+@Composable
+private fun PhotoSearchButton(brand: String, number: String) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var menu by remember { mutableStateOf(false) }
+    val q = android.net.Uri.encode("$brand $number".trim())
+    fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+    Box {
+        FilledTonalIconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Text("📷") }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("Фото в Яндексе") }, onClick = { menu = false; open("https://yandex.ru/images/search?text=$q") })
+            DropdownMenuItem(text = { Text("Фото в Google") }, onClick = { menu = false; open("https://www.google.com/search?tbm=isch&q=$q") })
         }
     }
 }

@@ -13,6 +13,14 @@ import java.util.Calendar
 
 // ---------- Модели ----------
 
+/** Позиция старого заказа для «Повторить заказ»: бренд, номер, количество, старая цена за штуку. */
+data class RepeatSource(val brand: String, val number: String, val qty: Int, val oldPrice: Double) {
+    val title get() = "$brand $number".trim()
+}
+
+/** Что нашлось сейчас: лучшее предложение (или null — нет в продаже) и количество с учётом упаковки. */
+data class RepeatLine(val source: RepeatSource, val offer: Offer?, val qty: Int)
+
 data class BrandHit(
     val brand: String,
     val number: String,
@@ -202,24 +210,23 @@ class AbcpShop(private val session: SessionManager) {
             .mapNotNull { it.toBasketItem()?.copy(basketId = b?.id, basketName = b?.name) }
 
     /**
-     * «Повторить заказ»: для каждой позиции — то же предложение по бренду и номеру, лучшее сейчас
-     * (в магазине → быстрее → дешевле), с тем же количеством (с учётом упаковки). Цены — текущие.
+     * «Повторить заказ», шаг 1 — только подбор, в корзину ничего не кладём: для каждой позиции то же
+     * предложение по бренду и номеру, лучшее сейчас (в магазине → быстрее → дешевле), количество — с учётом упаковки.
+     * Цены и сроки — сегодняшние; клиент видит их рядом со старой ценой и сам решает, что добавить.
      */
-    suspend fun repeatOrder(positions: List<Triple<String, String, Int>>): Pair<List<String>, List<String>> {
-        val added = mutableListOf<String>()
-        val missing = mutableListOf<String>()
-        for ((brand, number, qty) in positions) {
-            val title = "$brand $number".trim()
-            val best = runCatching { offers(number, brand) }.getOrDefault(emptyList())
-                .filter { it.brand.equals(brand, true) && it.numberFix.equals(cleanNumber(number), true) }
-                .minWithOrNull(compareBy<Offer> { !it.inStore }.thenBy { it.deliveryHours }.thenBy { it.price })
-            if (best == null) { missing += title; continue }
-            val pack = best.packing.coerceAtLeast(1)
-            val q = ((qty.coerceAtLeast(1) + pack - 1) / pack) * pack
-            if (runCatching { addToBasket(best, q) }.isSuccess) added += title else missing += title
-        }
-        return added to missing
+    suspend fun findRepeat(positions: List<RepeatSource>): List<RepeatLine> = positions.map { src ->
+        val best = runCatching { offers(src.number, src.brand) }.getOrDefault(emptyList())
+            .filter { it.brand.equals(src.brand, true) && it.numberFix.equals(cleanNumber(src.number), true) }
+            .minWithOrNull(compareBy<Offer> { !it.inStore }.thenBy { it.deliveryHours }.thenBy { it.price })
+        val qty = best?.let { val pack = it.packing.coerceAtLeast(1); ((src.qty.coerceAtLeast(1) + pack - 1) / pack) * pack } ?: src.qty
+        RepeatLine(src, best, qty)
     }
+
+    /** Шаг 2 — отмеченные строки в корзину. Возвращает, что не добавилось. */
+    suspend fun addRepeat(lines: List<RepeatLine>): List<String> =
+        lines.filter { it.offer != null }.mapNotNull { l ->
+            if (runCatching { addToBasket(l.offer!!, l.qty) }.isSuccess) null else l.source.title
+        }
 
     suspend fun addToBasket(o: Offer, quantity: Int) =
         setBasketQuantity(o.brand, o.number, o.itemKey, o.supplierCode, quantity)
