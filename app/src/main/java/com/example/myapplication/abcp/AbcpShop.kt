@@ -237,7 +237,7 @@ class AbcpShop(private val session: SessionManager) {
         val r = call(retry = false) { api.basketAdd(fields) }.asJsonObjectOrNull()
         if (r?.str("status") == "0") {
             val pos = r.get("positions")?.let { items(it) }?.firstOrNull()?.asJsonObjectOrNull()
-            throw AbcpException(cleanAbcpMessage(pos?.str("errorMessage")) ?: "Не удалось изменить корзину")
+            throw AbcpException(explainAbcpError(cleanAbcpMessage(pos?.str("errorMessage")) ?: "Не удалось изменить корзину"))
         }
     }
 
@@ -289,7 +289,7 @@ class AbcpShop(private val session: SessionManager) {
         // Даже при status=0 часть позиций может уйти в заказ — смотрим orders
         val numbers = r.get("orders")?.let { items(it) }.orEmpty()
             .mapNotNull { it.asJsonObjectOrNull()?.str("number") }
-        if (numbers.isEmpty()) throw AbcpException(cleanAbcpMessage(r.str("errorMessage")) ?: "Заказ не оформлен")
+        if (numbers.isEmpty()) throw AbcpException(explainAbcpError(cleanAbcpMessage(r.str("errorMessage")) ?: "Заказ не оформлен"))
         return numbers
     }
 
@@ -300,8 +300,12 @@ class AbcpShop(private val session: SessionManager) {
         retry: Boolean = true,
         request: suspend () -> Response<JsonElement>
     ): JsonElement {
-        val resp = if (retry) performRequestWithRetry { request() } else request()
-        if (!resp.isSuccessful) throw AbcpException(prettifyAbcpError(resp.errorBody()?.string()))
+        val resp = try {
+            if (retry) performRequestWithRetry { request() } else request()
+        } catch (e: java.io.IOException) {
+            throw AbcpException(networkErrorText(e))
+        }
+        if (!resp.isSuccessful) throw AbcpException(prettifyAbcpError(resp.errorBody()?.string(), resp.code()))
         return resp.body() ?: throw AbcpException("Пустой ответ сервера")
     }
 }
@@ -428,7 +432,7 @@ fun cleanAbcpMessage(s: String?): String? {
 /** ABCP не оформил заказ, потому что у позиций в корзине изменились цена или наличие. */
 fun isBasketChanged(message: String?): Boolean {
     val m = message?.lowercase() ?: return false
-    return "изменил" in m && ("цен" in m || "налич" in m)
+    return ("изменил" in m || "изменились" in m) && ("цен" in m || "налич" in m)
 }
 
 fun stripHtml(s: String): String =

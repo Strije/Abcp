@@ -50,4 +50,13 @@ class AbcpShopTest {
         assertTrue(com.example.myapplication.abcp.isBasketChanged(clean))
         assertFalse(com.example.myapplication.abcp.isBasketChanged("Неверный пароль"))
     }
+
+    @Test
+    fun errorHints() {
+        val e = com.example.myapplication.abcp.explainAbcpError("Превышен кредитный лимит клиента")
+        assertTrue(e.contains("Оплатить"))
+        assertTrue(com.example.myapplication.abcp.explainAbcpError("", 502).contains("временно недоступен"))
+        assertEquals("Неизвестная ошибка X", com.example.myapplication.abcp.explainAbcpError("Неизвестная ошибка X"))
+        assertTrue(com.example.myapplication.abcp.prettifyAbcpError("<html>502</html>", 502).contains("временно недоступен"))
+    }
 }
