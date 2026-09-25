@@ -82,6 +82,8 @@ class MainShellActivity : ComponentActivity() {
         // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+) — только для вошедших
         // Статусы заказов: push RuStore через наш сервер; нет push — проверка из приложения раз в 20 минут
         if (!guest) com.example.myapplication.push.Push.register(this)
+        // Версия из RuStore обновляется через RuStore (у прямой — своё автообновление)
+        RuStoreStore.checkUpdate(this)
         if (!guest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {

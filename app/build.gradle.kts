@@ -127,6 +127,9 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     // Push-уведомления RuStore (доставка через RuStore или приложения VK, без Google)
     implementation("ru.rustore.sdk:pushclient:7.5.0")
+    // Версия из RuStore: обновление через RuStore и просьба оценить приложение
+    implementation("ru.rustore.sdk:appupdate:10.5.1")
+    implementation("ru.rustore.sdk:review:10.5.1")
     // AppMetrica: отчёты о вылетах и ошибках
     implementation("io.appmetrica.analytics:analytics:8.5.1")
     // Чат: скрипт до загрузки страницы (стили и данные клиента для виджета Битрикс24)

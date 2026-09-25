@@ -173,6 +173,7 @@ class CheckoutActivity : ComponentActivity() {
                                                     basketIds = basket.map { it.basketId }
                                                 )
                                                 CartState.refresh(shop)
+                                                com.example.myapplication.RuStoreStore.onOrderPlaced(this@CheckoutActivity)
                                                 // Пометка для статистики — в фоне, на оформление не влияет
                                                 val numbers = done.orEmpty()
                                                 val app = applicationContext
