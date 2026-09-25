@@ -7,7 +7,12 @@ class SessionManager(val context: Context) {
 
     fun save(login: String, passMd5: String) {
         prefs.edit().putString("login", login).putString("pass_md5", passMd5).apply()
+        hints.edit().putString("last_login", login).apply()
     }
+
+    /** Отдельно от сессии: переживает выход, чтобы подставить логин на экране входа. Пароль не храним. */
+    private val hints = context.getSharedPreferences("login_hint", Context.MODE_PRIVATE)
+    fun lastLogin(): String = hints.getString("last_login", "") ?: ""
 
     fun login(): String = prefs.getString("login", "") ?: ""
     fun passMd5(): String = prefs.getString("pass_md5", "") ?: ""

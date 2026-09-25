@@ -73,9 +73,14 @@ class MainActivity : ComponentActivity() {
                                 goToCabinet(user)
                             } else {
                                 val raw = resp.errorBody()?.string()
-                                session.clear()
-                                autoLoginError = prettifyAbcpError(raw)
-                                checkingAutoLogin = false
+                                // Выходим только при настоящем «неверный пароль»; сбой ABCP — не повод
+                                if (com.example.myapplication.abcp.abcpErrorCode(raw) == 102) {
+                                    session.clear()
+                                    autoLoginError = prettifyAbcpError(raw, resp.code())
+                                    checkingAutoLogin = false
+                                } else {
+                                    goToCabinet(null)
+                                }
                             }
                         } catch (_: Exception) {
                             // Нет интернета — это не повод выходить из аккаунта
@@ -114,7 +119,8 @@ fun LoginScreen(
     initialError: String? = null,
     onSuccess: (UserInfoDto) -> Unit
 ) {
-    var login by remember { mutableStateOf("") }
+    // Последний логин помним и после выхода — остаётся ввести пароль
+    var login by remember { mutableStateOf(session.lastLogin()) }
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(initialError) }
