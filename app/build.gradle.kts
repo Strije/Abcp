@@ -25,6 +25,8 @@ android {
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
         versionName = "1.0.$build"
+        // Только ARM — на телефонах в РФ других почти нет; x86 (эмуляторы) раздувал APK библиотеками распознавания
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
 
         // Наш сервер (server/): баланс, оплата, картинки. Тестовый — на VPS в NL, к выпуску переедет в РФ.
         buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://9077635-oy742028.twc1.net:8446")}\"")
@@ -76,7 +78,9 @@ android {
         release {
             // Без боевого ключа (локальная сборка) — подписываем debug-ключом, чтобы сборка не падала
             signingConfig = signingConfigs.getByName(if (System.getenv("RELEASE_KEYSTORE") != null) "release" else "debug")
-            isMinifyEnabled = false
+            // Сжатие: выкидываем неиспользуемый код и ресурсы библиотек (правила — proguard-rules.pro)
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
