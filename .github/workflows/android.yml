@@ -52,7 +52,7 @@ jobs:
       - name: Build release APK
         run: |
           set -o pipefail
-          ./gradlew assembleRelease testReleaseUnitTest --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleRelease testDebugUnitTest --stacktrace 2>&1 | tee build.log
 
       # Ошибки компиляции — в аннотации, их видно без входа в GitHub
       - name: Report errors
