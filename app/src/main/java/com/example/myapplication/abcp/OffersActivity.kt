@@ -75,8 +75,6 @@ class OffersActivity : ComponentActivity() {
                 var loading by remember { mutableStateOf(true) }
                 var error by remember { mutableStateOf<String?>(null) }
                 var offers by remember { mutableStateOf<List<Offer>>(emptyList()) }
-                var tab by remember { mutableIntStateOf(0) }
-                var tabTouched by remember { mutableStateOf(false) }
                 var reload by remember { mutableIntStateOf(0) }
                 var sort by remember { mutableStateOf(Sort.Fast) }
                 var term by remember { mutableStateOf<Term?>(null) }
@@ -118,18 +116,16 @@ class OffersActivity : ComponentActivity() {
                 val (own, analogs) = offers.partition {
                     it.numberFix.equals(fix, ignoreCase = true) && it.brand.equals(brand, ignoreCase = true)
                 }
-                // Самого номера нет, а аналоги есть — сразу показываем аналоги (пока пользователь сам не выбрал вкладку)
-                LaunchedEffect(offers) {
-                    if (!tabTouched && own.isEmpty() && analogs.isNotEmpty()) tab = 1
-                }
                 val cmp = sort.comparator()
+                // Одна выдача: искомый номер закреплён сверху, ниже аналоги. Сортировка и фильтры — на весь список.
                 // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
                 fun isReliable(o: Offer) = "${o.brand.uppercase()}|${o.numberFix.uppercase()}" in reliable
-                val groups = (if (tab == 0) own else analogs.filter { !onlyReliable || isReliable(it) })
-                    .filter { term.accepts(it) }
+                fun grouped(list: List<Offer>) = list.filter { term.accepts(it) }
                     .groupBy { "${it.brand}|${it.numberFix}" }
                     .values.map { it.sortedWith(cmp) }
                     .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
+                val ownGroups = grouped(own)
+                val analogGroups = grouped(analogs.filter { !onlyReliable || isReliable(it) })
 
                 Scaffold(
                     topBar = {
@@ -146,10 +142,6 @@ class OffersActivity : ComponentActivity() {
                     }
                 ) { padding ->
                     Column(Modifier.padding(padding).fillMaxSize()) {
-                        TabRow(selectedTabIndex = tab) {
-                            Tab(tab == 0, { tab = 0; tabTouched = true }, text = { Text("Искомый номер (${own.size})") })
-                            Tab(tab == 1, { tab = 1; tabTouched = true }, text = { Text("Аналоги (${analogs.size})") })
-                        }
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -165,7 +157,7 @@ class OffersActivity : ComponentActivity() {
                                     label = { Text(t.title) }
                                 )
                             }
-                            if (tab == 1 && reliable.isNotEmpty()) {
+                            if (reliable.isNotEmpty()) {
                                 FilterChip(
                                     selected = onlyReliable, onClick = { onlyReliable = !onlyReliable },
                                     label = { Text("★ Только достоверные") }
@@ -177,12 +169,12 @@ class OffersActivity : ComponentActivity() {
                         when {
                             loading && offers.isEmpty() -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
                             error != null && offers.isEmpty() -> com.example.myapplication.ui.ErrorState(error!!, onRetry = { reload++ })
-                            groups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            ownGroups.isEmpty() && analogGroups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text(
                                     when {
                                         term != null -> "С условием «${term!!.title}» ничего нет — снимите фильтр."
-                                        tab == 0 -> "По самому номеру предложений нет — посмотрите аналоги."
-                                        else -> "Аналогов не найдено"
+                                        onlyReliable -> "Достоверных аналогов нет — снимите фильтр «★»."
+                                        else -> "Предложений не найдено. Спросите менеджера в чате — подберём."
                                     }
                                 )
                                 if (!showAll) OutlinedButton(onClick = { showAll = true }) { Text("Показать все варианты") }
@@ -193,8 +185,30 @@ class OffersActivity : ComponentActivity() {
                                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 16.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                items(groups, key = { it.first().brand + it.first().numberFix }) { list ->
-                                    ArticleCard(list, reliable = tab == 1 && isReliable(list.first()), onImage = { viewer = it }, onPick = { picked = it })
+                                // Искомый номер — закреплён сверху
+                                if (ownGroups.isNotEmpty()) {
+                                    item(key = "h_own") { SectionTitle("Вы искали") }
+                                    items(ownGroups, key = { "o_" + it.first().brand + it.first().numberFix }) { list ->
+                                        ArticleCard(list, reliable = false, onImage = { viewer = it }, onPick = { picked = it })
+                                    }
+                                } else if (own.isNotEmpty() || term != null) {
+                                    item(key = "h_own_empty") {
+                                        Text("По самому номеру ${if (term != null) "с условием «${term!!.title}» " else ""}предложений нет",
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(top = 8.dp))
+                                    }
+                                } else {
+                                    item(key = "h_own_none") {
+                                        Text("Самого номера сейчас нет в продаже — ниже аналоги",
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(top = 8.dp))
+                                    }
+                                }
+                                if (analogGroups.isNotEmpty()) {
+                                    item(key = "h_an") { SectionTitle("Аналоги (${analogGroups.size})") }
+                                    items(analogGroups, key = { "a_" + it.first().brand + it.first().numberFix }) { list ->
+                                        ArticleCard(list, reliable = isReliable(list.first()), onImage = { viewer = it }, onPick = { picked = it })
+                                    }
                                 }
                                 if (!showAll) item {
                                     // ABCP по умолчанию отдаёт сокращённую выдачу — как сайт до «Показать все варианты»
@@ -513,4 +527,9 @@ fun PhotoSearchLinks(brand: String, number: String) {
             modifier = Modifier.height(34.dp)
         ) { Text("📷 Фото в Google", style = MaterialTheme.typography.labelMedium) }
     }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
 }
