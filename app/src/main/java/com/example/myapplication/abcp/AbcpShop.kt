@@ -201,6 +201,26 @@ class AbcpShop(private val session: SessionManager) {
         items(call { api.basketContent(login, psw, b?.id) })
             .mapNotNull { it.toBasketItem()?.copy(basketId = b?.id, basketName = b?.name) }
 
+    /**
+     * «Повторить заказ»: для каждой позиции — то же предложение по бренду и номеру, лучшее сейчас
+     * (в магазине → быстрее → дешевле), с тем же количеством (с учётом упаковки). Цены — текущие.
+     */
+    suspend fun repeatOrder(positions: List<Triple<String, String, Int>>): Pair<List<String>, List<String>> {
+        val added = mutableListOf<String>()
+        val missing = mutableListOf<String>()
+        for ((brand, number, qty) in positions) {
+            val title = "$brand $number".trim()
+            val best = runCatching { offers(number, brand) }.getOrDefault(emptyList())
+                .filter { it.brand.equals(brand, true) && it.numberFix.equals(cleanNumber(number), true) }
+                .minWithOrNull(compareBy<Offer> { !it.inStore }.thenBy { it.deliveryHours }.thenBy { it.price })
+            if (best == null) { missing += title; continue }
+            val pack = best.packing.coerceAtLeast(1)
+            val q = ((qty.coerceAtLeast(1) + pack - 1) / pack) * pack
+            if (runCatching { addToBasket(best, q) }.isSuccess) added += title else missing += title
+        }
+        return added to missing
+    }
+
     suspend fun addToBasket(o: Offer, quantity: Int) =
         setBasketQuantity(o.brand, o.number, o.itemKey, o.supplierCode, quantity)
 

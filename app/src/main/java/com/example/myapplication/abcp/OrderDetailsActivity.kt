@@ -53,6 +53,8 @@ class OrderDetailsActivity : ComponentActivity() {
                 var finalIds by remember { mutableStateOf<Set<String>>(emptySet()) }
                 var reload by remember { mutableIntStateOf(0) }
                 var toCancel by remember { mutableStateOf<OrderPositionDto?>(null) }
+                var repeating by remember { mutableStateOf(false) }
+                var repeatResult by remember { mutableStateOf<Pair<List<String>, List<String>>?>(null) }
 
                 LaunchedEffect(orderNumber, reload) {
                     loading = true
@@ -90,6 +92,20 @@ class OrderDetailsActivity : ComponentActivity() {
                                 onPay = if (server.enabled) {
                                     { payOrder(ctx, scope, server, orderNumber) }
                                 } else null,
+                                repeating = repeating,
+                                onRepeat = {
+                                    repeating = true
+                                    scope.launch {
+                                        val list = details?.positions.orEmpty().filter { !it.number.isNullOrBlank() }.map {
+                                            Triple(it.brand.orEmpty(), it.number.orEmpty(),
+                                                (it.quantity ?: it.quantityOrdered)?.let(::parseAbcpNumber)?.toInt() ?: 1)
+                                        }
+                                        repeatResult = shop.repeatOrder(list)
+                                        CartState.refresh(shop)
+                                        com.example.myapplication.Analytics.event("repeat_order", mapOf("positions" to list.size))
+                                        repeating = false
+                                    }
+                                },
                                 onBuyAgain = { p ->
                                     ctx.startActivity(
                                         android.content.Intent(ctx, com.example.myapplication.SearchActivity::class.java)
@@ -99,6 +115,30 @@ class OrderDetailsActivity : ComponentActivity() {
                                 }
                             )
                     }
+                }
+
+                repeatResult?.let { (added, missing) ->
+                    AlertDialog(
+                        onDismissRequest = { repeatResult = null },
+                        title = { Text(if (added.isNotEmpty()) "Добавлено в корзину: ${added.size}" else "Не получилось добавить") },
+                        text = {
+                            Text(
+                                (if (missing.isNotEmpty()) "Сейчас нет в продаже:
+" + missing.joinToString("
+") + "
+
+" else "") +
+                                    "Цены и сроки — актуальные на сегодня, проверьте их в корзине."
+                            )
+                        },
+                        confirmButton = {
+                            if (added.isNotEmpty()) Button(onClick = {
+                                repeatResult = null
+                                ctx.startActivity(android.content.Intent(ctx, CartActivity::class.java))
+                            }) { Text("В корзину") }
+                        },
+                        dismissButton = { TextButton(onClick = { repeatResult = null }) { Text("Закрыть") } }
+                    )
                 }
 
                 toCancel?.let { p ->
@@ -161,6 +201,8 @@ private fun OrderDetailsContent(
     canCancel: (OrderPositionDto) -> Boolean,
     onCancel: (OrderPositionDto) -> Unit,
     onPay: (() -> Unit)?,
+    repeating: Boolean,
+    onRepeat: () -> Unit,
     onBuyAgain: (OrderPositionDto) -> Unit
 ) {
     val positions = details.positions.orEmpty()
@@ -195,6 +237,12 @@ private fun OrderDetailsContent(
                         }
                     }
                 }
+            }
+        }
+        item {
+            // Для СТО и таксопарков: тот же набор — в корзину одним нажатием
+            if (positions.isNotEmpty()) OutlinedButton(onClick = onRepeat, enabled = !repeating, modifier = Modifier.fillMaxWidth()) {
+                Text(if (repeating) "Ищем актуальные предложения…" else "Повторить заказ")
             }
         }
         item { Text("Позиции (${positions.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }

@@ -35,6 +35,8 @@ class VinSearchActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val prefillVin = intent.getStringExtra("prefillVin").orEmpty()
+        // С главной («Моя машина» → «Фильтры»): сразу открыть подбор с этим разделом
+        val quickQuery = intent.getStringExtra("quickQuery").orEmpty()
 
         setContent {
             AvtodrugTheme {
@@ -68,6 +70,16 @@ class VinSearchActivity : ComponentActivity() {
                                 repo.findVehicleAny(vin)
                             }
                             results = list
+                            if (quickQuery.isNotBlank() && list.size == 1) {
+                                val r = list.first()
+                                startActivity(
+                                    Intent(ctx, QuickGroupsActivity::class.java)
+                                        .putExtra("catalog", r.catalog).putExtra("vehicleId", r.vehicleId).putExtra("ssd", r.ssd)
+                                        .putExtra("brand", r.brand ?: "").putExtra("name", r.name ?: "")
+                                        .putExtra("query", quickQuery)
+                                )
+                                finish()
+                            }
                             com.example.myapplication.Analytics.event("vehicle_search", mapOf(
                                 "kind" to when {
                                     com.example.myapplication.laximo.normalizeRuPlate(vin) != null -> "plate"

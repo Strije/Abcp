@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -268,6 +269,9 @@ private fun HomeScreen(
         // Новости и акции — страницы сайта news1…news4 (что положено на сайт, то и видно)
         NewsCarousel()
 
+        // Машина из гаража — подбор в одно касание, без ввода VIN
+        if (!guest) MyCarCard(onOpenGarage = { onOpenTab(HomeTab.Garage) })
+
         // Баланс отдельно от пополнения; данные — с нашего сервера (в клиентском API ABCP их нет)
         finance?.let { f ->
             val value = f.balance - f.debt // долг по заказам — со знаком минус, как на счёте
@@ -465,5 +469,42 @@ fun LoginPrompt(section: String, onLogin: () -> Unit) {
         Text("Войдите или зарегистрируйтесь, чтобы заказывать, видеть свои заказы и гараж.")
         Spacer(Modifier.height(16.dp))
         Button(onClick = onLogin, modifier = Modifier.fillMaxWidth()) { Text("Войти") }
+    }
+}
+
+/** Разделы быстрого подбора: слово ищется по названиям групп каталога Laximo */
+private val QUICK_PARTS = listOf("Фильтры" to "фильтр", "Тормоза" to "тормоз", "Подвеска" to "подвеск", "Свечи" to "свеч", "Ремни" to "ремень")
+
+@Composable
+private fun MyCarCard(onOpenGarage: () -> Unit) {
+    val ctx = LocalContext.current
+    var car by remember { mutableStateOf(com.example.myapplication.abcp.MemoryCache.garage?.firstOrNull()) }
+    LaunchedEffect(Unit) {
+        runCatching { loadGarage(ctx) }.getOrNull()?.let {
+            com.example.myapplication.abcp.MemoryCache.garage = it
+            car = it.firstOrNull()
+        }
+    }
+    val c = car ?: return
+    fun open(query: String?) {
+        ctx.startActivity(
+            Intent(ctx, VinSearchActivity::class.java).putExtra("prefillVin", c.vin)
+                .apply { if (query != null) putExtra("quickQuery", query) }
+        )
+    }
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Моя машина", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(c.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
+                }
+                TextButton(onClick = onOpenGarage) { Text("Гараж") }
+            }
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QUICK_PARTS.forEach { (title, q) -> AssistChip(onClick = { open(q) }, label = { Text(title) }) }
+                AssistChip(onClick = { open(null) }, label = { Text("Все запчасти") })
+            }
+        }
     }
 }

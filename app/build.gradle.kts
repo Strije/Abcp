@@ -129,6 +129,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Распознавание текста с фото (VIN, госномер) прямо на телефоне, без интернета и Google-сервисов
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    // Штрихкоды на упаковке («Фото упаковки» в поиске) — тоже на телефоне
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     // Push-уведомления RuStore (доставка через RuStore или приложения VK, без Google)
     implementation("ru.rustore.sdk:pushclient:7.5.0")
     // Версия из RuStore: обновление через RuStore и просьба оценить приложение

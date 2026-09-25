@@ -39,4 +39,14 @@ class SmartSearchTest {
         assertTrue(passwordProblem("test123456")!!.contains("заглавная"))
         assertTrue(passwordProblem("Ab1")!!.contains("8 символов"))
     }
+
+    @Test
+    fun articleFromLabel() {
+        val text = "MANN-FILTER\nW 712/75\nOil filter\nMade in Germany\n12.03.2024\nQty 1"
+        val c = extractArticleCandidates(text, listOf("4011558734602"))
+        assertEquals("4011558734602", c.first())  // штрихкод — первым
+        assertTrue(c.any { it.replace(" ", "") == "W712/75" })
+        assertTrue(c.none { it == "12.03.2024" })
+        assertTrue(extractArticleCandidates("OC90").contains("OC90"))
+    }
 }

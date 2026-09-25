@@ -69,6 +69,39 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
 
     LaunchedEffect(Unit) { if (!shop.isGuest) history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
 
+    // «Фото упаковки»: штрихкоды и напечатанный текст → варианты артикула на выбор
+    var scanMenu by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+    var candidates by remember { mutableStateOf<List<String>?>(null) }
+    val photoUri = remember {
+        val f = java.io.File(ctx.cacheDir, "scan/label.jpg").apply { parentFile?.mkdirs() }
+        androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+    }
+    fun recognizeLabel(uri: android.net.Uri) {
+        scanning = true
+        error = null
+        scope.launch {
+            try {
+                val text = recognizeText(ctx, uri)
+                val found = extractArticleCandidates(text, scanBarcodes(ctx, uri))
+                com.example.myapplication.Analytics.event("label_scan", mapOf("found" to found.size))
+                if (found.isEmpty()) error = "На фото не нашлось номера. Снимите этикетку ближе и ровнее, при хорошем свете."
+                else candidates = found
+            } catch (e: Exception) {
+                com.example.myapplication.Analytics.error("Поиск → фото упаковки", e)
+                error = "Не удалось распознать фото. Попробуйте ещё раз."
+            } finally {
+                scanning = false
+            }
+        }
+    }
+    val takePhoto = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.TakePicture()
+    ) { ok -> if (ok) recognizeLabel(photoUri) }
+    val pickPhoto = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { recognizeLabel(it) } }
+
     fun search() {
         val n = query.trim()
         if (n.isBlank()) return
@@ -120,12 +153,36 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 trailingIcon = {
                     if (query.isNotEmpty()) IconButton(onClick = { query = ""; brands = null; error = null }) {
                         Icon(Icons.Default.Close, "Очистить")
+                    } else Box {
+                        IconButton(onClick = { scanMenu = true }, enabled = !scanning) {
+                            Text(if (scanning) "…" else "📷", style = MaterialTheme.typography.titleLarge)
+                        }
+                        DropdownMenu(expanded = scanMenu, onDismissRequest = { scanMenu = false }) {
+                            DropdownMenuItem(text = { Text("Сфотографировать упаковку") }, onClick = { scanMenu = false; takePhoto.launch(photoUri) })
+                            DropdownMenuItem(text = { Text("Выбрать фото из галереи") }, onClick = { scanMenu = false; pickPhoto.launch("image/*") })
+                        }
                     }
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { search() }),
                 modifier = Modifier.fillMaxWidth()
             )
+
+            candidates?.let { list ->
+                AlertDialog(
+                    onDismissRequest = { candidates = null },
+                    title = { Text("Какой номер искать?") },
+                    text = {
+                        Column {
+                            list.forEach { c ->
+                                TextButton(onClick = { candidates = null; query = c.replace(" ", ""); search() }) { Text(c) }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = { TextButton(onClick = { candidates = null }) { Text("Отмена") } }
+                )
+            }
 
             when {
                 loading -> Box(Modifier.fillMaxWidth().padding(24.dp)) {

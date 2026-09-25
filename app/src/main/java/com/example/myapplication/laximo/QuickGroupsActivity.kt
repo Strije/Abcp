@@ -43,14 +43,14 @@ class QuickGroupsActivity : ComponentActivity() {
         val car = "${intent.getStringExtra("brand").orEmpty()} ${intent.getStringExtra("name").orEmpty()}".trim()
 
         setContent {
-            com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo, car) }
+            com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo, car, intent.getStringExtra("query").orEmpty()) }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository, car: String) {
+private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository, car: String, initialQuery: String = "") {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -60,7 +60,7 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
 
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf(initialQuery) }
     var expandedIds by remember { mutableStateOf(emptySet<Long>()) }
 
     var reload by remember { mutableIntStateOf(0) }
