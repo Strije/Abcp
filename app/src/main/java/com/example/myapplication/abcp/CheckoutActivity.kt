@@ -173,6 +173,14 @@ class CheckoutActivity : ComponentActivity() {
                                                     basketIds = basket.map { it.basketId }
                                                 )
                                                 CartState.refresh(shop)
+                                                // Пометка для статистики — в фоне, на оформление не влияет
+                                                val numbers = done.orEmpty()
+                                                val app = applicationContext
+                                                kotlinx.coroutines.GlobalScope.launch {
+                                                    numbers.forEach { n ->
+                                                        runCatching { com.example.myapplication.server.AppServer(app).markOrderFromApp(n) }
+                                                    }
+                                                }
                                                 com.example.myapplication.Analytics.event("order_placed", mapOf("positions" to basket.size))
                                             } catch (e: Exception) {
                                                 com.example.myapplication.Analytics.error("Оформление → подтвердить заказ", e)

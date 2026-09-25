@@ -79,6 +79,15 @@ class AppServer(ctx: Context) {
         return post("/v1/reliable", body.toString()).asJsonObject["reliable"].asJsonArray.map { it.asString }.toSet()
     }
 
+    /** Служебная заметка к заказу «оформлен через приложение» — для статистики магазина, клиент её не видит. */
+    suspend fun markOrderFromApp(number: String) {
+        call { token ->
+            Request.Builder().url("$base/v1/orders/$number/app-note")
+                .post("{}".toRequestBody(JSON)).auth(token)
+                .header("X-App-Version", BuildConfig.VERSION_NAME).build()
+        }
+    }
+
     // ---------- push RuStore ----------
 
     /** Возвращает, включён ли push на сервере. */

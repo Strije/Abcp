@@ -4,6 +4,7 @@ POST /v1/session              логин клиента → токен (паро
 GET  /v1/me/finance           баланс, долг, кредитный лимит, профиль (уровень цен)
 GET  /v1/orders/{number}/pay  ссылка на оплату заказа (только своего и неоплаченного)
 GET  /v1/topup?amount=        ссылка на пополнение баланса
+POST /v1/orders/{number}/app-note  служебная заметка «оформлен через приложение» (для статистики)
 POST /v1/images               картинки товаров для выдачи
 POST /v1/reliable             достоверные аналоги (звёздочка)
 POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
@@ -206,6 +207,22 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             return {"url": await a.payment_link(number), "amount": debt}
         except AbcpError as e:
             fail(e)
+
+    @app.post("/v1/orders/{number}/app-note")
+    async def app_note(number: str, uid: str = Depends(current_uid), x_app_version: str = Header(default="")):
+        if not number.isdigit() or len(number) > 20:
+            raise HTTPException(400, "Неверный номер заказа")
+        a: Abcp = state["abcp"]
+        try:
+            order = await a.order(number)
+            if str(order.get("userId")) != uid:  # только к своему заказу
+                raise HTTPException(404, "Заказ не найден")
+            version = x_app_version[:20] if x_app_version else ""
+            added = await a.add_app_note(number, f"{a.APP_NOTE} Автодруг {version} (Android)".replace("  ", " "))
+        except AbcpError as e:
+            fail(e)
+        log.info("app note %s added=%s", number, added)
+        return {"added": added}
 
     @app.get("/v1/topup")
     async def topup(amount: float, uid: str = Depends(current_uid)):

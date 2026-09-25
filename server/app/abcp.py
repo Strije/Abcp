@@ -122,6 +122,25 @@ class Abcp:
     async def order(self, number: str) -> dict:
         return await self._get("cp/order", self._admin({"number": number}))
 
+    APP_NOTE = "📱 Оформлен через приложение"
+
+    async def add_app_note(self, number: str, text: str) -> bool:
+        """Служебная заметка к заказу (видят только сотрудники). Повторно не добавляем. True — добавлена."""
+        order = await self.order(number)
+        notes = order.get("notes") or []
+        if any(self.APP_NOTE in str((n or {}).get("value", "")) for n in (notes if isinstance(notes, list) else items(notes))):
+            return False
+        # Редактирование заказа: передаём только номер и новую заметку — позиции не трогаем
+        data = self._admin({"order[number]": number, "order[notes][0][value]": text})
+        r = await self.http.post("cp/order", data=dict(data))
+        if r.status_code >= 400:
+            try:
+                msg = r.json().get("errorMessage")
+            except ValueError:
+                msg = None
+            raise AbcpError(r.status_code, _msg(msg) or "ABCP не сохранил заметку")
+        return True
+
     async def payment_link(self, number: str) -> str:
         data = await self._get("cp/payment/token/", self._admin({"number": number}))
         link = data.get("paymentLink") if isinstance(data, dict) else None

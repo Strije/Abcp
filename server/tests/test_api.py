@@ -377,3 +377,33 @@ def test_manager_button_grants_access_and_pushes(tmp_path):
         assert pushes[-1]["message"]["data"]["type"] == "access_granted"
         assert c.get("/v1/access-request", headers=h).json()["pending"] is False
         assert any(m == "editMessageText" and "Оля".encode() in b for m, b in tg)
+
+
+
+def test_app_note_only_own_order_and_once(tmp_path):
+    from dataclasses import replace
+    posted = []
+    notes = []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        p = request.url.path.strip("/")
+        if p == "cp/order" and request.method == "POST":
+            f = dict(httpx.QueryParams(request.content.decode()))
+            assert "order[positions][0][id]" not in f  # позиции не трогаем
+            posted.append(f)
+            notes.append({"value": f["order[notes][0][value]"]})
+            return httpx.Response(200, json={"number": f["order[number]"]})
+        if p == "cp/order":
+            q = dict(request.url.params)
+            owner = {"5001": "101", "5002": "999"}.get(q.get("number"))
+            return httpx.Response(200, json={"number": q.get("number"), "userId": owner, "notes": notes})
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path))
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        h = {**login(c), "X-App-Version": "1.0.55"}
+        assert c.post("/v1/orders/5002/app-note", headers=h).status_code == 404  # чужой
+        assert c.post("/v1/orders/5001/app-note", headers=h).json() == {"added": True}
+        assert "приложение" in posted[0]["order[notes][0][value]"] and "1.0.55" in posted[0]["order[notes][0][value]"]
+        assert c.post("/v1/orders/5001/app-note", headers=h).json() == {"added": False}  # второй раз — нет
+        assert len(posted) == 1
