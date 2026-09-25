@@ -44,7 +44,8 @@ class AppUpdate(private val ctx: Context) {
 
     /** Новая сборка или null. Без [force] — не чаще раза в 6 часов и не после «Позже» на сутки. */
     suspend fun check(force: Boolean): Release? = withContext(Dispatchers.IO) {
-        if (base.isBlank()) return@withContext null
+        // Версию из RuStore обновляет сам RuStore
+        if (!BuildConfig.SELF_UPDATE || base.isBlank()) return@withContext null
         val now = System.currentTimeMillis()
         if (!force && now - prefs.getLong(LAST_CHECK, 0) < 6 * HOUR) return@withContext null
         val text = http.newCall(Request.Builder().url("$base/v1/app/latest").build()).execute().use {

@@ -55,6 +55,21 @@ android {
         }
     }
 
+    // Две версии из одного кода и с одной подписью (как у всех, кто в магазинах):
+    // rustore — обновляет сам RuStore, без своего автообновления и без права ставить APK;
+    // direct  — раздача напрямую (ссылка, сайт), обновляется с нашего сервера.
+    flavorDimensions += "store"
+    productFlavors {
+        create("rustore") {
+            dimension = "store"
+            buildConfigField("Boolean", "SELF_UPDATE", "false")
+        }
+        create("direct") {
+            dimension = "store"
+            buildConfigField("Boolean", "SELF_UPDATE", "true")
+        }
+    }
+
     buildTypes {
         release {
             // Без боевого ключа (локальная сборка) — подписываем debug-ключом, чтобы сборка не падала

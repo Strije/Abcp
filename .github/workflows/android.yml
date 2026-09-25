@@ -52,7 +52,7 @@ jobs:
       - name: Build release APK
         run: |
           set -o pipefail
-          ./gradlew assembleRelease testDebugUnitTest --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleDirectRelease assembleRustoreRelease testDirectDebugUnitTest --stacktrace 2>&1 | tee build.log
 
       # Ошибки компиляции — в аннотации, их видно без входа в GitHub
       - name: Report errors
@@ -64,7 +64,7 @@ jobs:
       - name: Signing fingerprint
         run: |
           AS=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
-          APK=app/build/outputs/apk/release/app-release.apk
+          APK=app/build/outputs/apk/direct/release/app-direct-release.apk
           $AS verify --print-certs $APK | grep -i 'SHA-256' | while IFS= read -r l; do echo "::notice::$l"; done
           if $AS verify --print-certs $APK | grep -qi '4a7f45280644015c'; then
             echo "RELEASE_SIGNED=1" >> "$GITHUB_ENV"
@@ -83,11 +83,17 @@ jobs:
           if [ -z "$APP_UPLOAD_TOKEN" ]; then echo "::warning::APP_UPLOAD_TOKEN не задан — обновление не опубликовано"; exit 0; fi
           N=$GITHUB_RUN_NUMBER
           Q="versionName=$(jq -rn --arg v "1.0.$N" '$v|@uri')&notes=$(printf '%s' "$NOTES" | grep -v '^Co-Authored-By' | head -c 1500 | jq -sRr @uri)"
-          curl -fsS --retry 3 -X PUT -H "X-Upload-Token: $APP_UPLOAD_TOKEN"             -H "Content-Type: application/vnd.android.package-archive"             --data-binary @app/build/outputs/apk/release/app-release.apk             "https://9077635-oy742028.twc1.net:8446/v1/app/apk/$N?$Q" > /dev/null
+          curl -fsS --retry 3 -X PUT -H "X-Upload-Token: $APP_UPLOAD_TOKEN"             -H "Content-Type: application/vnd.android.package-archive"             --data-binary @app/build/outputs/apk/direct/release/app-direct-release.apk             "https://9077635-oy742028.twc1.net:8446/v1/app/apk/$N?$Q" > /dev/null
           echo "::notice::Обновление 1.0.$N опубликовано на сервере"
 
+      # direct — для раздачи напрямую (с автообновлением), rustore — загружать в Консоль RuStore
       - uses: actions/upload-artifact@v4
         with:
-          name: avtodrug92-release
-          path: app/build/outputs/apk/release/*.apk
+          name: avtodrug92-direct
+          path: app/build/outputs/apk/direct/release/*.apk
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avtodrug92-rustore
+          path: app/build/outputs/apk/rustore/release/*.apk
           retention-days: 7

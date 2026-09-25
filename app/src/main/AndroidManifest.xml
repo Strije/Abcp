@@ -4,8 +4,6 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Автообновление: установка скачанного APK новой версии -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Поворот экрана и смена темы не пересоздают экраны: Compose перерисует сам, введённое не теряется -->
     <application

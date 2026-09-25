@@ -132,7 +132,7 @@ class MainShellActivity : ComponentActivity() {
                 val updater = remember { AppUpdate(this@MainShellActivity) }
                 var update by remember { mutableStateOf<Release?>(null) }
                 // Тихая проверка при запуске: ошибки сети здесь пользователю не показываем
-                LaunchedEffect(Unit) { update = runCatching { updater.check(force = false) }.getOrNull() }
+                LaunchedEffect(Unit) { if (BuildConfig.SELF_UPDATE) update = runCatching { updater.check(force = false) }.getOrNull() }
                 update?.let { r -> UpdateDialog(r) { updater.snooze(r); update = null } }
                 val toLogin = {
                     startActivity(Intent(this@MainShellActivity, MainActivity::class.java)); finish()
@@ -349,7 +349,8 @@ private fun AppVersionRow(onCheckUpdate: suspend () -> String?) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
-        TextButton(enabled = !checking, onClick = {
+        // В версии из RuStore обновления — через RuStore, своей кнопки нет
+        if (BuildConfig.SELF_UPDATE) TextButton(enabled = !checking, onClick = {
             checking = true
             scope.launch { message = onCheckUpdate(); checking = false }
         }) { Text(if (checking) "Проверяем…" else "Проверить обновления") }
