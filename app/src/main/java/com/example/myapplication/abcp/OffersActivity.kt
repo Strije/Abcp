@@ -85,6 +85,13 @@ class OffersActivity : ComponentActivity() {
                 var advices by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
 
                 var onlyConfirmed by remember { mutableStateOf(false) }
+                // Гарантии избранных брендов (с сервера) и «только с гарантией»
+                var warranties by remember { mutableStateOf<Map<String, BrandWarranty>>(emptyMap()) }
+                var onlyWarranty by remember { mutableStateOf(false) }
+                var warrantyShown by remember { mutableStateOf<BrandWarranty?>(null) }
+                var starsShown by remember { mutableStateOf<Int?>(null) }
+                LaunchedEffect(Unit) { warranties = Warranties.load() }
+                fun warrantyOf(o: Offer) = warranties[Warranties.key(o.brand)]
 
                 LaunchedEffect(Unit) { if (!shop.isGuest) advices = runCatching { shop.advices(brand, number) }.getOrDefault(emptyList()) }
                 // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
@@ -118,7 +125,7 @@ class OffersActivity : ComponentActivity() {
                 val cmp = sort.comparator()
                 // Одна выдача: искомый номер закреплён сверху, ниже аналоги. Сортировка и фильтры — на весь список.
                 // Группы «бренд + номер»: внутри — по выбранной сортировке, сами группы — по лучшему предложению
-                fun grouped(list: List<Offer>) = list.filter { term.accepts(it) }
+                fun grouped(list: List<Offer>) = list.filter { term.accepts(it) && (!onlyWarranty || warrantyOf(it) != null) }
                     .groupBy { "${it.brand}|${it.numberFix}" }
                     .values.map { it.sortedWith(cmp) }
                     .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
@@ -157,10 +164,16 @@ class OffersActivity : ComponentActivity() {
                                     label = { Text(t.title) }
                                 )
                             }
+                            if (offers.any { warrantyOf(it) != null }) {
+                                FilterChip(
+                                    selected = onlyWarranty, onClick = { onlyWarranty = !onlyWarranty },
+                                    label = { Text("🛡 С гарантией") }
+                                )
+                            }
                             if (analogs.any { it.confirm >= 2 }) {
                                 FilterChip(
                                     selected = onlyConfirmed, onClick = { onlyConfirmed = !onlyConfirmed },
-                                    label = { Text("★ От 2 поставщиков") }
+                                    label = { Text("★ Ходовые") }
                                 )
                             }
                         }
@@ -189,7 +202,8 @@ class OffersActivity : ComponentActivity() {
                                 if (ownGroups.isNotEmpty()) {
                                     item(key = "h_own") { SectionTitle("Вы искали") }
                                     items(ownGroups, key = { "o_" + it.first().brand + it.first().numberFix }) { list ->
-                                        ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
+                                        ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { picked = it },
+                                            onWarranty = { warrantyShown = it }, onStars = { starsShown = it })
                                     }
                                 } else if (own.isNotEmpty() || term != null) {
                                     item(key = "h_own_empty") {
@@ -210,7 +224,8 @@ class OffersActivity : ComponentActivity() {
                                         SectionTitle("Аналоги · ${analogGroups.size} арт., $n предл.")
                                     }
                                     items(analogGroups, key = { "a_" + it.first().brand + it.first().numberFix }) { list ->
-                                        ArticleCard(list, onImage = { viewer = it }, onPick = { picked = it })
+                                        ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { picked = it },
+                                            onWarranty = { warrantyShown = it }, onStars = { starsShown = it })
                                     }
                                 }
                                 if (!showAll) item {
@@ -223,6 +238,21 @@ class OffersActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+
+                warrantyShown?.let { WarrantySheet(it) { warrantyShown = null } }
+                starsShown?.let { n ->
+                    AlertDialog(
+                        onDismissRequest = { starsShown = null },
+                        title = { Text("★ Ходовая позиция") },
+                        text = {
+                            Text(
+                                "Эту деталь сейчас предлагают $n разных поставщика(ов). Значит, её охотно возят и покупают — " +
+                                    "обычно это проверенный рынком вариант. Склады нашего магазина считаются одним поставщиком."
+                            )
+                        },
+                        confirmButton = { TextButton(onClick = { starsShown = null }) { Text("Понятно") } }
+                    )
                 }
 
                 picked?.let { o ->
@@ -267,7 +297,10 @@ class OffersActivity : ComponentActivity() {
 
 /** Артикул: фото, номер, бренд, описание и под ним все предложения. */
 @Composable
-private fun ArticleCard(list: List<Offer>, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit) {
+private fun ArticleCard(
+    list: List<Offer>, warranty: BrandWarranty?, onImage: (List<String>) -> Unit, onPick: (Offer) -> Unit,
+    onWarranty: (BrandWarranty) -> Unit, onStars: (Int) -> Unit
+) {
     val head = list.first()
     val images = list.flatMap { it.images }.distinct()
     // Сразу — 3 лучших предложения (список уже отсортирован), остальные по кнопке: иначе следующий артикул уезжает вниз
@@ -289,13 +322,16 @@ private fun ArticleCard(list: List<Offer>, onImage: (List<String>) -> Unit, onPi
                 Text(head.number, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(head.brand, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                    // ★N — этот бренд+артикул есть у N разных поставщиков (склады АвтоДруг — один поставщик)
+                    // ★ — этот бренд+артикул есть у 2+ разных поставщиков; число — только в пояснении по нажатию
                     val n = list.maxOf { it.confirm }
                     if (n >= 2) {
-                        Text("  ★$n", color = Color(0xFFF2B01E), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        Text(" у $n поставщ.", style = MaterialTheme.typography.labelSmall, color = DeliveryColors.later)
+                        Text(
+                            "  ★", color = Color(0xFFF2B01E), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { onStars(n) }
+                        )
                     }
                 }
+                warranty?.let { w -> WarrantyBadge(w) { onWarranty(w) } }
                 if (head.description.isNotBlank()) {
                     Text(head.description, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }

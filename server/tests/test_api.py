@@ -477,3 +477,11 @@ def test_confirm_counts_table():
     # Хрусталёва и ПОР — разные distributorId, но это склады АвтоДруг: один поставщик
     assert confirm_counts([r("Z", "OF4063", "1591411", deadlineReplace="Хрусталева 111 (самовывоз)", **own),
                            r("Z", "OF4063", "1791689", deadlineReplace="ПОР20 (самовывоз)", **own)]) == [1, 1]
+
+
+
+def test_brand_warranty(client):
+    d = client.get("/v1/brands/warranty").json()
+    z = d["brands"]["ZEKKERT"]
+    assert z["rating"] == 4.5 and "1 год" in z["warranty"] and d["page"].endswith("/garantija")
+    assert any(c["url"].startswith("http") for b in d["brands"].values() for c in b["conditions"])

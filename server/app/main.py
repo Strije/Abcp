@@ -14,12 +14,14 @@ DELETE /v1/access-request     доступ появился — закрыть �
 POST /v1/push/token           push-токен устройства (RuStore) для уведомлений о заказах
 DELETE /v1/push/token         забыть токен (выход из аккаунта)
 POST /v1/admin/push-test      тестовый push клиенту (X-Upload-Token)
+GET  /v1/brands/warranty       гарантии избранных брендов (срок, рейтинг, условия) — app/data/brand_warranty.json
 GET  /v1/app/latest           последняя сборка приложения (автообновление)
 GET  /v1/app/apk/{code}       скачать сборку
 PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
 """
 import asyncio
 import hmac
+import json
 import logging
 import time
 from collections import defaultdict, deque
@@ -158,6 +160,19 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if not uid:
             raise HTTPException(401, "Нужно войти заново")
         return uid
+
+    # Гарантии избранных брендов: панель ABCP «Избранные бренды» + avtodrug92.ru/garantija.
+    # Меняются в файле на сервере — приложение подхватит без новой версии.
+    warranty_file = Path(__file__).parent / "data" / "brand_warranty.json"
+
+    @app.get("/v1/brands/warranty")
+    async def brand_warranty():
+        try:
+            data = json.loads(warranty_file.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            data = {"page": "", "brands": {}}
+        return Response(json.dumps(data, ensure_ascii=False), media_type="application/json",
+                        headers={"Cache-Control": "public, max-age=3600"})
 
     @app.get("/health")
     async def health():
