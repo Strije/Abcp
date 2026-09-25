@@ -94,6 +94,7 @@ private fun UnitDetailsScreen(
     }
 
     fun onCartClick(oem: String) {
+        com.example.myapplication.Analytics.event("catalog_prices", mapOf("catalog" to ctx.catalog))
         // OEM со схемы → поиск ABCP: бренды → цены и аналоги
         context.startActivity(
             Intent(context, SearchActivity::class.java).apply {

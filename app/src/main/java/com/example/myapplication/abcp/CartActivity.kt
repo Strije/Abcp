@@ -96,7 +96,10 @@ fun CartScreen(reloadKey: Int) {
                         }
                         Button(
                             enabled = busy == null,
-                            onClick = { ctx.startActivity(Intent(ctx, CheckoutActivity::class.java)) }
+                            onClick = {
+                                com.example.myapplication.Analytics.event("checkout_open", mapOf("positions" to items.size))
+                                ctx.startActivity(Intent(ctx, CheckoutActivity::class.java))
+                            }
                         ) { Text("Оформить") }
                     }
                 }

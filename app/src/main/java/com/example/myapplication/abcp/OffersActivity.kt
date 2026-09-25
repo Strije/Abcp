@@ -92,6 +92,7 @@ class OffersActivity : ComponentActivity() {
                 // Достоверные аналоги (звёздочка, как на сайте) — с сервера, из кроссов articles/info
                 LaunchedEffect(Unit) { if (!shop.isGuest) reliable = runCatching { server.reliable(brand, number) }.getOrDefault(emptySet()) }
 
+                LaunchedEffect(Unit) { com.example.myapplication.Analytics.event("offers_open", mapOf("brand" to brand, "number" to number, "guest" to shop.isGuest)) }
                 LaunchedEffect(showAll, reload) {
                     loading = true
                     error = null
@@ -222,6 +223,7 @@ class OffersActivity : ComponentActivity() {
                             scope.launch {
                                 try {
                                     shop.addToBasket(o, qty)
+                                    com.example.myapplication.Analytics.event("add_to_cart", mapOf("brand" to o.brand, "number" to o.number, "qty" to qty, "in_store" to o.inStore))
                                     CartState.refresh(shop)
                                     Toast.makeText(this@OffersActivity, "Добавлено в корзину", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {

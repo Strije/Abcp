@@ -49,7 +49,7 @@ class ChatActivity : ComponentActivity() {
     }
 
     private var loading by mutableStateOf(true)
-    private var progress by mutableFloatStateOf(0f)
+    private var pageProgress by mutableFloatStateOf(0f)
     private var failed by mutableStateOf(false)
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -93,7 +93,7 @@ class ChatActivity : ComponentActivity() {
             }
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    progress = newProgress / 100f
+                    pageProgress = newProgress / 100f
                 }
 
                 override fun onShowFileChooser(
@@ -108,6 +108,7 @@ class ChatActivity : ComponentActivity() {
                 }
             }
             loadUrl(StoreInfo.managerChatUrl)
+            com.example.myapplication.Analytics.event("chat_open", mapOf("guest" to !SessionManager(this@ChatActivity).isLoggedIn()))
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -152,7 +153,7 @@ class ChatActivity : ComponentActivity() {
                 ) { padding ->
                     Box(Modifier.padding(padding).fillMaxSize()) {
                         AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
-                        if (loading && !failed) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                        if (loading && !failed) LinearProgressIndicator(progress = { pageProgress }, modifier = Modifier.fillMaxWidth())
                         if (failed) Surface(Modifier.fillMaxSize()) {
                             Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
                                 ErrorState(

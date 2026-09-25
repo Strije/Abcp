@@ -18,7 +18,7 @@ fun abcpErrorCode(rawBody: String?): Int? = parseAbcpError(rawBody)?.errorCode
 fun prettifyAbcpError(rawBody: String?): String {
     val err = parseAbcpError(rawBody)
 
-    val message = err?.errorMessage?.takeIf { it.isNotBlank() }
+    val message = cleanAbcpMessage(err?.errorMessage)
 
     return when (err?.errorCode) {
         // IP-фильтр у магазина выключен, так что 103 — это не включённые клиенту права на API

@@ -83,6 +83,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 val found = shop.brands(n).sortedByDescending { it.available }
                 brands = found
                 // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
+                com.example.myapplication.Analytics.event("search", mapOf("number" to n, "found" to found.size, "guest" to shop.isGuest))
                 autoPickBrand(found, preferredBrand)?.let { openOffers(ctx, it) }
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Поиск → бренды", e)

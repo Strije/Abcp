@@ -151,6 +151,7 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
 
 /** Ссылку на оплату даёт наш сервер (cp/payment/token доступен только API-админу), открываем в браузере. */
 fun payOrder(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope, server: AppServer, number: String) {
+    com.example.myapplication.Analytics.event("pay_order")
     android.widget.Toast.makeText(ctx, "Открываем оплату…", android.widget.Toast.LENGTH_SHORT).show()
     scope.launch {
         try {

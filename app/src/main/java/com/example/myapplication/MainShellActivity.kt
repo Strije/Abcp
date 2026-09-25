@@ -314,6 +314,7 @@ private fun HomeScreen(
             showTopup = false
             scope.launch {
                 try {
+                    com.example.myapplication.Analytics.event("topup")
                     ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(server.topupLink(amount))))
                 } catch (e: Exception) {
                     com.example.myapplication.Analytics.error("Главная → пополнение", e)

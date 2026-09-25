@@ -68,6 +68,14 @@ class VinSearchActivity : ComponentActivity() {
                                 repo.findVehicleAny(vin)
                             }
                             results = list
+                            com.example.myapplication.Analytics.event("vehicle_search", mapOf(
+                                "kind" to when {
+                                    com.example.myapplication.laximo.normalizeRuPlate(vin) != null -> "plate"
+                                    looksLikeVin(vin) -> "vin"
+                                    else -> "frame"
+                                },
+                                "found" to list.size
+                            ))
                         } catch (e: Exception) {
                             com.example.myapplication.Analytics.error("Подбор → поиск авто", e)
                             Log.e("VIN_SEARCH", "EX", e)
@@ -92,6 +100,7 @@ class VinSearchActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             val codes = extractVehicleCodes(recognizeText(ctx, uri))
+                            com.example.myapplication.Analytics.event("photo_scan", mapOf("codes" to codes.size))
                             when (codes.size) {
                                 0 -> error = "На фото не нашлось VIN или номера. Попробуйте снять ближе и ровнее."
                                 1 -> { vinText = codes[0].value; onSearchClick() }
@@ -247,6 +256,7 @@ class VinSearchActivity : ComponentActivity() {
                                                             try {
                                                                 com.example.myapplication.abcp.AbcpShop(SessionManager(ctx))
                                                                     .addToGarage("${r.brand.orEmpty()} ${r.name.orEmpty()}".trim(), value, kind)
+                                                                com.example.myapplication.Analytics.event("garage_add", mapOf("kind" to kind))
                                                                 android.widget.Toast.makeText(ctx, "Машина добавлена в гараж", android.widget.Toast.LENGTH_SHORT).show()
                                                             } catch (e: Exception) {
                                                                 com.example.myapplication.Analytics.error("Подбор → в гараж", e)

@@ -141,6 +141,7 @@ fun LoginScreen(
                 val user = resp.body()
                 if (resp.isSuccessful && user != null) {
                     session.save(l, passMd5)
+                    com.example.myapplication.Analytics.event("login")
                     onSuccess(user)
                 } else {
                     error = prettifyAbcpError(resp.errorBody()?.string())

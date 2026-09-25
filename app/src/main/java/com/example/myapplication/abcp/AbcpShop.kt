@@ -237,7 +237,7 @@ class AbcpShop(private val session: SessionManager) {
         val r = call(retry = false) { api.basketAdd(fields) }.asJsonObjectOrNull()
         if (r?.str("status") == "0") {
             val pos = r.get("positions")?.let { items(it) }?.firstOrNull()?.asJsonObjectOrNull()
-            throw AbcpException(pos?.str("errorMessage") ?: "Не удалось изменить корзину")
+            throw AbcpException(cleanAbcpMessage(pos?.str("errorMessage")) ?: "Не удалось изменить корзину")
         }
     }
 
@@ -289,7 +289,7 @@ class AbcpShop(private val session: SessionManager) {
         // Даже при status=0 часть позиций может уйти в заказ — смотрим orders
         val numbers = r.get("orders")?.let { items(it) }.orEmpty()
             .mapNotNull { it.asJsonObjectOrNull()?.str("number") }
-        if (numbers.isEmpty()) throw AbcpException(r.str("errorMessage") ?: "Заказ не оформлен")
+        if (numbers.isEmpty()) throw AbcpException(cleanAbcpMessage(r.str("errorMessage")) ?: "Заказ не оформлен")
         return numbers
     }
 
@@ -383,7 +383,7 @@ private fun JsonElement.toBasketItem(): BasketItem? {
         itemKey = o.str("itemKey").orEmpty(),
         positionId = o.str("positionId").orEmpty(),
         packing = o.int("packing").coerceAtLeast(1),
-        errorMessage = o.str("errorMessage")
+        errorMessage = cleanAbcpMessage(o.str("errorMessage"))
     )
 }
 
@@ -410,6 +410,25 @@ fun parseSupplierBadges(html: String?): List<SupplierBadge> {
     if (icons.isNotEmpty()) return icons
     val text = stripHtml(html)
     return if (text.isBlank()) emptyList() else listOf(SupplierBadge(text, BadgeKind.Info))
+}
+
+/**
+ * Текст ошибки ABCP для человека: сайт присылает HTML («Внимание!<br> цена и/или наличие…»)
+ * и служебную приписку «The resource is blocked». Переносы <br> сохраняем, остальную разметку убираем.
+ */
+fun cleanAbcpMessage(s: String?): String? {
+    if (s.isNullOrBlank()) return null
+    val text = unescape(
+        s.replace(Regex("(?i)<br\\s*/?>|</p>|</div>|</li>"), "\n").replace(Regex("<[^>]+>"), " ")
+    ).replace(Regex("(?i)the resource is blocked\\.?"), "")
+    return text.lines().map { it.replace(Regex("\\s+"), " ").trim() }.filter { it.isNotEmpty() }
+        .joinToString("\n").ifBlank { null }
+}
+
+/** ABCP не оформил заказ, потому что у позиций в корзине изменились цена или наличие. */
+fun isBasketChanged(message: String?): Boolean {
+    val m = message?.lowercase() ?: return false
+    return "изменил" in m && ("цен" in m || "налич" in m)
 }
 
 fun stripHtml(s: String): String =

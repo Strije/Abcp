@@ -46,6 +46,8 @@ class CheckoutActivity : ComponentActivity() {
                 var comment by remember { mutableStateOf("") }
                 var reload by remember { mutableIntStateOf(0) }
                 var showItems by remember { mutableStateOf(false) }
+                // Сообщение, которое переживает перечитывание корзины (например, «изменились цены»)
+                var notice by remember { mutableStateOf<String?>(null) }
 
                 LaunchedEffect(reload) {
                     loading = true
@@ -107,6 +109,11 @@ class CheckoutActivity : ComponentActivity() {
                                 val total = basket.sumOf { it.price * it.quantity }
                                 Text("${basket.size} поз. на ${formatRub(total)}", style = MaterialTheme.typography.titleMedium)
                                 // Что заказываем — свёрнуто; позиции с замечанием ABCP (нет в наличии, цена) видны сразу
+                                notice?.let {
+                                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                                        Text(it, Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                                    }
+                                }
                                 val problems = basket.filter { !it.errorMessage.isNullOrBlank() }
                                 problems.forEach { b ->
                                     Text("⚠ ${b.brand} ${b.number}: ${b.errorMessage}", color = MaterialTheme.colorScheme.error,
@@ -169,7 +176,15 @@ class CheckoutActivity : ComponentActivity() {
                                                 com.example.myapplication.Analytics.event("order_placed", mapOf("positions" to basket.size))
                                             } catch (e: Exception) {
                                                 com.example.myapplication.Analytics.error("Оформление → подтвердить заказ", e)
-                                                error = e.message ?: "Заказ не оформлен"
+                                                if (isBasketChanged(e.message)) {
+                                                    // Цены/наличие обновились: перечитываем корзину — изменившиеся позиции получат ⚠
+                                                    notice = "Цена или наличие некоторых позиций изменились с момента, как вы их положили в корзину. " +
+                                                        "Проверьте позиции с ⚠ ниже (или удалите их в корзине) и подтвердите заказ ещё раз."
+                                                    showItems = true
+                                                    reload++
+                                                } else {
+                                                    error = e.message ?: "Заказ не оформлен"
+                                                }
                                             } finally {
                                                 sending = false
                                             }

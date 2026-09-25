@@ -6,6 +6,7 @@ import com.example.myapplication.abcp.items
 import com.example.myapplication.abcp.parseAbcpNumber
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,5 +40,14 @@ class AbcpShopTest {
         assertEquals(-4630.0, parseAbcpNumber("-4 630,00"), 0.001)
         assertEquals(4630.0, parseAbcpNumber("4630.00"), 0.001)
         assertEquals(0.0, parseAbcpNumber(null), 0.001)
+    }
+
+    @Test
+    fun abcpHtmlErrorBecomesReadable() {
+        val raw = "The resource is blocked Внимание!<br> цена и/или наличие изменилось<br/><b>Knecht OC90</b>"
+        val clean = com.example.myapplication.abcp.cleanAbcpMessage(raw)!!
+        assertEquals("Внимание!\nцена и/или наличие изменилось\nKnecht OC90", clean)
+        assertTrue(com.example.myapplication.abcp.isBasketChanged(clean))
+        assertFalse(com.example.myapplication.abcp.isBasketChanged("Неверный пароль"))
     }
 }

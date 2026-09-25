@@ -50,6 +50,7 @@ object ApiAccess {
     }
 
     suspend fun request(ctx: Context) {
+        com.example.myapplication.Analytics.event("access_request", mapOf("missing" to missing.orEmpty().joinToString(",")))
         AppServer(ctx).accessRequest(missing.orEmpty())
         val now = System.currentTimeMillis()
         prefs(ctx).edit().putLong(REQUESTED, now).apply()

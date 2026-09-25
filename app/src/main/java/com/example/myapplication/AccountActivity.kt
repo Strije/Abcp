@@ -73,7 +73,8 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
     var surname by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf(prefill.takeIf { !it.contains('@') }.orEmpty()) }
+    // Только 10 цифр после +7 — маска рисует «(978) 123-45-67»
+    var phone by remember { mutableStateOf(com.example.myapplication.ui.phoneDigits(prefill.takeIf { !it.contains('@') }.orEmpty())) }
     var exists by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
@@ -92,7 +93,11 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
     OutlinedTextField(name, { name = it }, label = { Text("Имя") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(surname, { surname = it }, label = { Text("Фамилия") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(
-        phone, { phone = it }, label = { Text("Мобильный телефон") }, placeholder = { Text("+7 978 123-45-67") },
+        phone, { phone = com.example.myapplication.ui.phoneDigits(it) },
+        label = { Text("Мобильный телефон") }, placeholder = { Text("(978) 123-45-67") },
+        prefix = { Text("+7 ") },
+        visualTransformation = com.example.myapplication.ui.RuPhoneMask,
+        supportingText = { if (phone.isNotEmpty() && phone.length < 10) Text("Ещё ${10 - phone.length} цифр") },
         singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), modifier = Modifier.fillMaxWidth()
     )
     OutlinedTextField(
@@ -137,6 +142,7 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
             scope.launch {
                 try {
                     server.register(name.trim(), surname.trim(), mobile!!, email.trim(), pass, office)
+                    com.example.myapplication.Analytics.event("register", mapOf("office" to office))
                     done = true
                 } catch (e: com.example.myapplication.server.ServerException) {
                     exists = e.code == 409
