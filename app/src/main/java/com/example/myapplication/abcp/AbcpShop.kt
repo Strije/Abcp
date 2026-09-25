@@ -87,7 +87,8 @@ data class Offer(
 
 enum class BadgeKind { Good, Bad, Info }
 
-data class SupplierBadge(val text: String, val kind: BadgeKind)
+/** icon — класс Font Awesome из HTML ABCP (house-circle-check…), color — его цвет на сайте (blue/red/yellow). */
+data class SupplierBadge(val text: String, val kind: BadgeKind, val icon: String? = null, val color: String? = null)
 
 data class BasketItem(
     val brand: String,
@@ -480,7 +481,9 @@ fun parseSupplierBadges(html: String?): List<SupplierBadge> {
             Regex("\\b(blue|green|success)\\b").containsMatchIn(cls) -> BadgeKind.Good
             else -> BadgeKind.Info
         }
-        SupplierBadge(unescape(title), kind)
+        val icon = Regex("\\bfa-(?!solid|regular|brands)([a-z0-9-]+)").find(cls)?.groupValues?.get(1)
+        val color = Regex("\\b(red|blue|yellow|green|orange|gray|grey)\\b").find(cls)?.groupValues?.get(1)
+        SupplierBadge(unescape(title), kind, icon, color)
     }.toList()
     if (icons.isNotEmpty()) return icons
     val text = stripHtml(html)

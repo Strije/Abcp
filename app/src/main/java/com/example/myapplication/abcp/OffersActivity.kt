@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
@@ -428,28 +429,44 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
     }
 }
 
-/** Значки поставщика, как на сайте: 🏠✓ надёжный, склад ✕ сторонний, ↩ без возврата, ₽ предоплата, Б/у. Текст — в шторке заказа. */
+/** Шрифт Font Awesome Free (только 5 значков, что встречаются у ABCP) — те же значки, что на сайте. */
+private val FontAwesome = androidx.compose.ui.text.font.FontFamily(androidx.compose.ui.text.font.Font(com.example.myapplication.R.font.fa_solid))
+
+/** Класс Font Awesome из HTML ABCP → символ шрифта */
+private val FA_GLYPHS = mapOf(
+    "house-circle-check" to "\ue509",        // надёжный поставщик
+    "house-circle-exclamation" to "\ue50a",  // партнёрский склад
+    "house-circle-xmark" to "\ue50b",        // сторонний склад
+    "ruble-sign" to "\uf158",                // оплата при заказе
+    "reply" to "\uf3e5",                     // возврат по согласованию / невозможен
+)
+
+private fun faColor(c: String?): Color = when (c) {
+    "red" -> Color(0xFFE53935)
+    "blue" -> Color(0xFF1E6FD9)
+    "yellow", "orange" -> Color(0xFFF59E0B)
+    "green" -> Color(0xFF2E7D32)
+    else -> Color(0xFF1B1B1B)
+}
+
+/** Значки поставщика, как на сайте (Font Awesome из supplierDescription). Подписи — в шторке «В корзину». */
 @Composable
 private fun SupplierIcons(o: Offer) {
     val list = buildList {
         addAll(o.badges)
-        if (o.noReturn && o.badges.none { "возврат" in it.text.lowercase() }) add(SupplierBadge("Возврат невозможен", BadgeKind.Bad))
+        if (o.noReturn && o.badges.none { it.icon == "reply" }) add(SupplierBadge("Возврат невозможен", BadgeKind.Bad, "reply", "red"))
         if (o.isUsed) add(SupplierBadge("Б/у", BadgeKind.Bad))
     }
     if (list.isEmpty()) return
-    Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         list.forEach { b ->
-            val t = b.text.lowercase()
-            val (glyph, color) = when {
-                "возврат" in t -> "↩" to Color(0xFFD32F2F)
-                "сторон" in t || "под заказ" in t -> "⌂✕" to Color(0xFFD32F2F)
-                "предоплат" in t || "оплат" in t -> "₽" to Color(0xFF1B1B1B)
-                "б/у" in t -> "Б/у" to Color(0xFFD32F2F)
-                b.kind == BadgeKind.Good -> "⌂✓" to Color(0xFF1E6FD9)
-                b.kind == BadgeKind.Bad -> "!" to Color(0xFFD32F2F)
-                else -> "•" to Color(0xFF5F6368)
+            val glyph = b.icon?.let { FA_GLYPHS[it] }
+            if (glyph != null) {
+                Text(glyph, fontFamily = FontAwesome, color = faColor(b.color), fontSize = 16.sp)
+            } else {
+                Text(if (b.text == "Б/у") "Б/у" else "•", color = faColor(if (b.kind == BadgeKind.Bad) "red" else b.color),
+                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
             }
-            Text(glyph, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -469,10 +486,16 @@ private fun Badges(o: Offer) {
                 BadgeKind.Bad -> MaterialTheme.colorScheme.error
                 BadgeKind.Info -> DeliveryColors.later
             }
-            Text(
-                b.text, style = MaterialTheme.typography.labelSmall, color = c, maxLines = 1,
-                modifier = Modifier.background(c.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
-            )
+            Row(
+                Modifier.background(c.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                b.icon?.let { FA_GLYPHS[it] }?.let { g ->
+                    Text(g, fontFamily = FontAwesome, color = faColor(b.color), fontSize = 12.sp)
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(b.text, style = MaterialTheme.typography.labelSmall, color = c, maxLines = 1)
+            }
         }
     }
 }

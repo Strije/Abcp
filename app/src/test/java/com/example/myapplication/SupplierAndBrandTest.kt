@@ -42,4 +42,14 @@ class SupplierAndBrandTest {
         // неоднозначно — показать список
         assertNull(autoPickBrand(listOf(hit("A", true), hit("B", true)), null))
     }
+
+    @org.junit.Test
+    fun fontAwesomeIconAndColor() {
+        val html = """<div><i class="fa-solid fa-house-circle-xmark ikonka red" title="Сторонний склад"></i><i class="fa-solid fa-ruble-sign ikonka" title="Оплата при заказе"></i></div>"""
+        val b = com.example.myapplication.abcp.parseSupplierBadges(html)
+        org.junit.Assert.assertEquals("house-circle-xmark", b[0].icon)
+        org.junit.Assert.assertEquals("red", b[0].color)
+        org.junit.Assert.assertEquals("ruble-sign", b[1].icon)
+        org.junit.Assert.assertEquals(null, b[1].color)
+    }
 }

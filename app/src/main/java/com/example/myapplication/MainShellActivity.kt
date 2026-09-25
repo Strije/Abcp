@@ -341,6 +341,8 @@ private fun HomeScreen(
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
                 TextButton(onClick = { ctx.startActivity(Intent(ctx, OnboardingActivity::class.java)) }) { Text("Как пользоваться") }
                 AppVersionRow(onCheckUpdate)
+                Text("Значки поставщиков: Font Awesome Free (CC BY 4.0, SIL OFL 1.1)",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             }
         }
     }
