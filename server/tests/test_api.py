@@ -180,7 +180,8 @@ def test_guest_search_hides_purchase_price(client):
 
 
 def test_guest_search_disabled_without_profile():
-    s0 = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40)
+    s0 = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
+                  state_dir=S.state_dir)
     app = create_app(s0, Abcp(s0, transport=httpx.MockTransport(fake_abcp)))
     with TestClient(app) as c:
         assert c.get("/v1/guest/brands?number=OC90").status_code == 403
