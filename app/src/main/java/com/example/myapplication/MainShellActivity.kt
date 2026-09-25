@@ -40,6 +40,9 @@ import com.example.myapplication.abcp.formatRub
 import com.example.myapplication.laximo.normalizeRuPlate
 import com.example.myapplication.server.AppServer
 import com.example.myapplication.server.Finance
+import com.example.myapplication.server.AppUpdate
+import com.example.myapplication.server.Release
+import com.example.myapplication.server.UpdateDialog
 import kotlinx.coroutines.launch
 import com.example.myapplication.ui.theme.AvtodrugTheme
 import com.google.gson.Gson
@@ -88,6 +91,11 @@ class MainShellActivity : ComponentActivity() {
                 var tab by remember { mutableStateOf(HomeTab.Home) }
                 var visits by remember { mutableIntStateOf(0) } // для перечитывания корзины при входе на вкладку
                 LaunchedEffect(Unit) { if (!guest) CartState.refresh(AbcpShop(session)) }
+                val updater = remember { AppUpdate(this@MainShellActivity) }
+                var update by remember { mutableStateOf<Release?>(null) }
+                // Тихая проверка при запуске: ошибки сети здесь пользователю не показываем
+                LaunchedEffect(Unit) { update = runCatching { updater.check(force = false) }.getOrNull() }
+                update?.let { r -> UpdateDialog(r) { updater.snooze(r); update = null } }
                 val toLogin = {
                     startActivity(Intent(this@MainShellActivity, MainActivity::class.java)); finish()
                 }
@@ -127,7 +135,16 @@ class MainShellActivity : ComponentActivity() {
                                     startActivity(Intent(this@MainShellActivity, MainActivity::class.java))
                                     finish()
                                 },
-                                user = user
+                                user = user,
+                                onCheckUpdate = {
+                                    val found = runCatching { updater.check(force = true) }
+                                    update = found.getOrNull()
+                                    when {
+                                        found.isFailure -> found.exceptionOrNull()?.message ?: "Не удалось проверить"
+                                        update == null -> "У вас последняя версия"
+                                        else -> null
+                                    }
+                                }
                             )
                             HomeTab.Search -> SearchScreen()
                             HomeTab.Garage -> if (guest) LoginPrompt("Гараж", toLogin) else GarageScreen()
@@ -157,7 +174,9 @@ private fun HomeScreen(
     unread: Int,
     user: UserInfoDto?,
     onOpenTab: (HomeTab) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    /** Ручная проверка; возвращает текст для пользователя или null, если открылось окно обновления */
+    onCheckUpdate: suspend () -> String?
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -271,8 +290,28 @@ private fun HomeScreen(
                 user?.organization?.takeIf { it.isNotBlank() }?.let { Text("Организация: $it") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
+                AppVersionRow(onCheckUpdate)
             }
         }
+    }
+}
+
+@Composable
+private fun AppVersionRow(onCheckUpdate: suspend () -> String?) {
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            message ?: "Версия ${BuildConfig.VERSION_NAME}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(enabled = !checking, onClick = {
+            checking = true
+            scope.launch { message = onCheckUpdate(); checking = false }
+        }) { Text(if (checking) "Проверяем…" else "Проверить обновления") }
     }
 }
 

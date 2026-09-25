@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 class QuickGroupsActivity : ComponentActivity() {
 
-    private val repo = LaximoRepository()
+    private val repo by lazy { LaximoRepository(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

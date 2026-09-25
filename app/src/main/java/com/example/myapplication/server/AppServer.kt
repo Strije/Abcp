@@ -116,6 +116,22 @@ class AppServer(ctx: Context) {
         JsonParser.parseString(text)
     }
 
+    /**
+     * Laximo через наш сервер: пароль Laximo только там. Блокирующий — вызывается из Dispatchers.IO.
+     * Возвращает код и ответ Laximo как есть. Вошедший идёт со своим токеном (лимит щедрее), гость — без.
+     */
+    fun laximo(method: String, params: Map<String, String>): Pair<Int, String> {
+        if (!enabled) throw ServerException("Сервер не настроен")
+        val json = Gson().toJson(params)
+        fun req(token: String?) = Request.Builder().url("$base/v1/laximo/$method")
+            .post(json.toRequestBody(JSON)).apply { if (token != null) auth(token) }.build()
+        // Не получилось войти на сервер — всё равно ищем, как гость
+        val token = if (session.isLoggedIn()) prefs.getString(KEY, null) ?: runCatching { login() }.getOrNull() else null
+        var resp = execute(req(token))
+        if (resp.first == 401) resp = execute(req(runCatching { login() }.getOrNull()))
+        return resp
+    }
+
     // ---------- транспорт ----------
 
     private suspend fun get(path: String) = call { token -> Request.Builder().url(base + path).get().auth(token).build() }

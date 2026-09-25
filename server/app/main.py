@@ -6,19 +6,27 @@ GET  /v1/orders/{number}/pay  ссылка на оплату заказа (то�
 GET  /v1/topup?amount=        ссылка на пополнение баланса
 POST /v1/images               картинки товаров для выдачи
 POST /v1/reliable             достоверные аналоги (звёздочка)
+POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
+GET  /v1/app/latest           последняя сборка приложения (автообновление)
+GET  /v1/app/apk/{code}       скачать сборку
+PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
 """
 import asyncio
+import hmac
 import logging
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from . import tokens
+from . import releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
+from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("avtodrug")
@@ -71,7 +79,7 @@ class RateLimiter:
         return True
 
 
-def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laximo: Laximo | None = None) -> FastAPI:
     state: dict = {}
 
     @asynccontextmanager
@@ -79,8 +87,10 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
         s = settings or load()
         state["s"] = s
         state["abcp"] = abcp or Abcp(s)
+        state["laximo"] = laximo or Laximo(s)
         yield
         await state["abcp"].close()
+        await state["laximo"].close()
 
     app = FastAPI(title="Avtodrug API", lifespan=lifespan, docs_url=None, redoc_url=None)
 
@@ -234,6 +244,66 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None) -> Fa
     async def reliable(body: Article, uid: str = Depends(current_uid)):
         """Достоверные аналоги артикула — для звёздочки, как на сайте."""
         return {"reliable": await state["abcp"].reliable_crosses(body.brand, body.number)}
+
+    # Подбор по авто: гостям — как гостевой поиск; вошедшим — отдельный, щедрее
+    laximo_user_limit = RateLimiter(limit=120, window=60)
+
+    @app.post("/v1/laximo/{method}")
+    async def laximo_call(method: str, params: dict[str, str], request: Request,
+                          authorization: str = Header(default="")):
+        lx: Laximo = state["laximo"]
+        if not lx.enabled:
+            raise HTTPException(503, "Подбор по авто временно недоступен")
+        if method not in LAXIMO_METHODS:
+            raise HTTPException(404, "Неизвестный метод")
+        if set(params) - LAXIMO_PARAMS or any(len(v) > 4000 for v in params.values()):
+            raise HTTPException(400, "Неверные параметры")
+        token = authorization.removeprefix("Bearer ").strip()
+        uid = tokens.verify(state["s"].token_secret, token) if token else None
+        if token and not uid:
+            raise HTTPException(401, "Нужно войти заново")
+        ok = laximo_user_limit.allow("lx:" + uid) if uid else guest_limit.allow("guest:" + client_ip(request))
+        if not ok:
+            raise HTTPException(429, "Слишком много запросов, подождите минуту")
+        try:
+            code, text = await lx.call(method, params)
+        except Exception:
+            raise HTTPException(502, "Каталог не ответил, попробуйте ещё раз")
+        # Ответ как есть (и ошибки E_… тоже), но 5xx Laximo — это 502 для приложения
+        return Response(text, status_code=502 if code >= 500 else code, media_type="application/json")
+
+    MAX_APK = 150 * 1024 * 1024
+
+    @app.get("/v1/app/latest")
+    async def app_latest():
+        info = releases.latest(Path(state["s"].app_dir))
+        if not info:
+            raise HTTPException(404, "Сборок пока нет")
+        return {**info, "url": f"/v1/app/apk/{info['versionCode']}"}
+
+    @app.get("/v1/app/apk/{code}")
+    async def app_apk(code: int):
+        path = releases.apk_path(Path(state["s"].app_dir), code)
+        if not path.is_file():
+            raise HTTPException(404, "Сборка не найдена")
+        return FileResponse(path, media_type="application/vnd.android.package-archive",
+                            filename=f"avtodrug92-{code}.apk")
+
+    @app.put("/v1/app/apk/{code}")
+    async def app_upload(code: int, request: Request, versionName: str = "", notes: str = "",
+                         x_upload_token: str = Header(default="")):
+        s = state["s"]
+        if not s.app_upload_token or not hmac.compare_digest(x_upload_token, s.app_upload_token):
+            raise HTTPException(403, "Нет доступа")
+        if not (1 <= code <= 2_000_000_000):
+            raise HTTPException(400, "Неверный номер сборки")
+        data = await request.body()
+        # APK — это zip: без сигнатуры PK не принимаем, чтобы случайно не раздать мусор
+        if not data.startswith(b"PK") or len(data) > MAX_APK:
+            raise HTTPException(400, "Это не APK")
+        info = releases.save(Path(s.app_dir), data, code, versionName[:40], notes[:2000])
+        log.info("app uploaded: %s (%s bytes)", code, info["size"])
+        return info
 
     return app
 

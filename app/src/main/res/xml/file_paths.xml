@@ -2,4 +2,6 @@
 <!-- Куда камера кладёт фото для распознавания VIN/номера: временная папка приложения -->
 <paths>
     <cache-path name="scan" path="scan/" />
+    <!-- Скачанное обновление приложения — отдаём установщику Android -->
+    <cache-path name="update" path="update/" />
 </paths>

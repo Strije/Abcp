@@ -30,14 +30,12 @@ Android-приложение для покупателей [avtodrug92.ru](https
 ## Сборка
 
 Сборку делает GitHub Actions при каждом push (`.github/workflows/android.yml`), APK — в разделе Artifacts.
-Нужные секреты репозитория: `LAXIMO_USER`, `LAXIMO_PASS`, `DEBUG_KEYSTORE_B64` (постоянный ключ подписи,
-чтобы новые версии вставали поверх).
+Нужный секрет репозитория: `DEBUG_KEYSTORE_B64` (постоянный ключ подписи, чтобы новые версии вставали поверх).
+Паролей в APK нет: доступ к Laximo и админский доступ ABCP хранятся только на сервере.
 
-Локально (Android Studio) — в `local.properties`:
+Локально (Android Studio) в `local.properties` можно указать другой сервер:
 
 ```
-LAXIMO_USER=...
-LAXIMO_PASS=...
 # необязательно, по умолчанию тестовый сервер
 SERVER_URL=https://...
 ```

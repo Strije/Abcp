@@ -28,13 +28,7 @@ import kotlinx.coroutines.withContext
 class VinSearchActivity : ComponentActivity() {
 
     private val repo: LaximoRepository by lazy {
-        LaximoRepository(
-            LaximoClient(
-                username = BuildConfig.LAXIMO_USER,
-                password = BuildConfig.LAXIMO_PASS,
-                language = "ru_RU"
-            )
-        )
+        LaximoRepository(this)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

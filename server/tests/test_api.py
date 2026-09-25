@@ -186,3 +186,52 @@ def test_numbers_with_thousand_separators():
     assert _num("-4 630,00") == -4630.0   # неразрывный пробел
     assert _num("4630.00") == 4630.0 and _num(4630) == 4630.0
     assert _num(None) == 0.0 and _num("") == 0.0
+
+
+def test_app_update(tmp_path):
+    from dataclasses import replace
+    s = replace(S, app_dir=str(tmp_path), app_upload_token="t" * 40)
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake_abcp)))) as c:
+        assert c.get("/v1/app/latest").status_code == 404
+        apk = b"PK\x03\x04" + b"x" * 100
+        assert c.put("/v1/app/apk/5", content=apk).status_code == 403  # без токена
+        assert c.put("/v1/app/apk/5", content=b"<html>", headers={"X-Upload-Token": "t" * 40}).status_code == 400
+        for code in (5, 7, 6, 8):  # 6 — перезапуск старой сборки, «последнюю» не откатывает
+            r = c.put(f"/v1/app/apk/{code}?versionName=1.{code}&notes=fix", content=apk,
+                      headers={"X-Upload-Token": "t" * 40})
+            assert r.status_code == 200, r.text
+        info = c.get("/v1/app/latest").json()
+        assert info["versionCode"] == 8 and info["url"] == "/v1/app/apk/8" and info["size"] == len(apk)
+        assert c.get("/v1/app/apk/8").content == apk
+        assert c.get("/v1/app/apk/5").status_code == 404  # старые чистятся, держим 3
+
+
+def test_laximo_proxy():
+    from dataclasses import replace
+    from app.laximo import Laximo
+    seen = {}
+
+    def fake_laximo(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("authorization")
+        seen["path"] = request.url.path
+        seen["params"] = dict(request.url.params)
+        if request.url.params.get("identString") == "BAD":
+            return httpx.Response(200, json={"message": "E_INVALIDREQUEST:bad"})
+        return httpx.Response(200, json=[{"catalog": "TOYOTA", "ssd": "$abc$"}])
+
+    s = replace(S, laximo_user="lx", laximo_pass="pw")
+    lx = Laximo(s, transport=httpx.MockTransport(fake_laximo))
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake_abcp)), lx)) as c:
+        r = c.post("/v1/laximo/findVehicle", json={"identString": "JT123"})
+        assert r.status_code == 200 and r.json()[0]["catalog"] == "TOYOTA"
+        assert seen["path"].endswith("/restApi/v1/findVehicle") and seen["params"] == {"identString": "JT123"}
+        assert seen["auth"].startswith("Basic ")  # пароль добавляет сервер
+        assert "E_INVALIDREQUEST" in c.post("/v1/laximo/findVehicle", json={"identString": "BAD"}).text
+        assert c.post("/v1/laximo/deleteEverything", json={}).status_code == 404
+        assert c.post("/v1/laximo/findVehicle", json={"userlogin": "x"}).status_code == 400
+        r = c.post("/v1/laximo/listUnits", json={"ssd": "$a%2B$", "catalog": "T"}, headers=login(c))
+        assert r.status_code == 200 and seen["params"]["ssd"] == "$a%2B$"
+
+
+def test_laximo_off_without_credentials(client):
+    assert client.post("/v1/laximo/findVehicle", json={"identString": "X"}).status_code == 503

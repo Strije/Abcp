@@ -21,11 +21,10 @@ android {
         applicationId = "ru.avtodrug92.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
-
-        buildConfigField("String", "LAXIMO_USER", "\"${localProperties.getProperty("LAXIMO_USER", "")}\"")
-        buildConfigField("String", "LAXIMO_PASS", "\"${localProperties.getProperty("LAXIMO_PASS", "")}\"")
+        // Номер сборки CI = номер версии: каждая новая сборка «новее» прошлой, на этом держится автообновление
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "1.0.$build"
 
         // Наш сервер (server/): баланс, оплата, картинки. Тестовый — на VPS в NL, к выпуску переедет в РФ.
         buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://9077635-oy742028.twc1.net:8446")}\"")

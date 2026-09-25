@@ -1,6 +1,5 @@
 package com.example.myapplication.laximo
 
-import com.example.myapplication.BuildConfig
 import com.example.myapplication.laximo.model.*
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -8,13 +7,9 @@ import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class LaximoRepository(
-    private val client: LaximoClient = LaximoClient(
-        username = BuildConfig.LAXIMO_USER,
-        password = BuildConfig.LAXIMO_PASS,
-        language = "ru_RU"
-    )
-) {
+class LaximoRepository(private val client: LaximoClient) {
+
+    constructor(ctx: android.content.Context) : this(LaximoClient(ctx))
 
     suspend fun findVehicle(identString: String): List<LaximoVehicleContext> = withContext(Dispatchers.IO) {
         val q = identString.trim()

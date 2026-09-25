@@ -18,6 +18,12 @@ class Settings:
     articles_info_per_day: int = 0
     # Профиль цен для гостей (поиск без входа). Пусто — гостевой поиск выключен.
     guest_profile_id: str = ""
+    # Автообновление: куда CI кладёт APK и чем подписывает загрузку. Пустой токен — загрузка выключена.
+    app_dir: str = "/var/lib/avtodrug-api/app"
+    app_upload_token: str = ""
+    # Laximo (подбор по авто) — доступ только здесь, в приложении его нет
+    laximo_user: str = ""
+    laximo_pass: str = ""
 
 
 def load() -> Settings:
@@ -35,4 +41,8 @@ def load() -> Settings:
         token_secret=secret.encode(),
         articles_info_per_day=int(os.environ.get("ARTICLES_INFO_PER_DAY", "0") or 0),
         guest_profile_id=os.environ.get("GUEST_PROFILE_ID", "").strip(),
+        app_dir=os.environ.get("APP_DIR", "/var/lib/avtodrug-api/app"),
+        app_upload_token=os.environ.get("APP_UPLOAD_TOKEN", "").strip(),
+        laximo_user=os.environ.get("LAXIMO_USER", "").strip(),
+        laximo_pass=os.environ.get("LAXIMO_PASS", "").strip(),
     )

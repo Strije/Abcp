@@ -1,75 +1,38 @@
 package com.example.myapplication.laximo
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
-import okhttp3.Credentials
-import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
+import com.example.myapplication.BuildConfig
+import com.example.myapplication.server.AppServer
+import com.example.myapplication.server.ServerException
 
-class LaximoClient(
-    private val username: String,
-    private val password: String,
-    private val language: String = "ru_RU",
-) {
-    // ✅ Таймауты, чтобы запрос не "висел" бесконечно
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
-        .callTimeout(30, TimeUnit.SECONDS)
-        .build()
+/**
+ * Laximo REST API через наш сервер (/v1/laximo/{метод}): логин и пароль Laximo живут только на сервере,
+ * в APK их нет. Ответы и ошибки (E_…) приходят как от самого Laximo.
+ */
+class LaximoClient(ctx: Context) {
 
-    private val baseUrl = "https://ws.laximo.ru/restApi/v1/"
+    private val server = AppServer(ctx.applicationContext)
 
-    /**
-     * Laximo REST API: только HTTPS + POST.
-     * Параметры передаём в query string, body можно оставить пустым.
-     */
     fun post(path: String, query: Map<String, String>): String {
-        val urlBuilder = (baseUrl + path.trimStart('/')).toHttpUrl().newBuilder()
+        // SSD иногда уже приходит URL-encoded (%24...%3D%3D%24) — сервер закодирует сам, отдаём исходный
+        val params = query.mapValues { (k, v) -> if (k.equals("ssd", ignoreCase = true) && looksEncoded(v)) Uri.decode(v) else v }
+        val method = path.trimStart('/')
+        Log.d("LAXIMO_HTTP", "--> $method")
+        val (code, body) = server.laximo(method, params)
+        Log.d("LAXIMO_HTTP", "<-- HTTP $code")
+        if (BuildConfig.DEBUG) Log.d("LAXIMO_HTTP", "BODY: $body")
 
-        query.forEach { (k, v) ->
-            if (k.equals("ssd", ignoreCase = true) && looksEncoded(v)) {
-                // SSD иногда уже приходит URL-encoded (%24...%3D%3D%24).
-                // addEncodedQueryParameter не кодирует % повторно.
-                urlBuilder.addEncodedQueryParameter(k, v)
-            } else {
-                urlBuilder.addQueryParameter(k, v)
-            }
+        // Laximo шлёт ошибку и с 200 — ловим {"message":"E_...:..."}
+        LaximoErrorParser.tryParse(body)?.let { throw it }
+        if (code !in 200..299) {
+            val detail = runCatching {
+                com.google.gson.JsonParser.parseString(body).asJsonObject["detail"].asString
+            }.getOrNull()
+            throw ServerException(detail ?: "Каталог временно недоступен ($code)", code)
         }
-
-        val url = urlBuilder.build()
-
-        val req = Request.Builder()
-            .url(url)
-            .post("".toRequestBody("application/json".toMediaType()))
-            .header("Authorization", Credentials.basic(username, password))
-            .header("accept-language", language)
-            .build()
-
-        Log.d("LAXIMO_HTTP", "--> POST $url")
-
-        http.newCall(req).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-
-            // ✅ Теперь ты увидишь, что реально вернул сервер
-            Log.d("LAXIMO_HTTP", "<-- HTTP ${resp.code}")
-            if (com.example.myapplication.BuildConfig.DEBUG) Log.d("LAXIMO_HTTP", "BODY: $body")
-
-            // Если HTTP не 2xx — это уже ошибка
-            if (!resp.isSuccessful) {
-                throw RuntimeException("Laximo HTTP ${resp.code}: $body")
-            }
-
-            // Иногда Laximo шлёт ошибку даже с 200 — ловим {"message":"E_...:..."}
-            val parsed = LaximoErrorParser.tryParse(body)
-            if (parsed != null) throw parsed
-
-            return body
-        }
+        return body
     }
 }
 

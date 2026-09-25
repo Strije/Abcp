@@ -18,15 +18,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
-      # Доступ к Laximo — из секретов репозитория (Settings → Secrets and variables → Actions)
+      # Секретов в APK нет: Laximo и админ ABCP — только на нашем сервере
       - name: Write local.properties
-        env:
-          LAXIMO_USER: ${{ secrets.LAXIMO_USER }}
-          LAXIMO_PASS: ${{ secrets.LAXIMO_PASS }}
-        run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          echo "LAXIMO_USER=$LAXIMO_USER" >> local.properties
-          echo "LAXIMO_PASS=$LAXIMO_PASS" >> local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       # Постоянный debug-ключ (секрет DEBUG_KEYSTORE_B64 = base64 от debug.keystore).
       # Без него runner каждый раз создаёт новый ключ, и APK не ставится поверх прошлого.
@@ -60,6 +54,20 @@ jobs:
           # Ожидаемый ключ (debug.keystore с 19.02.2026) — ffad7d27…
           $AS verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -qi 'ffad7d279f19c0ab' \
             || echo "::warning::APK подписан НЕ постоянным ключом — поверх прошлой версии не встанет"
+
+      # Автообновление: сборку из main кладём на наш сервер, приложение само предложит её поставить.
+      # Секрет APP_UPLOAD_TOKEN = APP_UPLOAD_TOKEN из /etc/avtodrug-api.env на сервере.
+      - name: Publish update to app server
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          APP_UPLOAD_TOKEN: ${{ secrets.APP_UPLOAD_TOKEN }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          if [ -z "$APP_UPLOAD_TOKEN" ]; then echo "::warning::APP_UPLOAD_TOKEN не задан — обновление не опубликовано"; exit 0; fi
+          N=$GITHUB_RUN_NUMBER
+          Q="versionName=$(jq -rn --arg v "1.0.$N" '$v|@uri')&notes=$(printf '%s' "$NOTES" | grep -v '^Co-Authored-By' | head -c 1500 | jq -sRr @uri)"
+          curl -fsS --retry 3 -X PUT -H "X-Upload-Token: $APP_UPLOAD_TOKEN"             -H "Content-Type: application/vnd.android.package-archive"             --data-binary @app/build/outputs/apk/debug/app-debug.apk             "https://9077635-oy742028.twc1.net:8446/v1/app/apk/$N?$Q" > /dev/null
+          echo "::notice::Обновление 1.0.$N опубликовано на сервере"
 
       - uses: actions/upload-artifact@v4
         with:
