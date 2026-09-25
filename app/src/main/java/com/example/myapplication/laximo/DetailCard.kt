@@ -50,19 +50,9 @@ fun DetailCard(
                 }
             }
 
-            IconButton(
-                onClick = { if (!isOemEmpty) onCartClick(oem) },
-                enabled = !isOemEmpty
-            ) {
-                Icon(
-                    imageVector = Icons.Default.ShoppingCart,
-                    contentDescription = "Поиск",
-                    tint = if (isOemEmpty) {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    }
-                )
+            // OEM-номер → поиск в магазине: цены, наличие, аналоги
+            if (!isOemEmpty) FilledTonalButton(onClick = { onCartClick(oem) }, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                Text("Цены")
             }
         }
     }

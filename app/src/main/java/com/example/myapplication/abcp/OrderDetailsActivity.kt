@@ -69,29 +69,35 @@ class OrderDetailsActivity : ComponentActivity() {
                         }
                         finalIds = runCatching { shop.finalStatusIds() }.getOrDefault(emptySet())
                     } catch (_: Exception) {
-                        error = "Не удалось подключиться к серверу."
+                        error = "Не удалось загрузить заказ. Проверьте интернет."
                     } finally {
                         loading = false
                     }
                 }
+                // Вернулись с оплаты — долг и статусы могли измениться
+                com.example.myapplication.ui.OnResume { reload++ }
 
                 Scaffold(topBar = { TopAppBar(title = { Text("Заказ № $orderNumber") }) }) { padding ->
-                    Box(Modifier.padding(padding).fillMaxSize()) {
-                        when {
-                            loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                            !error.isNullOrBlank() -> Text(
-                                error!!, color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.align(Alignment.Center).padding(16.dp)
-                            )
-                            else -> OrderDetailsContent(
+                    // Первая загрузка — спиннер, дальше заказ на экране, обновление тихое («потянуть вниз»)
+                    com.example.myapplication.ui.RefreshableContent(
+                        hasData = details != null, loading = loading, error = error,
+                        onRefresh = { reload++ }, modifier = Modifier.padding(padding)
+                    ) {
+                            OrderDetailsContent(
                                 details = details!!,
                                 canCancel = { p -> !p.positionId.isNullOrBlank() && p.statusId !in finalIds },
                                 onCancel = { toCancel = it },
                                 onPay = if (server.enabled) {
                                     { payOrder(ctx, scope, server, orderNumber) }
-                                } else null
+                                } else null,
+                                onBuyAgain = { p ->
+                                    ctx.startActivity(
+                                        android.content.Intent(ctx, com.example.myapplication.SearchActivity::class.java)
+                                            .putExtra(com.example.myapplication.SearchActivity.EXTRA_NUMBER, p.number.orEmpty())
+                                            .putExtra(com.example.myapplication.SearchActivity.EXTRA_BRAND, p.brand.orEmpty())
+                                    )
+                                }
                             )
-                        }
                     }
                 }
 
@@ -154,7 +160,8 @@ private fun OrderDetailsContent(
     details: OrderDetailsDto,
     canCancel: (OrderPositionDto) -> Boolean,
     onCancel: (OrderPositionDto) -> Unit,
-    onPay: (() -> Unit)?
+    onPay: (() -> Unit)?,
+    onBuyAgain: (OrderPositionDto) -> Unit
 ) {
     val positions = details.positions.orEmpty()
     LazyColumn(
@@ -204,9 +211,16 @@ private fun OrderDetailsContent(
                     p.commentAnswer?.takeIf { it.isNotBlank() }?.let {
                         Text("Ответ менеджера: $it", style = MaterialTheme.typography.bodySmall)
                     }
-                    if (canCancel(p)) {
-                        TextButton(onClick = { onCancel(p) }, contentPadding = PaddingValues(0.dp)) {
-                            Text("Отменить позицию", color = MaterialTheme.colorScheme.error)
+                    Row {
+                        // Та же деталь ещё раз — сразу к ценам по номеру
+                        if (!p.number.isNullOrBlank()) TextButton(onClick = { onBuyAgain(p) }, contentPadding = PaddingValues(0.dp)) {
+                            Text("Купить ещё")
+                        }
+                        Spacer(Modifier.weight(1f))
+                        if (canCancel(p)) {
+                            TextButton(onClick = { onCancel(p) }, contentPadding = PaddingValues(0.dp)) {
+                                Text("Отменить позицию", color = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }

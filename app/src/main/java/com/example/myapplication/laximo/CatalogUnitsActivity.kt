@@ -75,7 +75,8 @@ class CatalogUnitsActivity : ComponentActivity() {
                 var error by remember { mutableStateOf<String?>(null) }
                 var units by remember { mutableStateOf<List<LaximoUnit>>(emptyList()) }
 
-                LaunchedEffect(categoryId, ssd) {
+                var reload by remember { mutableIntStateOf(0) }
+                LaunchedEffect(categoryId, ssd, reload) {
                     loading = true
                     error = null
                     scope.launch {
@@ -96,7 +97,8 @@ class CatalogUnitsActivity : ComponentActivity() {
                     Box(Modifier.fillMaxSize().padding(padding)) {
                         when {
                             loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                            error != null -> Text(error!!, Modifier.padding(16.dp))
+                            error != null -> com.example.myapplication.ui.ErrorState(error!!, Modifier.align(Alignment.Center), onRetry = { reload++ })
+                            units.isEmpty() -> com.example.myapplication.ui.EmptyState("В этом разделе узлов нет")
                             else -> {
                                 LazyColumn(
                                     modifier = Modifier.fillMaxSize(),

@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,16 +39,18 @@ class QuickGroupsActivity : ComponentActivity() {
         val ssd = intent.getStringExtra("ssd") ?: ""
 
         val ctx = LaximoVehicleContext(catalog = catalog, vehicleId = vehicleId, ssd = ssd)
+        // Машина — в заголовке, чтобы было видно, для чего подбираем
+        val car = "${intent.getStringExtra("brand").orEmpty()} ${intent.getStringExtra("name").orEmpty()}".trim()
 
         setContent {
-            com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo) }
+            com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo, car) }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository) {
+private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository, car: String) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -59,12 +63,20 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
     var searchQuery by remember { mutableStateOf("") }
     var expandedIds by remember { mutableStateOf(emptySet<Long>()) }
 
-    LaunchedEffect(Unit) {
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reload) {
         loading = true
+        error = null
         runCatching { repo.listQuickGroup(ctx) }
             .onSuccess { root = it }
             .onFailure { error = laximoUserMessage(it) }
         loading = false
+    }
+    // Системная «Назад» из деталей группы — к дереву групп, а не из подбора
+    androidx.activity.compose.BackHandler(enabled = selectedGroup != null) {
+        selectedGroup = null
+        categories = emptyList()
+        error = null
     }
 
     fun openUnit(unit: LaximoUnit) {
@@ -82,19 +94,22 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(selectedGroup?.name ?: "Быстрый подбор") },
+                title = {
+                    Column {
+                        Text(selectedGroup?.name ?: "Подбор запчастей", maxLines = 1)
+                        if (car.isNotBlank()) Text(car, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                    }
+                },
                 actions = {
                     if (selectedGroup == null) {
-                        IconButton(onClick = {
+                        TextButton(onClick = {
                             val i = Intent(context, CatalogCategoriesActivity::class.java).apply {
                                 putExtra("catalog", ctx.catalog)
                                 putExtra("vehicleId", ctx.vehicleId)
                                 putExtra("ssd", ctx.ssd)
                             }
                             context.startActivity(i)
-                        }) {
-                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Каталог")
-                        }
+                        }) { Text("Все узлы") }
                     }
                 },
                 navigationIcon = {
@@ -116,13 +131,17 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    label = { Text("Поиск запчасти...") },
+                    label = { Text("Что ищем? Например, колодки") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Default.Close, "Очистить") }
+                    },
                     modifier = Modifier.fillMaxWidth().padding(12.dp),
                     singleLine = true
                 )
 
                 if (error != null) {
-                    Text(text = error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
+                    com.example.myapplication.ui.ErrorState(error!!, onRetry = if (root == null) { { reload += 1 } } else null)
                 }
 
                 data class SearchHit(
@@ -169,8 +188,12 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                     }) { _, hit ->
                         val node = hit.node
                         val level = hit.level
+                        val isGroup = node.children.isNotEmpty() && searchQuery.isEmpty()
+                        val open = node.quickGroupId?.let { expandedIds.contains(it) } == true
                         ListItem(
-                            headlineContent = { Text(node.name) },
+                            headlineContent = { Text(node.name, fontWeight = if (level == 0) FontWeight.SemiBold else null) },
+                            // Группа раскрывается (▾/▸), конечный пункт ведёт к деталям (›)
+                            trailingContent = { Text(if (isGroup) (if (open) "▾" else "▸") else "›", style = MaterialTheme.typography.titleMedium) },
                             supportingContent = {
                                 val subtitle = listOfNotNull(
                                     hit.ancestorPath.takeIf { it.isNotEmpty() },
@@ -208,12 +231,17 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                 }
             } else {
                 if (error != null) {
-                    Text(text = error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                    com.example.myapplication.ui.ErrorState(error!!)
                 }
-                
+                if (categories.all { it.units.isEmpty() } && error == null) {
+                    com.example.myapplication.ui.EmptyState("В этой группе для вашей машины деталей не нашлось. Попробуйте «Все узлы» или спросите менеджера в чате.")
+                }
+
                 LazyColumn(Modifier.fillMaxSize()) {
-                    categories.forEach { cat ->
-                        item(key = "header_${cat.name}") {
+                    // Один и тот же узел бывает в нескольких категориях — ключ включает номер категории,
+                    // иначе список падает на одинаковых ключах
+                    categories.forEachIndexed { ci, cat ->
+                        item(key = "header_${ci}_${cat.name}") {
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.fillMaxWidth()
@@ -226,10 +254,11 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository)
                                 )
                             }
                         }
-                        items(cat.units, key = { "unit_${it.unitId}" }) { unit ->
+                        itemsIndexed(cat.units, key = { ui, u -> "unit_${ci}_${ui}_${u.unitId}" }) { _, unit ->
                             ListItem(
                                 headlineContent = { Text(unit.name) },
                                 supportingContent = { unit.code?.let { Text("Код: $it") } },
+                                trailingContent = { Text("Схема ›", color = MaterialTheme.colorScheme.primary) },
                                 modifier = Modifier.clickable { openUnit(unit) }
                             )
                             HorizontalDivider()

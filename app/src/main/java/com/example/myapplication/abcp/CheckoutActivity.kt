@@ -44,8 +44,12 @@ class CheckoutActivity : ComponentActivity() {
                 var address by remember { mutableStateOf<String?>(null) }
                 var date by remember { mutableStateOf<String?>(null) }
                 var comment by remember { mutableStateOf("") }
+                var reload by remember { mutableIntStateOf(0) }
+                var showItems by remember { mutableStateOf(false) }
 
-                LaunchedEffect(Unit) {
+                LaunchedEffect(reload) {
+                    loading = true
+                    error = null
                     try {
                         basket = shop.basket()
                         val o = shop.checkoutOptions(basket)
@@ -92,13 +96,31 @@ class CheckoutActivity : ComponentActivity() {
                                     finish()
                                 }) { Text("Мои заказы") }
                             }
-                            o == null -> Text(error ?: "Ошибка", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                            o == null -> com.example.myapplication.ui.ErrorState(
+                                error ?: "Не удалось загрузить варианты оформления", Modifier.align(Alignment.Center),
+                                onRetry = { reload++ }
+                            )
                             else -> Column(
                                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 val total = basket.sumOf { it.price * it.quantity }
                                 Text("${basket.size} поз. на ${formatRub(total)}", style = MaterialTheme.typography.titleMedium)
+                                // Что заказываем — свёрнуто; позиции с замечанием ABCP (нет в наличии, цена) видны сразу
+                                val problems = basket.filter { !it.errorMessage.isNullOrBlank() }
+                                problems.forEach { b ->
+                                    Text("⚠ ${b.brand} ${b.number}: ${b.errorMessage}", color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                                TextButton(onClick = { showItems = !showItems }, contentPadding = PaddingValues(0.dp)) {
+                                    Text(if (showItems) "Скрыть состав заказа" else "Показать состав заказа")
+                                }
+                                if (showItems) basket.forEach { b ->
+                                    Row(Modifier.fillMaxWidth()) {
+                                        Text("${b.brand} ${b.number} × ${b.quantity}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                        Text(formatRub(b.price * b.quantity), style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
 
                                 Choice("Оплата", o.payments, payment) { payment = it }
                                 Choice("Способ доставки", o.shipmentMethods, method) { method = it }

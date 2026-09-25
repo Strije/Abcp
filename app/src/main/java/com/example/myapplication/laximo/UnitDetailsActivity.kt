@@ -63,16 +63,20 @@ private fun UnitDetailsScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var selectedCode by remember { mutableStateOf<String?>(null) }
     var isInteractingWithScheme by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
+    var reload by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(ctx.catalog, unit.unitId, unit.ssd) {
-        scope.launch {
-            runCatching {
-                details = repo.listDetailByUnit(ctx, unit)
-                mapItems = repo.listImageMapByUnit(ctx, unit)
-            }.onFailure { e ->
-                error = laximoUserMessage(e)
-            }
+    LaunchedEffect(ctx.catalog, unit.unitId, unit.ssd, reload) {
+        loading = true
+        error = null
+        runCatching {
+            details = repo.listDetailByUnit(ctx, unit)
+            // Разметка схемы не критична: без неё список деталей всё равно работает
+            mapItems = runCatching { repo.listImageMapByUnit(ctx, unit) }.getOrDefault(emptyList())
+        }.onFailure { e ->
+            error = laximoUserMessage(e)
         }
+        loading = false
     }
 
     val codes = remember(details) {
@@ -103,6 +107,7 @@ private fun UnitDetailsScreen(
     Scaffold(
         topBar = { TopAppBar(title = { Text(unit.name, maxLines = 2) }) }
     ) { pad ->
+        if (loading && details.isEmpty()) LinearProgressIndicator(Modifier.padding(pad).fillMaxWidth())
         LazyColumn(
             modifier = Modifier
                 .padding(pad)
@@ -152,6 +157,14 @@ private fun UnitDetailsScreen(
                 }
             }
 
+            if (!loading && error == null && details.isNotEmpty()) item {
+                Text(
+                    "Нажмите номер на схеме или деталь в списке, «Цены» — предложения магазина по этому номеру",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
             items(details) { d ->
                 DetailCard(
                     d = d,
@@ -162,13 +175,7 @@ private fun UnitDetailsScreen(
             }
 
             if (error != null) {
-                item {
-                    Text(
-                        error!!,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
+                item { com.example.myapplication.ui.ErrorState(error!!, onRetry = { reload++ }) }
             }
         }
     }

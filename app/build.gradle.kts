@@ -129,6 +129,8 @@ dependencies {
     implementation("ru.rustore.sdk:pushclient:7.5.0")
     // AppMetrica: отчёты о вылетах и ошибках
     implementation("io.appmetrica.analytics:analytics:8.5.1")
+    // Чат: скрипт до загрузки страницы (стили и данные клиента для виджета Битрикс24)
+    implementation("androidx.webkit:webkit:1.12.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
