@@ -163,7 +163,9 @@ class OrderStatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
 /** Уведомление о заказе: из фоновой проверки или из push. Нажатие — открыть заказ. */
 fun showOrderNotification(
     ctx: Context, order: String?, changed: List<PositionStatus>,
-    customTitle: String? = null, customText: String? = null
+    customTitle: String? = null, customText: String? = null,
+    /** Адрес магазина — кнопка «Маршрут» в уведомлении «готово к выдаче» */
+    routeAddress: String? = null
 ) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -193,6 +195,17 @@ fun showOrderNotification(
         .setStyle(NotificationCompat.BigTextStyle().bigText(lines))
         .setContentIntent(open)
         .setAutoCancel(true)
+        .apply {
+            if (routeAddress != null) {
+                val route = PendingIntent.getActivity(
+                    ctx, ("route" + order).hashCode(),
+                    Intent(Intent.ACTION_VIEW, android.net.Uri.parse("geo:0,0?q=" + android.net.Uri.encode("Севастополь, $routeAddress")))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                addAction(0, "Маршрут", route)
+            }
+        }
         .build()
     runCatching { NotificationManagerCompat.from(ctx).notify((order ?: "push").hashCode(), n) }
 }

@@ -117,6 +117,39 @@ def push_text(number: str, items: list) -> tuple[str, str]:
     return head, "\n".join(f"{t} — {s}" for t, s in items)
 
 
+# Офисы самовывоза ABCP → адрес (как в приложении, StoreInfo.kt)
+OFFICES = {"27993": "ул. Хрусталёва, 111", "60602": "пр. Октябрьской Революции, 20"}
+
+
+def pickup_hint(now: datetime | None = None) -> str:
+    """«сегодня до 19:00» / «завтра с 9:00» — часы магазинов: Пн–Пт 9–19, Сб–Вс 9–17."""
+    now = now or datetime.now(MSK)
+    close = 19 if now.weekday() < 5 else 17
+    if now.hour < 9:
+        return "сегодня с 9:00"
+    if now.hour < close:
+        return f"сегодня до {close}:00"
+    return "завтра с 9:00"
+
+
+def special_push(number: str, items: list, order: dict, now: datetime | None = None) -> dict | None:
+    """Заметные статусы — своим текстом: готово к выдаче (с адресом и часами), ждёт оплаты, задерживается."""
+    statuses = [s.lower() for _, s in items]
+    if any("готов" in s and "выдач" in s for s in statuses):
+        address = OFFICES.get(str(order.get("deliveryOfficeId") or "")) or (order.get("deliveryOffice") or "")
+        part = "" if all("готов" in s for s in statuses) else "Часть заказа — "
+        where = f"{address} · {pickup_hint(now)}" if address else pickup_hint(now).capitalize()
+        return {"kind": "ready", "title": f"Заказ № {number} готов к выдаче 🎉",
+                "body": f"{part}можно забирать: {where}", "address": address}
+    if any("ожидает оплаты" in s for s in statuses):
+        return {"kind": "pay", "title": f"Заказ № {number} ждёт оплаты",
+                "body": "Оплатите в приложении — откройте заказ и нажмите «Оплатить»."}
+    if any("задерж" in s for s in statuses):
+        return {"kind": "delay", "title": f"Поставка по заказу № {number} задерживается",
+                "body": "Менеджер свяжется с вами и подскажет новый срок."}
+    return None
+
+
 class RuStorePush:
     def __init__(self, http: httpx.AsyncClient, host: str, project_id: str, service_token: str):
         self.http, self.host, self.project, self.token = http, host.rstrip("/"), project_id, service_token
@@ -163,6 +196,7 @@ class OrderWatcher:
         since = st.get("since") or (now_msk - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
         since_dt = datetime.strptime(since, "%Y-%m-%d %H:%M:%S") - timedelta(minutes=2)
         orders = await self.abcp.orders_updated(since_dt.strftime("%Y-%m-%d %H:%M:%S"))
+        by_number = {str(o.get("number")): o for o in orders}
         now = time.time()
         known = st.setdefault("known", {})
         changes = diff_orders(orders, known, subscribed, now)
@@ -177,6 +211,9 @@ class OrderWatcher:
                 # items — для ленты уведомлений в приложении: [[позиция, статус], …]
                 data = {"type": "order_status", "order": number, "title": title, "body": text,
                         "items": json.dumps([list(i) for i in items], ensure_ascii=False)}
+                special = special_push(number, items, by_number.get(number, {}))
+                if special:
+                    data.update(special)
                 for t in self.tokens.tokens(uid):
                     code = await self.pusher.send(t, data)
                     if code in (400, 404):  # токен устарел (приложение удалено) — забываем

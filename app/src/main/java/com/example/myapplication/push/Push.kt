@@ -75,7 +75,13 @@ object Push {
         if (order != null && !items.isNullOrEmpty()) {
             val changed = items.mapIndexed { i, (title, status) -> PositionStatus("$order#$i", order, title, status) }
             OrderStatusWatch.addToFeed(ctx, order, changed)
-            showOrderNotification(ctx, order, changed)
+            // «Готово к выдаче», «ждёт оплаты», «задерживается» — сервер присылает свой текст (и адрес для маршрута)
+            showOrderNotification(
+                ctx, order, changed,
+                customTitle = data["title"].takeIf { data["kind"] != null },
+                customText = data["body"].takeIf { data["kind"] != null },
+                routeAddress = data["address"]?.takeIf { data["kind"] == "ready" && it.isNotBlank() }
+            )
         } else {
             showOrderNotification(ctx, order, emptyList(), data["title"] ?: "Автодруг92", data["body"].orEmpty())
         }

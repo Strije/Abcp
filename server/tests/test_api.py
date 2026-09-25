@@ -445,3 +445,19 @@ def test_bot_broadcast_with_confirmation(tmp_path):
         assert len(pushes) == 1  # повторное нажатие не шлёт второй раз
         c.portal.call(b.handle, {"message": {"chat": {"id": -100}, "text": "/stats"}})
         assert "Устройств: 1" in [j for m, j in tg if m == "sendMessage"][-1]["text"]
+
+
+
+def test_special_push_texts():
+    from datetime import datetime
+    from app.push import MSK, special_push
+    tue_10 = datetime(2026, 9, 29, 10, 0, tzinfo=MSK)
+    sat_18 = datetime(2026, 9, 26, 18, 0, tzinfo=MSK)
+    p = special_push("123", [("Knecht OC90", "Готово к выдаче")], {"deliveryOfficeId": "27993"}, tue_10)
+    assert p["kind"] == "ready" and p["title"] == "Заказ № 123 готов к выдаче 🎉"
+    assert p["body"] == "можно забирать: ул. Хрусталёва, 111 · сегодня до 19:00" and p["address"] == "ул. Хрусталёва, 111"
+    p = special_push("123", [("A", "Готово к выдаче"), ("B", "В пути (товар заказан)")], {"deliveryOfficeId": "60602"}, sat_18)
+    assert p["body"].startswith("Часть заказа") and "завтра с 9:00" in p["body"]
+    assert special_push("1", [("A", "Ожидает оплаты")], {})["kind"] == "pay"
+    assert special_push("1", [("A", "Задерживается")], {})["kind"] == "delay"
+    assert special_push("1", [("A", "В пути (товар заказан)")], {}) is None
