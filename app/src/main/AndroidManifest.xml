@@ -9,6 +9,7 @@
 
     <!-- Поворот экрана и смена темы не пересоздают экраны: Compose перерисует сам, введённое не теряется -->
     <application
+        android:name=".App"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -37,6 +38,19 @@
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.CatalogCategoriesActivity" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.CatalogUnitsActivity" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".laximo.UnitDetailsActivity" />
+
+        <!-- Push RuStore: статусы заказов от нашего сервера -->
+        <service
+            android:name=".push.PushService"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="ru.rustore.sdk.pushclient.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <meta-data
+            android:name="ru.rustore.sdk.pushclient.default_notification_channel_id"
+            android:value="order_status" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

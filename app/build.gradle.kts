@@ -29,6 +29,9 @@ android {
         // Наш сервер (server/): баланс, оплата, картинки. Тестовый — на VPS в NL, к выпуску переедет в РФ.
         buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://9077635-oy742028.twc1.net:8446")}\"")
 
+        // ID проекта push в Консоли RuStore — не секрет (он зашивается в любое приложение с push)
+        buildConfigField("String", "RUSTORE_PROJECT_ID", "\"ENyKTeW4scP40-pocP1gWiOTC-kB89sT\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -105,6 +108,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Распознавание текста с фото (VIN, госномер) прямо на телефоне, без интернета и Google-сервисов
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    // Push-уведомления RuStore (доставка через RuStore или приложения VK, без Google)
+    implementation("ru.rustore.sdk:pushclient:7.5.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

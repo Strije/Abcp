@@ -80,7 +80,8 @@ class MainShellActivity : ComponentActivity() {
             startActivity(Intent(this, MainActivity::class.java)); finish(); return
         }
         // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+) — только для вошедших
-        if (!guest) OrderStatusWatch.schedule(this)
+        // Статусы заказов: push RuStore через наш сервер; нет push — проверка из приложения раз в 20 минут
+        if (!guest) com.example.myapplication.push.Push.register(this)
         if (!guest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -93,6 +94,7 @@ class MainShellActivity : ComponentActivity() {
         }
 
         fun logout(message: String? = null) {
+            com.example.myapplication.push.Push.unregister(this)
             OrderStatusWatch.stop(this)
             AppServer.clearCache()
             MemoryCache.clear()

@@ -72,6 +72,11 @@ object OrderStatusWatch {
         WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, req)
     }
 
+    /** Пришли push с сервера — своя проверка больше не нужна (снимок статусов оставляем). */
+    fun stopPolling(ctx: Context) {
+        WorkManager.getInstance(ctx).cancelUniqueWork(WORK)
+    }
+
     /** При выходе из аккаунта: не следить и забыть статусы прошлого клиента. */
     fun stop(ctx: Context) {
         WorkManager.getInstance(ctx).cancelUniqueWork(WORK)
@@ -152,33 +157,42 @@ class OrderStatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         }
         return Result.success()
     }
+    private fun notify(order: String, changed: List<PositionStatus>) = showOrderNotification(applicationContext, order, changed)
+}
 
-    private fun notify(order: String, changed: List<PositionStatus>) {
-        val ctx = applicationContext
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) return
-        OrderStatusWatch.ensureChannel(ctx)
+/** Уведомление о заказе: из фоновой проверки или из push. Нажатие — открыть заказ. */
+fun showOrderNotification(
+    ctx: Context, order: String?, changed: List<PositionStatus>,
+    customTitle: String? = null, customText: String? = null
+) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) return
+    OrderStatusWatch.ensureChannel(ctx)
 
-        val open = PendingIntent.getActivity(
-            ctx, order.hashCode(),
-            Intent(ctx, OrderDetailsActivity::class.java)
-                .putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, order)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val first = changed.first()
-        val title = if (changed.size == 1) "Заказ № $order: ${first.status}" else "Заказ № $order: изменились статусы"
-        val lines = changed.joinToString("\n") { "${it.title} — ${it.status}" }
-
-        val n = NotificationCompat.Builder(ctx, OrderStatusWatch.CHANNEL)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(if (changed.size == 1) first.title else "${changed.size} поз.")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(lines))
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        runCatching { NotificationManagerCompat.from(ctx).notify(order.hashCode(), n) }
+    val intent = if (order != null)
+        Intent(ctx, OrderDetailsActivity::class.java).putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, order)
+    else Intent(ctx, com.example.myapplication.MainActivity::class.java)
+    val open = PendingIntent.getActivity(
+        ctx, (order ?: "push").hashCode(),
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    val first = changed.firstOrNull()
+    val title = customTitle ?: when {
+        first == null -> "Заказ № $order"
+        changed.size == 1 || changed.all { it.status == first.status } -> "Заказ № $order: ${first.status}"
+        else -> "Заказ № $order: изменились статусы"
     }
+    val lines = customText ?: changed.joinToString("\n") { "${it.title} — ${it.status}" }
+
+    val n = NotificationCompat.Builder(ctx, OrderStatusWatch.CHANNEL)
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setContentTitle(title)
+        .setContentText(customText ?: if (changed.size == 1) first?.title else "${changed.size} поз.")
+        .setStyle(NotificationCompat.BigTextStyle().bigText(lines))
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .build()
+    runCatching { NotificationManagerCompat.from(ctx).notify((order ?: "push").hashCode(), n) }
 }

@@ -292,3 +292,53 @@ def test_access_request_not_marked_notified_when_telegram_fails(tmp_path):
         # Бота настроили — повторная заявка сразу уходит менеджерам, а не через 12 часов
         from app.access import AccessQueue
         assert "notifiedAt" not in AccessQueue(tmp_path).get("101")
+
+
+
+def test_push_diff_and_text():
+    from app.push import diff_orders, push_text
+    known = {}
+    o = [{"userId": "101", "number": "5001", "positions": [
+        {"id": 1, "brand": "Knecht", "number": "OC90", "status": "В работе"},
+        {"id": 2, "brand": "Mann", "number": "W712", "status": "В работе"}]},
+         {"userId": "999", "number": "6000", "positions": [{"id": 9, "status": "Выдано"}]}]
+    assert diff_orders(o, known, {"101"}, 1.0) == {}  # первое знакомство — без уведомлений
+    assert "9" not in known  # чужие (без подписки) не храним
+    o[0]["positions"][0]["status"] = "В пути"
+    ch = diff_orders(o, known, {"101"}, 2.0)
+    assert ch == {"101": {"5001": [("Knecht OC90", "В пути")]}}
+    assert push_text("5001", ch["101"]["5001"]) == ("Заказ № 5001: В пути", "Knecht OC90")
+
+
+def test_push_token_and_watch(tmp_path):
+    from dataclasses import replace
+    pushes = []
+    orders = {"status": "В работе"}
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "push.test":
+            pushes.append(__import__("json").loads(request.content))
+            return httpx.Response(200, json={})
+        if request.url.path.strip("/") == "cp/orders":
+            return httpx.Response(200, json=[{"userId": "101", "number": "5001", "positions": [
+                {"id": 1, "brand": "Knecht", "number": "OC90", "status": orders["status"]}]}])
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), rustore_project_id="p", rustore_push_token="t",
+                rustore_push_host="https://push.test", order_watch_interval=0, app_upload_token="u" * 40)
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        h = login(c)
+        assert c.post("/v1/push/token", json={"token": "device-token-1"}).status_code == 401
+        assert c.post("/v1/push/token", headers=h, json={"token": "device-token-1"}).json()["push"] is True
+        # статус сменился в ABCP → следующая проверка шлёт push
+        orders["status"] = "В пути"
+        sent = c.portal.call(c.app.state.watcher.tick)
+        assert sent == 1 and pushes[-1]["message"]["token"] == "device-token-1"
+        assert pushes[-1]["message"]["data"]["title"] == "Заказ № 5001: В пути"
+        assert __import__("json").loads(pushes[-1]["message"]["data"]["items"]) == [["Knecht OC90", "В пути"]]
+        r = c.post("/v1/admin/push-test", json={"uid": "101"}, headers={"X-Upload-Token": "u" * 40})
+        assert r.json() == {"devices": 1, "codes": [200]}
+        assert c.post("/v1/admin/push-test", json={"uid": "101"}).status_code == 403
+        c.request("DELETE", "/v1/push/token", json={"token": "device-token-1"})
+        assert c.post("/v1/admin/push-test", json={"uid": "101"}, headers={"X-Upload-Token": "u" * 40}).json()["devices"] == 0
+

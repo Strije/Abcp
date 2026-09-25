@@ -10,6 +10,9 @@ POST /v1/laximo/{method}      подбор по авто через Laximo (па
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
 DELETE /v1/access-request     доступ появился — закрыть заявку
+POST /v1/push/token           push-токен устройства (RuStore) для уведомлений о заказах
+DELETE /v1/push/token         забыть токен (выход из аккаунта)
+POST /v1/admin/push-test      тестовый push клиенту (X-Upload-Token)
 GET  /v1/app/latest           последняя сборка приложения (автообновление)
 GET  /v1/app/apk/{code}       скачать сборку
 PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
@@ -26,7 +29,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from . import access, releases, tokens
+from . import access, push, releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
@@ -56,6 +59,15 @@ class RegisterIn(BaseModel):
     email: str = Field(default="", max_length=120)
     password: str = Field(min_length=6, max_length=64)
     office: str = Field(pattern=r"^\d{1,10}$")
+
+
+class PushTokenIn(BaseModel):
+    token: str = Field(min_length=10, max_length=1000)
+
+
+class PushTestIn(BaseModel):
+    uid: str = Field(pattern=r"^\d{1,12}$")
+    text: str = Field(default="Тестовое уведомление Автодруг92", max_length=200)
 
 
 class AccessIn(BaseModel):
@@ -95,7 +107,17 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["s"] = s
         state["abcp"] = abcp or Abcp(s)
         state["laximo"] = laximo or Laximo(s)
+        folder = Path(s.state_dir)
+        state["tokens"] = push.TokenStore(folder)
+        state["pusher"] = push.RuStorePush(state["abcp"].http, s.rustore_push_host, s.rustore_project_id, s.rustore_push_token)
+        state["watcher"] = push.OrderWatcher(state["abcp"], state["pusher"], state["tokens"], folder, s.order_watch_interval)
+        app.state.watcher = state["watcher"]  # для тестов и ручного запуска
+        task = None
+        if state["pusher"].enabled and s.order_watch_interval > 0:
+            task = asyncio.create_task(state["watcher"].run())
         yield
+        if task:
+            task.cancel()
         await state["abcp"].close()
         await state["laximo"].close()
 
@@ -285,6 +307,33 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             raise HTTPException(502, "Каталог не ответил, попробуйте ещё раз")
         # Ответ как есть (и ошибки E_… тоже), но 5xx Laximo — это 502 для приложения
         return Response(text, status_code=502 if code >= 500 else code, media_type="application/json")
+
+    @app.post("/v1/push/token")
+    async def push_token(body: PushTokenIn, uid: str = Depends(current_uid)):
+        new = uid not in state["tokens"].uids()
+        state["tokens"].add(uid, body.token)
+        if new:
+            # Запоминаем текущие статусы клиента — уведомлять будем только об изменениях
+            try:
+                await state["watcher"].seed(uid)
+            except AbcpError:
+                pass
+        return {"ok": True, "push": state["pusher"].enabled}
+
+    @app.delete("/v1/push/token")
+    async def push_token_delete(body: PushTokenIn):
+        # Без авторизации: при выходе токен сервера уже может быть недействителен, а сам push-токен и есть ключ
+        state["tokens"].remove(body.token)
+        return {"ok": True}
+
+    @app.post("/v1/admin/push-test")
+    async def push_test(body: PushTestIn, x_upload_token: str = Header(default="")):
+        s = state["s"]
+        if not s.app_upload_token or not hmac.compare_digest(x_upload_token, s.app_upload_token):
+            raise HTTPException(403, "Нет доступа")
+        codes = [await state["pusher"].send(t, {"type": "test", "title": "Автодруг92", "body": body.text})
+                 for t in state["tokens"].tokens(body.uid)]
+        return {"devices": len(codes), "codes": codes}
 
     def queue() -> access.AccessQueue:
         return access.AccessQueue(Path(state["s"].state_dir))

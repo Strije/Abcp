@@ -207,6 +207,20 @@ class Abcp:
             raise AbcpError(r.status_code, _msg(msg) or "Ошибка ABCP")
         return body
 
+    async def orders_updated(self, since: str, user_id: str | None = None) -> list[dict]:
+        """Заказы, изменённые после `since` (московское время ABCP), с позициями. Постранично по 500."""
+        out: list[dict] = []
+        skip = 0
+        while True:
+            params = {"dateUpdatedStart": since, "limit": "500", "skip": str(skip)}
+            if user_id:
+                params["userId"] = user_id
+            page = [o for o in items(await self._get("cp/orders", self._admin(params))) if isinstance(o, dict)]
+            out += page
+            if len(page) < 500 or skip > 20000:
+                return out
+            skip += 500
+
     async def client_exists(self, mobile: str, email: str = "") -> bool:
         """Есть ли уже клиент с таким мобильным (79XXXXXXXXX — так ABCP их хранит) или email."""
         for key, value in (("phone", mobile), ("email", email)):

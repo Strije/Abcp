@@ -19,6 +19,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // RuStore SDK (push). Новый адрес — старый artifactory-external.vkpartner.ru отключают 30.09.2026
+        maven { url = uri("https://nexus-external.rustore.ru/repository/maven-rustore-exposed/") }
     }
 }
 

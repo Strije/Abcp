@@ -27,6 +27,13 @@ class Settings:
     # Заявки на доступ к API — менеджерам в Telegram. Пусто — заявки копятся без уведомлений.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Push через RuStore: ID проекта и сервисный токен из Консоли RuStore. Пусто — push выключен.
+    rustore_project_id: str = ""
+    rustore_push_token: str = ""
+    # Новый домен vkpns-dg.rustore.ru требует корневой сертификат Минцифры на сервере
+    rustore_push_host: str = "https://vkpns.rustore.ru"
+    # Как часто смотреть изменённые заказы, секунд (0 — не следить)
+    order_watch_interval: int = 180
     # Где хранить очередь заявок
     state_dir: str = "/var/lib/avtodrug-api"
 
@@ -53,4 +60,8 @@ def load() -> Settings:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
         state_dir=os.environ.get("STATE_DIR", "/var/lib/avtodrug-api"),
+        rustore_project_id=os.environ.get("RUSTORE_PROJECT_ID", "").strip(),
+        rustore_push_token=os.environ.get("RUSTORE_PUSH_TOKEN", "").strip(),
+        rustore_push_host=os.environ.get("RUSTORE_PUSH_HOST", "https://vkpns.rustore.ru").strip(),
+        order_watch_interval=int(os.environ.get("ORDER_WATCH_INTERVAL", "180") or 0),
     )
