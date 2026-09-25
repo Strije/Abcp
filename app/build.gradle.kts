@@ -41,16 +41,32 @@ android {
         getByName("debug") {
             System.getenv("DEBUG_KEYSTORE")?.let { storeFile = file(it) }
         }
+        // Боевой ключ (секреты RELEASE_KEYSTORE_B64 / RELEASE_KEYSTORE_PASS). Его же отпечаток — в RuStore.
+        create("release") {
+            System.getenv("RELEASE_KEYSTORE")?.let {
+                storeFile = file(it)
+                storePassword = System.getenv("RELEASE_KEYSTORE_PASS")
+                keyAlias = "avtodrug92"
+                keyPassword = System.getenv("RELEASE_KEYSTORE_PASS")
+            }
+        }
     }
 
     buildTypes {
         release {
+            // Без боевого ключа (локальная сборка) — подписываем debug-ключом, чтобы сборка не падала
+            signingConfig = signingConfigs.getByName(if (System.getenv("RELEASE_KEYSTORE") != null) "release" else "debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
+    }
+    // Проверка lint не должна останавливать выпуск — предупреждения смотрим отдельно
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

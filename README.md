@@ -30,7 +30,9 @@ Android-приложение для покупателей [avtodrug92.ru](https
 ## Сборка
 
 Сборку делает GitHub Actions при каждом push (`.github/workflows/android.yml`), APK — в разделе Artifacts.
-Нужный секрет репозитория: `DEBUG_KEYSTORE_B64` (постоянный ключ подписи, чтобы новые версии вставали поверх).
+Сборка — release, подписанная боевым ключом (секреты `RELEASE_KEYSTORE_B64`, `RELEASE_KEYSTORE_PASS`;
+отпечаток SHA-256 `4A:7F:45:28…D6:97`). Сборку из `main` с этим ключом CI сам выкладывает на сервер обновлений
+(секрет `APP_UPLOAD_TOKEN`). `DEBUG_KEYSTORE_B64` — старый debug-ключ, нужен только для локальной отладки.
 Паролей в APK нет: доступ к Laximo и админский доступ ABCP хранятся только на сервере.
 
 Локально (Android Studio) в `local.properties` можно указать другой сервер:
