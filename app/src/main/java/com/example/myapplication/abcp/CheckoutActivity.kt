@@ -93,6 +93,7 @@ class CheckoutActivity : ComponentActivity() {
                                 Text("Заказ оформлен", style = MaterialTheme.typography.headlineSmall)
                                 Text("№ " + done!!.joinToString(", "))
                                 Spacer(Modifier.height(16.dp))
+                                com.example.myapplication.push.BatteryHintCard(Modifier.padding(bottom = 16.dp))
                                 Button(onClick = {
                                     startActivity(Intent(this@CheckoutActivity, OrdersActivity::class.java))
                                     finish()

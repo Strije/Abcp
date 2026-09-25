@@ -98,6 +98,9 @@ class PushService : RuStoreMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
+        // Рассылки и ответы чата сервер присылает с готовым уведомлением — его уже показал RuStore
+        // (так быстрее: не надо ждать, пока система разбудит приложение). Второе не рисуем.
+        if (message.notification != null) return
         Push.onMessage(applicationContext, message.data)
     }
 }

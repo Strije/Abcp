@@ -238,6 +238,17 @@ fun showPromoNotification(ctx: Context, title: String, text: String) {
 
 private const val PROMO_CHANNEL = "promo"
 
+/** Каналы создаём при запуске: готовые уведомления от RuStore (рассылки, чат) приходят сразу в них. */
+fun ensureNotificationChannels(ctx: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    OrderStatusWatch.ensureChannel(ctx)
+    val nm = ctx.getSystemService(NotificationManager::class.java)
+    nm.createNotificationChannel(NotificationChannel(PROMO_CHANNEL, "Акции и новости", NotificationManager.IMPORTANCE_DEFAULT)
+        .apply { description = "Скидки и новости магазина" })
+    nm.createNotificationChannel(NotificationChannel("chat", "Чат с магазином", NotificationManager.IMPORTANCE_HIGH)
+        .apply { description = "Ответы менеджера" })
+}
+
 /** Ответ менеджера в чате — отдельный канал «Чат с магазином», нажатие открывает чат. */
 fun showChatNotification(ctx: Context, title: String, text: String) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

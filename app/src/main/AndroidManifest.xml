@@ -4,6 +4,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- один раз после заказа: попросить не придерживать push ради экономии батареи -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Поворот экрана и смена темы не пересоздают экраны: Compose перерисует сам, введённое не теряется -->
     <application
@@ -27,7 +29,13 @@
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".abcp.NotificationsActivity" android:exported="false" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".NewsActivity" android:exported="false" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".AccountActivity" android:exported="false" />
-        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".ChatActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+            <!-- нажатие на push «Менеджер ответил» (действие задаёт сервер) -->
+            <intent-filter>
+                <action android:name="ru.avtodrug92.OPEN_CHAT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".VinSearchActivity" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".GarageActivity" />
 
@@ -49,6 +57,9 @@
         <meta-data
             android:name="ru.rustore.sdk.pushclient.default_notification_channel_id"
             android:value="order_status" />
+        <meta-data
+            android:name="ru.rustore.sdk.pushclient.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
