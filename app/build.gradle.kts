@@ -78,9 +78,9 @@ android {
         release {
             // Без боевого ключа (локальная сборка) — подписываем debug-ключом, чтобы сборка не падала
             signingConfig = signingConfigs.getByName(if (System.getenv("RELEASE_KEYSTORE") != null) "release" else "debug")
-            // Сжатие: выкидываем неиспользуемый код и ресурсы библиотек (правила — proguard-rules.pro)
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Сжатие R8 выключено: в 1.0.60 приложение с ним падало на телефоне. Вернём после разбора вылета
+            // (правила — proguard-rules.pro). Размер и так снижен фильтром ARM.
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
