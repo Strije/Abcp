@@ -3,7 +3,8 @@
 # Запускать от root на НОВОМ сервере:
 #
 #   curl -fsSLo setup.sh https://raw.githubusercontent.com/Strije/Abcp/main/server/deploy/setup.sh
-#   bash setup.sh install api.avtodrug92.ru   # 1) поставить всё, настройки со старого, HTTPS — сервис ещё спит
+#   bash setup.sh install [адрес]             # 1) поставить всё, настройки со старого, HTTPS — сервис ещё спит
+#                                             #    (без адреса — технический адрес сервера из DNS)
 #   bash setup.sh move                        # 2) переезд: старый сервис стоп, данные сюда, запуск здесь,
 #                                             #    старый адрес проксирует сюда (для старых версий приложения)
 #   bash setup.sh update                      # потом: выложить свежий код из git и перезапустить
@@ -63,14 +64,25 @@ deploy_code() {
 
 cmd_install() {
     local domain="${1:-}" ip
-    [ -n "$domain" ] || die "Укажите адрес: bash setup.sh install api.avtodrug92.ru"
     [ "$(id -u)" = 0 ] || die "Нужен root"
 
     say "Пакеты"
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -q
-    apt-get install -y -q python3-venv git rsync curl nginx certbot python3-certbot-nginx >/dev/null
+    # На свежем сервере первые минуты работает автообновление Ubuntu — ждём его, а не падаем
+    apt-get -o DPkg::Lock::Timeout=900 update -q
+    apt-get -o DPkg::Lock::Timeout=900 install -y -q python3-venv git rsync curl nginx certbot python3-certbot-nginx bind9-dnsutils >/dev/null
     ok "python3, nginx, certbot"
+
+    # Адрес — только из настоящего DNS (в /etc/hosts есть имя вида msk-1-vm-…, сертификат на него не дадут)
+    ip=$(curl -4 -sS -m 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    if [ -z "$domain" ]; then  # свой домен не задан — технический адрес сервера (обратная запись DNS)
+        domain=$(dig +short -x "$ip" | sed 's/\.$//' | grep '\.' | head -1 || true)
+        [ -n "$domain" ] || die "У $ip нет адреса в DNS. Укажите его: bash setup.sh install <адрес>"
+        ok "адрес сервера: $domain"
+    fi
+    if ! dig +short A "$domain" | grep -qx "$ip"; then
+        die "$domain пока не ведёт на этот сервер ($ip). Добавьте в DNS запись A: $domain → $ip, подождите 5–30 минут и запустите снова"
+    fi
     id avtodrug >/dev/null 2>&1 || useradd --system --home "$DIR" --shell /usr/sbin/nologin avtodrug
     ok "пользователь avtodrug"
 
@@ -89,10 +101,6 @@ cmd_install() {
     env_set PUBLIC_URL "https://$domain"
 
     say "HTTPS для $domain"
-    ip=$(curl -4 -sS -m 10 https://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-    if ! getent ahostsv4 "$domain" | awk '{print $1}' | grep -qx "$ip"; then
-        die "$domain пока не ведёт на этот сервер ($ip). Добавьте в DNS запись A: $domain → $ip, подождите 5–30 минут и запустите снова"
-    fi
     [ -f "$SITE" ] || sed "s/__DOMAIN__/$domain/" "$DIR/deploy/nginx-avtodrug-api.conf" > "$SITE"
     ln -sf "$SITE" /etc/nginx/sites-enabled/avtodrug-api
     nginx -t -q && systemctl reload nginx
@@ -217,5 +225,5 @@ case "${1:-}" in
     install) shift; cmd_install "$@" ;;
     move) cmd_move ;;
     update) cmd_update ;;
-    *) sed -n '2,12p' "$0"; exit 1 ;;
+    *) sed -n '2,13p' "$0"; exit 1 ;;
 esac
