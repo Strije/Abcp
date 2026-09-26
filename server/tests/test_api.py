@@ -67,7 +67,7 @@ def fake_abcp(request: httpx.Request) -> httpx.Response:
                                           "availability": "6", "deliveryPeriod": "0", "itemKey": "k"}])
     if p == "articles/info":
         return httpx.Response(200, json=[{"brand": q["brand"], "number": q["number"],
-                                          "images": [{"name": "abc0002.jpeg"}, "https://x.test/b.jpg"]}])
+                                          "images": [{"name": "abc0002.jpeg"}, "https://x.test/b.jpg", "//x.test/c.jpg"]}])
     return httpx.Response(404, json={"errorMessage": "unknown"})
 
 
@@ -117,7 +117,8 @@ def test_topup(client):
 
 def test_images(client):
     r = client.post("/v1/images", headers=login(client), json={"items": [{"brand": "Knecht", "number": "OC90"}]})
-    assert r.json()["Knecht|OC90"] == ["https://imgcdn.abcp.ru/p/abc0002.jpeg", "https://x.test/b.jpg"]
+    assert r.json()["Knecht|OC90"] == ["https://imgcdn.abcp.ru/p/full/abc0002.jpeg", "https://x.test/b.jpg",
+                                         "https://x.test/c.jpg"]
 
 
 def test_token_tamper_and_expiry():

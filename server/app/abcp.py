@@ -13,7 +13,7 @@ import httpx
 
 from .config import Settings
 
-IMG_CDN = "https://imgcdn.abcp.ru/p/"
+IMG_CDN = "https://imgcdn.abcp.ru/p/full/"  # как в приложении (AbcpShop.parseImages)
 log = logging.getLogger("avtodrug")
 
 
@@ -22,6 +22,15 @@ class AbcpError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _img_url(name: str) -> str:
+    """Имя файла из ABCP → ссылка на CDN; готовые ссылки не трогаем."""
+    if name.startswith("http"):
+        return name
+    if name.startswith("//"):
+        return "https:" + name
+    return IMG_CDN + name.lstrip("/")
 
 
 def items(data: Any) -> list:
@@ -193,7 +202,7 @@ class Abcp:
             for img in art.get("images") or []:
                 name = img.get("name") if isinstance(img, dict) else img
                 if name:
-                    urls.append(name if str(name).startswith("http") else IMG_CDN + str(name).lstrip("/"))
+                    urls.append(_img_url(str(name).strip()))
         urls = list(dict.fromkeys(urls))
         self._img_cache[key] = (time.time() + ttl, urls)
         if len(self._img_cache) > 20000:  # не даём кэшу расти бесконечно
