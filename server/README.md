@@ -63,29 +63,30 @@
 
 ## Где работает
 
-Тестовый VPS 194.87.208.68 (Нидерланды) — на нём же личный VPN, **перед и после любых изменений проверять
+Сейчас — тестовый VPS 194.87.208.68 (Нидерланды), на нём же личный VPN: **перед и после любых изменений проверять
 VPN-подписку**. Сервис `avtodrug-api` (uvicorn на 127.0.0.1:8090, код `/opt/avtodrug-api`, данные
-`/var/lib/avtodrug-api`), снаружи nginx с HTTPS на порту 8446. Для 152-ФЗ со временем нужен VPS в России.
+`/var/lib/avtodrug-api`), снаружи nginx с HTTPS на порту 8446.
+
+Переезжаем на VPS в России (Timeweb, 109.73.199.217, 152-ФЗ): адрес `https://api.avtodrug92.ru`, nginx + Let's Encrypt.
+Старый адрес после переезда проксирует на новый — старые версии приложения работают, пока не обновятся.
+Если Telegram с нового сервера недоступен, бот ходит в него через старый сервер (`TELEGRAM_API`).
 
 Переменные окружения — [deploy/avtodrug-api.env.example](deploy/avtodrug-api.env.example).
 
-## Выкладка
+## Установка и переезд
+
+Всё делает [deploy/setup.sh](deploy/setup.sh), запускать от root на новом сервере:
 
 ```bash
-scp app/*.py root@194.87.208.68:/opt/avtodrug-api/app/
-ssh root@194.87.208.68 systemctl restart avtodrug-api
+curl -fsSLo setup.sh https://raw.githubusercontent.com/Strije/Abcp/main/server/deploy/setup.sh
+bash setup.sh install api.avtodrug92.ru   # пакеты, код, настройки со старого сервера, HTTPS; сервис ещё не запущен
+bash setup.sh move                        # старый сервис стоп → данные сюда → старый адрес проксирует сюда → запуск
+bash setup.sh update                      # выложить свежий код из git (main) и перезапустить
 ```
 
-Первая установка на новый сервер (Ubuntu):
-
-```bash
-apt install -y python3-venv nginx
-useradd --system --home /opt/avtodrug-api avtodrug
-git clone https://github.com/Strije/Abcp.git /tmp/abcp && cp -r /tmp/abcp/server /opt/avtodrug-api
-python3 -m venv /opt/avtodrug-api/venv && /opt/avtodrug-api/venv/bin/pip install -r /opt/avtodrug-api/requirements.txt
-install -m 600 /opt/avtodrug-api/deploy/avtodrug-api.env.example /etc/avtodrug-api.env   # и заполнить
-cp /opt/avtodrug-api/deploy/avtodrug-api.service /etc/systemd/system/ && systemctl enable --now avtodrug-api
-```
+До `install` — запись DNS `api.avtodrug92.ru → 109.73.199.217`. До `move` — попросить ABCP разрешить
+регистрацию и восстановление пароля (и API-администратора, если стоит ограничение) с нового IP.
+`move` проверяет VPN-подписку до и после; откат он печатает в конце.
 
 ## Тесты
 
