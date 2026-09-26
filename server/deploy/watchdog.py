@@ -5,6 +5,7 @@
 Настройки — из /etc/avtodrug-api.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_API, PUBLIC_URL,
 WATCH_SUBSCRIPTION_URL).
 """
+import ipaddress
 import json
 import os
 import shutil
@@ -50,7 +51,15 @@ def check_cert() -> str | None:
     except (OSError, KeyError, ValueError) as e:  # ssl.SSLError — тоже OSError (в т. ч. истёкший сертификат)
         return f"HTTPS снаружи не работает ({type(e).__name__})"
     days = int((end - time.time()) // 86400)
-    return f"Сертификат HTTPS истекает через {days} дн. — автопродление не сработало" if days < 14 else None
+    # Сертификат на голый IP (acme.sh, профиль shortlived) живёт ~6 дней по дизайну и
+    # продлевается за ~3 дня до истечения — порог в 14 дней тут будет ложным срабатыванием
+    # на каждом цикле. Обычный сертификат на домен (certbot, 90 дней) остаётся на пороге в 14.
+    try:
+        ipaddress.ip_address(url.hostname)
+        threshold = 2
+    except ValueError:
+        threshold = 14
+    return f"Сертификат HTTPS истекает через {days} дн. — автопродление не сработало" if days < threshold else None
 
 
 def check_subscription() -> str | None:
@@ -102,7 +111,7 @@ def main():
             telegram(f"🔴 Сервер Автодруг: {msg}")
     for name, msg in was.items():
         if name not in problems:
-            telegram(f"🟢 Сервер Автодруг: снова в порядке — {msg.split(' (')[0].lower()}")
+            telegram(f"🟢 Сервер Автодруг: устранено — {msg.split(' (')[0].lower()}")
     state["problems"] = problems
     backup(state)
     STATE.write_text(json.dumps(state, ensure_ascii=False))

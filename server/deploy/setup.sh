@@ -149,10 +149,14 @@ cmd_move() {
     fi
 
     say "Старый адрес → сюда (для старых версий приложения)"
-    out=$(ssh "${SSH_OPTS[@]}" "root@$OLD" python3 - "$domain" "$tg" 2>&1 <<'PY'
+    # SSH склеивает хвостовые аргументы команды в одну строку для удалённой оболочки;
+    # пустой $tg при этом бесследно исчезает при разбиении на слова, и sys.argv[2] пропадает.
+    # Поэтому передаём нейтральную заглушку вместо пустой строки.
+    out=$(ssh "${SSH_OPTS[@]}" "root@$OLD" python3 - "$domain" "${tg:-__none__}" 2>&1 <<'PY'
 import pathlib, re, shutil, subprocess, sys, time
 
-domain, tg = sys.argv[1], sys.argv[2]
+domain, tg_raw = sys.argv[1], sys.argv[2]
+tg = "" if tg_raw == "__none__" else tg_raw
 files = sorted({p.resolve() for p in pathlib.Path("/etc/nginx").rglob("*")
          if p.is_file() and "127.0.0.1:8090" in p.read_text(errors="ignore")})
 if not files:
