@@ -39,7 +39,7 @@ class Settings:
     bitrix_client_secret: str = ""
     bitrix_domain: str = "bitrix.freno.ru"
     # Наш адрес снаружи — на него Битрикс шлёт события
-    public_url: str = "https://9077635-oy742028.twc1.net:8446"
+    public_url: str = "https://109.73.199.217"
     # Где хранить очередь заявок
     state_dir: str = "/var/lib/avtodrug-api"
 
@@ -69,7 +69,7 @@ def load() -> Settings:
         bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
         bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
         bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),
-        public_url=os.environ.get("PUBLIC_URL", "https://9077635-oy742028.twc1.net:8446").strip(),
+        public_url=os.environ.get("PUBLIC_URL", "https://109.73.199.217").strip(),
         rustore_project_id=os.environ.get("RUSTORE_PROJECT_ID", "").strip(),
         rustore_push_token=os.environ.get("RUSTORE_PUSH_TOKEN", "").strip(),
         rustore_push_host=os.environ.get("RUSTORE_PUSH_HOST", "https://vkpns.rustore.ru").strip(),

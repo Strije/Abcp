@@ -83,7 +83,7 @@ jobs:
           if [ -z "$APP_UPLOAD_TOKEN" ]; then echo "::warning::APP_UPLOAD_TOKEN не задан — обновление не опубликовано"; exit 0; fi
           N=$GITHUB_RUN_NUMBER
           Q="versionName=$(jq -rn --arg v "1.0.$N" '$v|@uri')&notes=$(printf '%s' "$NOTES" | grep -v '^Co-Authored-By' | head -c 1500 | jq -sRr @uri)"
-          curl -fsS --retry 3 -X PUT -H "X-Upload-Token: $APP_UPLOAD_TOKEN"             -H "Content-Type: application/vnd.android.package-archive"             --data-binary @app/build/outputs/apk/direct/release/app-direct-release.apk             "https://9077635-oy742028.twc1.net:8446/v1/app/apk/$N?$Q" > /dev/null
+          curl -fsS --retry 3 -X PUT -H "X-Upload-Token: $APP_UPLOAD_TOKEN"             -H "Content-Type: application/vnd.android.package-archive"             --data-binary @app/build/outputs/apk/direct/release/app-direct-release.apk             "https://109.73.199.217/v1/app/apk/$N?$Q" > /dev/null
           echo "::notice::Обновление 1.0.$N опубликовано на сервере"
 
       # direct — для раздачи напрямую (с автообновлением), rustore — загружать в Консоль RuStore

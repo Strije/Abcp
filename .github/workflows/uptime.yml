@@ -19,7 +19,7 @@ jobs:
           ok=0
           # Три попытки с паузой — не тревожить из-за одного случайного сбоя сети
           for i in 1 2 3; do
-            if curl -fsS --max-time 20 https://9077635-oy742028.twc1.net:8446/health > /dev/null; then ok=1; break; fi
+            if curl -fsS --max-time 20 https://109.73.199.217/health > /dev/null; then ok=1; break; fi
             sleep 60
           done
           if [ "$ok" = 1 ]; then echo "API в порядке"; exit 0; fi

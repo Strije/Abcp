@@ -29,7 +29,7 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
 
         // Наш сервер (server/): баланс, оплата, картинки. Тестовый — на VPS в NL, к выпуску переедет в РФ.
-        buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://9077635-oy742028.twc1.net:8446")}\"")
+        buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://109.73.199.217")}\"")
 
         // ID проекта push в Консоли RuStore — не секрет (он зашивается в любое приложение с push)
         // AppMetrica (Яндекс): вылеты и ошибки. Ключ приложения — не секрет. Пусто — ничего не отправляем.
