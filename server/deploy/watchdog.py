@@ -2,17 +2,19 @@
 только при смене состояния («сломалось» / «починилось»). Раз в сутки — копия данных сервиса.
 
 Проверки: API отвечает, место на диске, срок HTTPS-сертификата, VPN-подписка (соседний сервис на этом VPS).
-Настройки — из /etc/avtodrug-api.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, WATCH_SUBSCRIPTION_URL).
+Настройки — из /etc/avtodrug-api.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_API, PUBLIC_URL,
+WATCH_SUBSCRIPTION_URL).
 """
+import ipaddress
 import json
 import os
 import shutil
+import socket
 import ssl
-import subprocess
 import tarfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -20,7 +22,7 @@ STATE = Path("/var/lib/avtodrug-watchdog/state.json")
 DATA = Path("/var/lib/avtodrug-api")
 BACKUPS = Path("/var/backups/avtodrug-api")
 KEEP_BACKUPS = 14
-CERT = Path("/root/cert/le/fullchain.pem")
+TG_API = os.environ.get("TELEGRAM_API", "https://api.telegram.org").rstrip("/")
 
 
 def check_api() -> str | None:
@@ -38,15 +40,26 @@ def check_disk() -> str | None:
 
 
 def check_cert() -> str | None:
-    if not CERT.exists():
+    """Сертификат смотрим снаружи, как его видит приложение: по адресу PUBLIC_URL (где бы он ни лежал на диске)."""
+    url = urlsplit(os.environ.get("PUBLIC_URL", ""))
+    if url.scheme != "https" or not url.hostname:
         return None
-    out = subprocess.run(["openssl", "x509", "-enddate", "-noout", "-in", str(CERT)], capture_output=True, text=True).stdout
     try:
-        end = datetime.strptime(out.strip().split("=", 1)[1], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
-    except (IndexError, ValueError):
-        return "Не удалось прочитать срок сертификата HTTPS"
-    days = (end - datetime.now(timezone.utc)).days
-    return f"Сертификат HTTPS истекает через {days} дн. — автопродление не сработало" if days < 14 else None
+        with socket.create_connection((url.hostname, url.port or 443), timeout=15) as raw, \
+                ssl.create_default_context().wrap_socket(raw, server_hostname=url.hostname) as tls:
+            end = ssl.cert_time_to_seconds(tls.getpeercert()["notAfter"])
+    except (OSError, KeyError, ValueError) as e:  # ssl.SSLError — тоже OSError (в т. ч. истёкший сертификат)
+        return f"HTTPS снаружи не работает ({type(e).__name__})"
+    days = int((end - time.time()) // 86400)
+    # Сертификат на голый IP (acme.sh, профиль shortlived) живёт ~6 дней по дизайну и
+    # продлевается за ~3 дня до истечения — порог в 14 дней тут будет ложным срабатыванием
+    # на каждом цикле. Обычный сертификат на домен (certbot, 90 дней) остаётся на пороге в 14.
+    try:
+        ipaddress.ip_address(url.hostname)
+        threshold = 2
+    except ValueError:
+        threshold = 14
+    return f"Сертификат HTTPS истекает через {days} дн. — автопродление не сработало" if days < threshold else None
 
 
 def check_subscription() -> str | None:
@@ -64,7 +77,7 @@ def telegram(text: str):
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
     if token and chat:
         try:
-            httpx.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat, "text": text}, timeout=15)
+            httpx.post(f"{TG_API}/bot{token}/sendMessage", json={"chat_id": chat, "text": text}, timeout=15)
         except httpx.HTTPError:
             pass
 
@@ -98,7 +111,7 @@ def main():
             telegram(f"🔴 Сервер Автодруг: {msg}")
     for name, msg in was.items():
         if name not in problems:
-            telegram(f"🟢 Сервер Автодруг: снова в порядке — {msg.split(' (')[0].lower()}")
+            telegram(f"🟢 Сервер Автодруг: устранено — {msg.split(' (')[0].lower()}")
     state["problems"] = problems
     backup(state)
     STATE.write_text(json.dumps(state, ensure_ascii=False))

@@ -19,6 +19,9 @@ import logging
 
 import httpx
 
+# С сервера в РФ Telegram может быть недоступен — тогда адрес API через свой прокси (TELEGRAM_API в env)
+TG_API = os.environ.get("TELEGRAM_API", "https://api.telegram.org").rstrip("/")
+
 log = logging.getLogger("avtodrug")
 
 REPEAT_NOTIFY = 12 * 3600  # повторная заявка того же клиента — напоминание не чаще раза в 12 часов
@@ -113,7 +116,7 @@ async def telegram(http: httpx.AsyncClient, token: str, chat_id: str, text: str,
     if markup:
         body["reply_markup"] = markup
     try:
-        r = await http.post(f"https://api.telegram.org/bot{token}/sendMessage", json=body)
+        r = await http.post(f"{TG_API}/bot{token}/sendMessage", json=body)
         return r.status_code == 200
     except httpx.HTTPError:
         return False
@@ -133,7 +136,7 @@ class ButtonListener:
         self.offset = 0
 
     def _url(self, method: str) -> str:
-        return f"https://api.telegram.org/bot{self.token}/{method}"
+        return f"{TG_API}/bot{self.token}/{method}"
 
     async def send(self, text: str, markup: dict | None = None):
         body = {"chat_id": self.chat_id, "text": text, "disable_web_page_preview": True}

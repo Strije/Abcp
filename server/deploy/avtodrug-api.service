@@ -8,13 +8,16 @@ User=avtodrug
 Group=avtodrug
 WorkingDirectory=/opt/avtodrug-api
 EnvironmentFile=/etc/avtodrug-api.env
-# Слушаем только локально — наружу его отдаёт Caddy с HTTPS
-ExecStart=/opt/avtodrug-api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8080 --workers 1 --proxy-headers --no-access-log
+# Слушаем только локально — наружу его отдаёт nginx с HTTPS (deploy/nginx-avtodrug-api.conf)
+ExecStart=/opt/avtodrug-api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8090 --workers 1 --proxy-headers --no-access-log
 Restart=always
 RestartSec=3
 # Ограничения: сервису не нужны права сверх чтения своей папки
 NoNewPrivileges=true
 ProtectSystem=strict
+# /var/lib/avtodrug-api — единственное, куда сервис пишет (заявки, push-токены, APK)
+StateDirectory=avtodrug-api
+StateDirectoryMode=0700
 ProtectHome=true
 PrivateTmp=true
 MemoryMax=300M
