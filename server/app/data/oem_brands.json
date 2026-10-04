@@ -1,0 +1,287 @@
+{
+ "_": "Выжимка справочника брендов ABCP по маркам машин: python -m app.podbor.brands",
+ "makes": {
+  "ACURA": "HONDA",
+  "ALFA ROMEO": "Fiat/Alfa/Lancia",
+  "AUDI": "VAG",
+  "BAIC": "BAIC",
+  "BMW": "BMW",
+  "BYD": "BYD",
+  "CADILLAC": "GENERAL MOTORS",
+  "CHANGAN": "Changan",
+  "CHERY": "CHERY",
+  "CHEVROLET": "GENERAL MOTORS",
+  "CHRYSLER": "CHRYSLER",
+  "CITROEN": "Peugeot-Citroen",
+  "CUPRA": "CUPRA",
+  "DACIA": "RENAULT",
+  "DAEWOO": "DAEWOO",
+  "DAIHATSU": "DAIHATSU",
+  "DATSUN": "DATSUN",
+  "DODGE": "CHRYSLER",
+  "DONGFENG": "DONGFENG",
+  "DS": "DS",
+  "EXEED": "EXEED",
+  "FAW": "FAW",
+  "FIAT": "Fiat/Alfa/Lancia",
+  "FORD": "FORD",
+  "GAZ": "GAZ",
+  "GEELY": "GEELY",
+  "GENESIS": "Genesis",
+  "GREAT WALL": "Great Wall",
+  "HAVAL": "HAVAL",
+  "HONDA": "HONDA",
+  "HYUNDAI": "Hyundai-KIA",
+  "INFINITI": "NISSAN",
+  "ISUZU": "ISUZU",
+  "IVECO": "Iveco",
+  "JAC": "JAC",
+  "JAECOO": "JAECOO",
+  "JAGUAR": "JAGUAR",
+  "JEEP": "CHRYSLER",
+  "JETOUR": "JETOUR",
+  "KIA": "Hyundai-KIA",
+  "LADA": "LADA",
+  "LAND ROVER": "LAND ROVER",
+  "LEXUS": "TOYOTA",
+  "LIFAN": "LIFAN",
+  "LIVAN": "LIVAN",
+  "MAZDA": "MAZDA",
+  "MERCEDES-BENZ": "MERCEDES-BENZ",
+  "MINI": "BMW",
+  "MITSUBISHI": "MITSUBISHI",
+  "MOSKVICH": "Москвич",
+  "NISSAN": "NISSAN",
+  "OMODA": "OMODA",
+  "OPEL": "OPEL",
+  "PEUGEOT": "Peugeot-Citroen",
+  "PORSCHE": "PORSCHE",
+  "RAVON": "RAVON",
+  "RENAULT": "RENAULT",
+  "ROVER": "ROVER",
+  "SAAB": "SAAB",
+  "SEAT": "VAG",
+  "SKODA": "VAG",
+  "SMART": "MERCEDES-BENZ",
+  "SSANGYONG": "SSANG YONG",
+  "SUBARU": "SUBARU",
+  "SUZUKI": "SUZUKI",
+  "TANK": "TANK",
+  "TESLA": "TESLA",
+  "TOYOTA": "TOYOTA",
+  "UAZ": "UAZ",
+  "VAZ": "LADA",
+  "VOLKSWAGEN": "VAG",
+  "VOLVO": "VOLVO",
+  "VORTEX": "VORTEX",
+  "VW": "VAG",
+  "ZAZ": "ZAZ",
+  "ZOTYE": "ZOTYE"
+ },
+ "families": {
+  "BMW": [
+   "BMW",
+   "BMW Motorrad"
+  ],
+  "CHERY": [
+   "CHERY",
+   "EXEED",
+   "OMODA",
+   "JETOUR",
+   "KAIYI",
+   "XCITE",
+   "JAECOO",
+   "TENET"
+  ],
+  "CHRYSLER": [
+   "CHRYSLER",
+   "MOPAR"
+  ],
+  "DAIHATSU": [
+   "TOYOTA",
+   "DAIHATSU"
+  ],
+  "DATSUN": [
+   "NISSAN",
+   "DATSUN"
+  ],
+  "DONGFENG": [
+   "DONGFENG",
+   "VOYAH",
+   "M-HERO",
+   "FORTHING"
+  ],
+  "EXEED": [
+   "CHERY",
+   "EXEED",
+   "OMODA",
+   "JETOUR",
+   "KAIYI",
+   "XCITE",
+   "JAECOO",
+   "TENET"
+  ],
+  "FAW": [
+   "FAW",
+   "HONGQI"
+  ],
+  "FORD": [
+   "FORD",
+   "MOTORCRAFT",
+   "FOMOCO"
+  ],
+  "Fiat/Alfa/Lancia": [
+   "Fiat/Alfa/Lancia",
+   "ABARTH"
+  ],
+  "GEELY": [
+   "GEELY",
+   "ZEEKR",
+   "LYNK & CO",
+   "Belgee",
+   "LIVAN"
+  ],
+  "GENERAL MOTORS": [
+   "GENERAL MOTORS",
+   "OPEL",
+   "ACDelco"
+  ],
+  "Genesis": [
+   "Hyundai-KIA",
+   "Genesis"
+  ],
+  "Great Wall": [
+   "Great Wall",
+   "HAVAL",
+   "TANK",
+   "ORA",
+   "WEY"
+  ],
+  "HAVAL": [
+   "Great Wall",
+   "HAVAL",
+   "TANK",
+   "ORA",
+   "WEY"
+  ],
+  "Hyundai-KIA": [
+   "Hyundai-KIA",
+   "Genesis"
+  ],
+  "Iveco": [
+   "ASTRA",
+   "Iveco",
+   "KAROSA",
+   "IRISBUS",
+   "Karex",
+   "Magirus"
+  ],
+  "JAC": [
+   "JAC",
+   "Sollers",
+   "Москвич"
+  ],
+  "JAECOO": [
+   "CHERY",
+   "EXEED",
+   "OMODA",
+   "JETOUR",
+   "KAIYI",
+   "XCITE",
+   "JAECOO",
+   "TENET"
+  ],
+  "JETOUR": [
+   "CHERY",
+   "EXEED",
+   "OMODA",
+   "JETOUR",
+   "KAIYI",
+   "XCITE",
+   "JAECOO",
+   "TENET"
+  ],
+  "LIVAN": [
+   "GEELY",
+   "ZEEKR",
+   "LYNK & CO",
+   "Belgee",
+   "LIVAN"
+  ],
+  "MERCEDES-BENZ": [
+   "MERCEDES-BENZ",
+   "MERCEDES-BENZ TRUCKS"
+  ],
+  "MITSUBISHI": [
+   "MITSUBISHI",
+   "Fuso"
+  ],
+  "NISSAN": [
+   "NISSAN",
+   "DATSUN"
+  ],
+  "OMODA": [
+   "CHERY",
+   "EXEED",
+   "OMODA",
+   "JETOUR",
+   "KAIYI",
+   "XCITE",
+   "JAECOO",
+   "TENET"
+  ],
+  "OPEL": [
+   "GENERAL MOTORS",
+   "OPEL",
+   "ACDelco"
+  ],
+  "PORSCHE": [
+   "VAG",
+   "PORSCHE",
+   "BENTLEY"
+  ],
+  "RENAULT": [
+   "RENAULT",
+   "Renault Trucks"
+  ],
+  "ROVER": [
+   "ROVER",
+   "MG ROVER"
+  ],
+  "SSANG YONG": [
+   "SSANG YONG",
+   "KGM"
+  ],
+  "TANK": [
+   "Great Wall",
+   "HAVAL",
+   "TANK",
+   "ORA",
+   "WEY"
+  ],
+  "TOYOTA": [
+   "TOYOTA",
+   "DAIHATSU"
+  ],
+  "VAG": [
+   "VAG",
+   "PORSCHE",
+   "BENTLEY"
+  ],
+  "VOLVO": [
+   "VOLVO",
+   "Volvo Trucks",
+   "VOLVO CONSTRUCTION"
+  ],
+  "Москвич": [
+   "JAC",
+   "Sollers",
+   "Москвич"
+  ]
+ },
+ "extra": {
+  "FORD": [
+   "FOMOCO"
+  ]
+ }
+}

@@ -11,6 +11,7 @@ import logging
 
 import httpx
 
+from . import brands
 from .config import Settings
 
 IMG_CDN = "https://imgcdn.abcp.ru/p/full/"  # как в приложении (AbcpShop.parseImages)
@@ -298,10 +299,6 @@ async def guest_brands(a: "Abcp", number: str) -> list[dict]:
     return [only(x, GUEST_BRAND_FIELDS) for x in items(data)]
 
 
-BRAND_ALIASES = {"MANNFILTER": "MANN", "HYUNDAIMOBIS": "HYUNDAIKIA", "MOBIS": "HYUNDAIKIA",
-                 "GENERALMOTORS": "GM", "MERCEDESBENZ": "MERCEDES", "LEMFORDER": "LEMFOERDER"}
-
-
 def _key(s: Any) -> str:
     return re.sub(r"[^A-ZА-ЯЁ0-9]", "", str(s or "").upper())
 
@@ -313,8 +310,8 @@ def confirm_counts(rows: list[dict]) -> list[int]:
         return "AVTODRUG" if own else str(x.get("distributorId") or x.get("supplierCode") or "")
 
     def key(x: dict) -> tuple[str, str]:
-        b = _key(x.get("brand"))
-        return BRAND_ALIASES.get(b, b), _key(x.get("number"))
+        # «Fag» и «FAG», «Lemf» и «LEMFORDER» — один бренд (справочник брендов ABCP, app/brands.py)
+        return brands.get().key(x.get("brand")), _key(x.get("number"))
 
     groups: dict[tuple[str, str], set] = {}
     for x in rows:
