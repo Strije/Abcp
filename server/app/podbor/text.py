@@ -150,6 +150,16 @@ def same(a: str, b: str) -> bool:
     return n >= 5 and n >= min(len(a), len(b)) - 1
 
 
+def near(a: str, b: str) -> bool:
+    """Одна опечатка: замена, пропуск или лишняя буква. Короче 5 букв не правим — «крыш» и «крыс» разные."""
+    if a == b or abs(len(a) - len(b)) > 1 or min(len(a), len(b)) < 5:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
 @dataclass(frozen=True)
 class Side:
     axis: str = ""   # front / rear / "" (не сказано)

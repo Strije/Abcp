@@ -58,7 +58,7 @@ class Engine:
         self.notes = [{k: [T.stem(w) for w in n[k]] for k in ("query", "detail", "lacks")} | {"text": n["text"]}
                       for n in rules.get("notes", [])]
         self.src = src
-        self.catalog = Catalog(src.laximo, folder, self.stop)
+        self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []))
         self.warranty = {AB.get().key(b) for b in (warranty or set())}
         self._offers: dict[tuple[str, str], tuple[float, str, list[dict]]] = {}
 

@@ -168,13 +168,20 @@ class TreeIndex:
     """Группы, в которые можно зайти (link), с основами названий и синонимов и весом слов (IDF):
     редкое «ступиц» значит больше, чем частое «колес»."""
 
-    def __init__(self, tree: Any, stop: frozenset[str], learned: dict[str, list[str]] | None = None):
+    def __init__(self, tree: Any, stop: frozenset[str], learned: dict[str, list[str]] | None = None,
+                 synonyms: list[dict] | None = None):
         self.stop = stop
         self.groups: dict[int, Group] = {}
         roots = tree if isinstance(tree, list) else [tree]
         for r in roots:
             if isinstance(r, dict):
                 self._walk(r, [])
+        # Словарь: слова покупателей и прайсов → группы по приоритету. Первой группы у машины нет
+        # (шаровая у Focus — часть рычага) — слово уходит в следующую, которая есть.
+        for syn in synonyms or []:
+            gid = next((int(g) for g in syn.get("groups", []) if int(g) in self.groups), None)
+            if gid is not None:
+                self.groups[gid].phrases += [(st, 1.0) for st in (T.stems(w, stop) for w in syn["words"]) if st]
         for gid, names in (learned or {}).items():
             g = self.groups.get(int(gid))
             if g:
@@ -187,6 +194,13 @@ class TreeIndex:
         self.idf = {s: math.log((n + 1) / (c + 1)) + 1 for s, c in df.items()}
         self.max_idf = max(self.idf.values(), default=1.0)
         self.vocab = set(self.idf)
+        self._fix: dict[str, str] = {}
+
+    def fix(self, s: str) -> str:
+        """Опечатка в одну букву → слово каталога («масленн» → «маслян», «шруз» → «шрус»)."""
+        if s not in self._fix:
+            self._fix[s] = s if s.endswith(".") or any(T.same(s, v) for v in self.vocab)                 else next((v for v in sorted(self.vocab) if T.near(s, v)), s)
+        return self._fix[s]
 
     def _walk(self, node: dict, path: list[str]):
         name = str(node.get("name") or node.get("quickGroupName") or "").strip()
@@ -207,8 +221,8 @@ class TreeIndex:
         return self.idf.get(s) or next((v for k, v in self.idf.items() if T.same(s, k)), self.max_idf)
 
     def known(self, q: list[str]) -> list[str]:
-        """Слова запроса, которые есть в каталоге. «форд», «фокус», «3» сюда не попадут и не мешают."""
-        return [s for s in dict.fromkeys(q) if any(T.same(s, v) for v in self.vocab)]
+        """Слова запроса, которые есть в каталоге (опечатки исправлены). «форд», «фокус», «3» сюда не попадут."""
+        return [s for s in dict.fromkeys(self.fix(x) for x in q) if any(T.same(s, v) for v in self.vocab)]
 
     def score(self, q: list[str], p: list[str]) -> tuple[float, float]:
         """(сколько запроса покрыто фразой, сколько фразы покрыто запросом) — с весами слов."""
@@ -222,13 +236,19 @@ class TreeIndex:
 
     def rank(self, q: list[str], want: T.Side) -> list[tuple[Group, float]]:
         q = self.known(q)
+        head = q[0] if len(q) > 1 else None   # главное слово: «ремень генератора», «датчик положения распредвала»
         out = []
         for g in self.groups.values():
             best = 0.0
             for p, w in g.phrases:
                 prec, rec = self.score(q, p)
                 if prec and rec:
-                    best = max(best, w * 2 * prec * rec / (prec + rec))
+                    f = w * 2 * prec * rec / (prec + rec)
+                    if head and any(T.same(head, t) for t in p):
+                        f += 0.1 if T.same(head, p[0]) else 0.0
+                    elif head:
+                        f *= 0.7   # главного слова нет — «ремень генератора» не «Генератор»
+                    best = max(best, f)
             if best <= 0:
                 continue
             if want.axis and g.side.axis:
@@ -244,7 +264,8 @@ Call = Callable[[str, dict], Awaitable[Any]]
 
 
 class Catalog:
-    def __init__(self, call: Call, folder: Path | None, stop: frozenset[str]):
+    def __init__(self, call: Call, folder: Path | None, stop: frozenset[str], synonyms: list[dict] | None = None):
+        self.synonyms = synonyms or []
         self.call = call
         self.folder = folder
         self.stop = stop
@@ -307,7 +328,7 @@ class Catalog:
             self._raw[v.catalog] = hit
             self._trees.pop(v.catalog, None)
         if v.catalog not in self._trees:
-            self._trees[v.catalog] = TreeIndex(hit[1], self.stop, self.learned)
+            self._trees[v.catalog] = TreeIndex(hit[1], self.stop, self.learned, self.synonyms)
         return self._trees[v.catalog]
 
     # --- детали группы ---

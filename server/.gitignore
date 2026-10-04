@@ -2,3 +2,11 @@ __pycache__/
 .pytest_cache/
 app/data/brand_aliases.json
 .podbor-cache/
+# опыты с обучением на прайсах — данные поставщиков, в публичный репозиторий не класть
+app/podbor/*.jsonl
+app/podbor/*.parquet
+app/podbor/auto_ner_model/
+app/podbor/unsloth_compiled_cache/
+app/podbor/engine_bak.py
+outputs/
+zapgpt_lora_model/
