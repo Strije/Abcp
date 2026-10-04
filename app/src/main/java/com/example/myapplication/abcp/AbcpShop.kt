@@ -4,6 +4,8 @@ import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import retrofit2.Response
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -26,7 +28,9 @@ data class BrandHit(
     val number: String,
     val description: String,
     /** ABCP: «есть в наличии» у этого бренда с этим номером */
-    val available: Boolean = false
+    val available: Boolean = false,
+    /** Сколько разных поставщиков продают этот номер этого бренда (голосование, BrandVoting.kt); null — не считали */
+    val suppliers: Int? = null
 )
 
 /**
@@ -156,6 +160,26 @@ class AbcpShop(private val session: SessionManager) {
     suspend fun brands(number: String): List<BrandHit> =
         items(if (isGuest) server.guestBrands(number) else call { api.searchBrands(login, psw, number) })
             .mapNotNull { it.toBrandHit() }
+
+    /**
+     * Голоса поставщиков за бренды номера (BrandVoting.kt): предложения по первым BRAND_VOTE_MAX брендам
+     * параллельно. Бренд, по которому запрос не прошёл, остаётся без голосов — решит человек.
+     */
+    suspend fun brandVoting(number: String, hits: List<BrandHit>): BrandVoting = kotlinx.coroutines.coroutineScope {
+        val answers = hits.take(BRAND_VOTE_MAX).map { hit ->
+            async {
+                val found: List<Offer> = try {
+                    offers(number, hit.brand)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e  // ушли с экрана — не глотаем отмену
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                hit.brand to found
+            }
+        }.awaitAll()
+        voteBrands(number, hits, answers.toMap())
+    }
 
     suspend fun offers(number: String, brand: String, all: Boolean = false): List<Offer> =
         items(

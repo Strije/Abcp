@@ -31,6 +31,7 @@ import com.example.myapplication.abcp.BrandHit
 import com.example.myapplication.abcp.CartIconButton
 import com.example.myapplication.abcp.OffersActivity
 import com.example.myapplication.abcp.autoPickBrand
+import com.example.myapplication.abcp.pickByVotes
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -115,9 +116,22 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 // Бренды в наличии — наверху списка
                 val found = shop.brands(n).sortedByDescending { it.available }
                 brands = found
-                // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
                 com.example.myapplication.Analytics.event("search", mapOf("number" to n, "found" to found.size, "guest" to shop.isGuest))
-                autoPickBrand(found, preferredBrand)?.let { openOffers(ctx, it) }
+                // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии),
+                // иначе — голосование поставщиков, как в Pricer: бренд, который продаёт явное большинство
+                val direct = autoPickBrand(found, preferredBrand)
+                if (direct != null) {
+                    openOffers(ctx, direct)
+                } else if (found.size > 1) {
+                    val voting = shop.brandVoting(n, found)
+                    // список — по числу поставщиков, с подписью «у N поставщиков»
+                    brands = voting.votes.map { it.hit.copy(suppliers = it.votes) } +
+                        found.filter { h -> voting.votes.none { it.hit == h } }
+                    pickByVotes(voting)?.let { picked ->
+                        com.example.myapplication.Analytics.event("brand_auto", mapOf("number" to n, "brand" to picked.brand))
+                        openOffers(ctx, picked)
+                    }
+                }
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Поиск → бренды", e)
                 error = e.message ?: "Не удалось выполнить поиск. Проверьте интернет."
@@ -215,6 +229,9 @@ private fun openOffers(ctx: Context, hit: BrandHit) {
     )
 }
 
+/** «у 1 поставщика», «у 5 поставщиков» */
+internal fun suppliersText(n: Int): String = "у $n " + if (n % 10 == 1 && n % 100 != 11) "поставщика" else "поставщиков"
+
 @Composable
 private fun HitList(hits: List<BrandHit>, onClick: (BrandHit) -> Unit) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -225,6 +242,9 @@ private fun HitList(hits: List<BrandHit>, onClick: (BrandHit) -> Unit) {
                         "${h.brand}  ${h.number}" + if (h.available) "  · в наличии" else "",
                         style = MaterialTheme.typography.titleSmall
                     )
+                    h.suppliers?.takeIf { it > 0 }?.let { n ->
+                        Text(suppliersText(n), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
                     if (h.description.isNotBlank()) {
                         Text(h.description, style = MaterialTheme.typography.bodySmall)
                     }
