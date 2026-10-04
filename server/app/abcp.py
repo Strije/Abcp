@@ -306,12 +306,14 @@ def _key(s: Any) -> str:
     return re.sub(r"[^A-ZА-ЯЁ0-9]", "", str(s or "").upper())
 
 
+def provider_of(x: dict) -> str:
+    """Поставщик предложения для ★ и голосования за бренд (brand_vote.py). Склады самовывоза АвтоДруг — один поставщик."""
+    own = str(x.get("deliveryPeriod") or "0") in ("0", "") and "самовывоз" in str(x.get("deadlineReplace") or "").lower()
+    return "AVTODRUG" if own else str(x.get("distributorId") or x.get("supplierCode") or "")
+
+
 def confirm_counts(rows: list[dict]) -> list[int]:
     """★N: сколько разных поставщиков предлагают тот же бренд+артикул. Склады самовывоза АвтоДруг — один поставщик."""
-    def provider(x: dict) -> str:
-        own = str(x.get("deliveryPeriod") or "0") in ("0", "") and "самовывоз" in str(x.get("deadlineReplace") or "").lower()
-        return "AVTODRUG" if own else str(x.get("distributorId") or x.get("supplierCode") or "")
-
     def key(x: dict) -> tuple[str, str]:
         b = _key(x.get("brand"))
         return BRAND_ALIASES.get(b, b), _key(x.get("number"))
@@ -320,7 +322,7 @@ def confirm_counts(rows: list[dict]) -> list[int]:
     for x in rows:
         k = key(x)
         if k[0] and k[1]:
-            groups.setdefault(k, set()).add(provider(x))
+            groups.setdefault(k, set()).add(provider_of(x))
     return [len(groups.get(key(x), ())) for x in rows]
 
 
