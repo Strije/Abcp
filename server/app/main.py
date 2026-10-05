@@ -29,6 +29,7 @@ PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен 
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import logging
@@ -381,7 +382,10 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
 
     # Подбор по заявке: те же гостевые данные (Laximo + цены гостя), но несколько запросов за раз — лимит строже
     podbor_limit = RateLimiter(limit=10, window=60)
-    podbor_fails = RateLimiter(limit=10, window=600)
+    # Перебор — это много РАЗНЫХ паролей. Браузер после смены пароля сам шлёт старый, запомненный,
+    # по нескольку раз в секунду: повтор одного и того же неверного пароля не считаем.
+    podbor_bad: dict[str, dict[str, float]] = defaultdict(dict)
+    PODBOR_BAD_LIMIT, PODBOR_BAD_WINDOW = 10, 600
     podbor_page = Path(__file__).parent / "static" / "podbor.html"
 
     def podbor_auth(request: Request) -> None:
@@ -400,8 +404,15 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
                 given = ""
         if given and hmac.compare_digest(given.encode(), password.encode()):
             return
-        if given and not podbor_fails.allow("pbf:" + ip):
-            raise HTTPException(429, "Слишком много неверных паролей, подождите 10 минут")
+        if given:
+            now = time.time()
+            seen = podbor_bad[ip]
+            for h in [h for h, t in seen.items() if t < now - PODBOR_BAD_WINDOW]:
+                del seen[h]
+            h = hashlib.sha256(given.encode()).hexdigest()
+            if h not in seen and len(seen) >= PODBOR_BAD_LIMIT:
+                raise HTTPException(429, "Слишком много неверных паролей, подождите 10 минут")
+            seen[h] = now
         raise HTTPException(401, "Нужен пароль", headers={"WWW-Authenticate": 'Basic realm="podbor", charset="UTF-8"'})
 
     @app.post("/v1/podbor", dependencies=[Depends(podbor_auth)])

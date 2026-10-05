@@ -408,6 +408,13 @@ def test_podbor_endpoint_hides_purchase_price():
         assert r.status_code == 401 and r.headers["www-authenticate"].startswith("Basic")
         assert c.post("/v1/podbor", json={"text": "X9FKXXEEBKCB57566 свечи"}).status_code == 401
         assert c.get("/podbor", auth=("менеджер", "не тот")).status_code == 401
+        # Браузер повторяет запомненный старый пароль — это не перебор, блокировки нет
+        for _ in range(30):
+            assert c.get("/podbor", auth=("менеджер", "старый")).status_code == 401
+        # Перебор разных паролей — блокировка, но правильный пароль проходит
+        codes = [c.get("/podbor", auth=("x", f"угадай-{i}")).status_code for i in range(12)]
+        assert codes[-1] == 429 and codes.count(401) == 8
+        assert c.get("/podbor", auth=auth).status_code == 200
         c.auth = auth
         r = c.post("/v1/podbor", json={"text": "X9FKXXEEBKCB57566 подшипник задней ступицы"})
         assert r.status_code == 200, r.text
