@@ -97,7 +97,7 @@
 </head>
 <body>
 <main>
-  <h1>Подбор по VIN</h1>
+  <h1>Подбор по VIN <span class="muted" id="lx-usage" style="font-size:13px;font-weight:400"></span></h1>
   <p class="hint">Вставьте сообщение клиента как есть — из формы ABCP или из переписки, дальше пишите его следующие
     сообщения: «а задние?», «дешевле нет?», «давайте первый». Машину и найденные детали бот помнит до кнопки «Новый клиент».</p>
   <div class="car" id="car" hidden></div>
@@ -195,7 +195,7 @@ async function go(vehicle, again) {
   } catch (e) {
     turn.error = e.message; $("#state").textContent = "";
   } finally {
-    $("#go").disabled = false; saveChat(); draw(); t.focus();
+    $("#go").disabled = false; saveChat(); draw(); t.focus(); showUsage();
   }
 }
 
@@ -411,6 +411,17 @@ $("#text").addEventListener("drop", e => {
   const f = [...(e.dataTransfer?.files || [])].find(x => x.type.startsWith("image/"));
   if (f) { e.preventDefault(); readVin(f); }
 });
+
+// Расход запросов к Laximo (тариф помесячный, лимит неизвестен — следим)
+async function showUsage() {
+  try {
+    const r = await fetch("/v1/podbor/laximo-usage");
+    if (!r.ok) return;
+    const u = await r.json();
+    $("#lx-usage").textContent = `· Laximo: сегодня ${u.today}, за месяц ${u.month} запросов`;
+  } catch (e) {}
+}
+showUsage();
 
 $("#go").addEventListener("click", () => go());
 $("#reset").addEventListener("click", resetChat);

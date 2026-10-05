@@ -10,6 +10,7 @@ POST /v1/laximo/{method}      подбор по авто через Laximo (па
 POST /v1/podbor/text         ответ клиенту из готового подбора с другими настройками (артикулы, число аналогов)
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
 GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
+GET  /v1/podbor/laximo-usage сколько запросов ушло в Laximo: сегодня, за месяц, по методам (пароль подбора)
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
 DELETE /v1/access-request     доступ появился — закрыть заявку
@@ -445,6 +446,11 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             return {"text": podbor.draft(body.result, body.numbers, body.analogs)}
         except (KeyError, TypeError, AttributeError, IndexError, ValueError):
             raise HTTPException(422, "Это не результат подбора")
+
+    @app.get("/v1/podbor/laximo-usage", dependencies=[Depends(podbor_auth)])
+    async def laximo_usage():
+        """Сколько запросов ушло в Laximo: сегодня, за месяц, по методам и дням."""
+        return state["laximo"].usage.report()
 
     @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():

@@ -638,3 +638,24 @@ def test_dialog_memory_answers_and_handoff():
     assert run("Хорошо, давайте этот вариант", e, memory=mem)["status"] == "order"
     new = run("А расходомер воздуха?", e, memory=mem)
     assert new["status"] in ("ok", "chat")   # в маленьком тестовом дереве его может не быть — главное, не заказ
+
+
+def test_laximo_usage_counted_and_kept():
+    """Каждый запрос к Laximo считается по дням и методам и переживает перезапуск."""
+    from dataclasses import replace
+
+    import httpx
+
+    from app.config import Settings
+    from app.laximo import Laximo
+    folder = tempfile.mkdtemp(prefix="lx-usage-")
+    s = Settings(abcp_host="https://abcp.test", admin_login="a", admin_md5="a" * 32, token_secret=b"s" * 40,
+                 laximo_user="u", laximo_pass="p", state_dir=folder)
+    ok = httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+    lx = Laximo(s, transport=ok)
+    asyncio.run(lx.call("findVehicle", {"identString": "X"}))
+    asyncio.run(lx.call("listQuickGroup", {}))
+    asyncio.run(lx.call("listQuickGroup", {}))
+    rep = Laximo(s, transport=ok).usage.report()   # новый процесс — счёт с диска
+    assert rep["today"] == 3 and rep["month"] == 3
+    assert rep["month_by_method"] == {"findVehicle": 1, "listQuickGroup": 2}
