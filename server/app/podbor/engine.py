@@ -19,7 +19,6 @@ from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
 from .offers import axis_vote, brand_candidates, curate, lr_vote, oem_brand_for
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
-OFFERS_TTL = 600
 MAX_POSITIONS = 10
 MAX_VARIANTS = 6
 MAX_PRICED = 4
@@ -102,7 +101,6 @@ class Engine:
         self.src = src
         self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []))
         self.warranty = {AB.get().key(b) for b in (warranty or set())}
-        self._offers: dict[tuple[str, str], tuple[float, str, list[dict]]] = {}
         self._own: dict[tuple[int, tuple[str, ...]], tuple | None] = {}
 
     # ---------- заявка целиком ----------
@@ -371,11 +369,8 @@ class Engine:
 
     async def offers(self, oem: str, car_brand: str) -> tuple[str, list[dict]]:
         """Бренд оригинала из «Вы искали» и его предложения. FOMOCO у Ford отдаёт только сам номер,
-        без аналогов — поэтому сначала основной бренд (FORD), а пустой ответ — повод взять следующий."""
-        key = (_key(oem), _key(car_brand))
-        hit = self._offers.get(key)
-        if hit and time.time() - hit[0] < OFFERS_TTL:
-            return hit[1], hit[2]
+        без аналогов — поэтому сначала основной бренд (FORD), а пустой ответ — повод взять следующий.
+        Не кэшируем: цены и сроки меняются, каждый подбор — свежие."""
         brands = brand_candidates(await self.src.brands(oem), car_brand) or [oem_brand_for(car_brand)]
         brand, rows = brands[0], []
         for b in brands[:2]:
@@ -383,9 +378,6 @@ class Engine:
             if rows:
                 brand = b
                 break
-        self._offers[key] = (time.time(), brand, rows)
-        if len(self._offers) > 3000:
-            self._offers.clear()
         return brand, rows
 
     def _variant(self, c: Candidate, v: Vehicle, alt: bool) -> dict:
