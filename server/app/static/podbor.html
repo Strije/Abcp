@@ -61,23 +61,59 @@
                 background: var(--card); color: var(--text); }
   pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font: inherit; }
   .err { color: var(--bad); }
+  /* Разговор: клиент справа, бот слева; поле ввода прижато к низу */
+  .car { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line);
+         display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+  .car b { font-size: 15px; }
+  .thread { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+  .msg { max-width: 86%; border-radius: 14px; padding: 10px 14px; white-space: pre-wrap; }
+  .msg.client { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px;
+             max-width: 100%; width: 100%; white-space: normal; }
+  .msg.bot pre { margin: 0; padding: 0; border: 0; background: none; }
+  .msg.bot .tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .msg.bot .tools button { padding: 5px 12px; font-size: 14px; }
+  .msg.bot .details { margin-top: 8px; }
+  .msg.bot .details .card { margin: 8px 0; }
+  .msg.pending { color: var(--muted); }
+  .composer { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0 12px; border-top: 1px solid var(--line); }
+  .composer textarea { min-height: 70px; max-height: 40vh; }
+  .composer .row { margin: 8px 0 0; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 10px; }
+  @media (max-width: 600px) {
+    /* На телефоне поле ввода не должно съедать полэкрана */
+    .hint, #state { display: none; }
+    .composer textarea { min-height: 44px; height: 44px; }
+    .composer textarea:focus { height: 96px; }
+    .composer .row { gap: 6px; }
+    .composer button { padding: 8px 12px; }
+    .opt { font-size: 13px; }
+    .msg { max-width: 92%; }
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>Подбор по VIN</h1>
-  <p class="hint">Вставьте заявку как есть — из формы ABCP или из переписки. Номера берутся из каталога Laximo и предложений ABCP; сторона проверяется по каталогу и по описаниям поставщиков. Цены — гостевые.</p>
-  <textarea id="text" placeholder="Модель авто: FORD FOCUS III 1.6 2012
+  <p class="hint">Вставьте сообщение клиента как есть — из формы ABCP или из переписки, дальше пишите его следующие
+    сообщения: «а задние?», «дешевле нет?», «давайте первый». Машину и найденные детали бот помнит до кнопки «Новый клиент».</p>
+  <div class="car" id="car" hidden></div>
+  <div class="thread" id="thread"></div>
+  <div class="composer">
+    <div id="ocr" class="ocr" hidden></div>
+    <textarea id="text" placeholder="Модель авто: FORD FOCUS III 1.6 2012
 VIN/FRAME: X9FKXXEEBKCB57566
 Запрос состоит из следующих позиций: подшипник задней ступицы, масляный фильтр"></textarea>
-  <div class="row">
-    <button class="main" id="go">Подобрать</button>
-    <button id="photo-btn" title="Фото СТС, ПТС или таблички с VIN — можно вставить в поле через Ctrl+V или перетащить">📷 VIN с фото</button>
-    <input type="file" id="photo" accept="image/*" hidden>
-    <span class="muted" id="state">Ctrl+Enter — подобрать</span>
+    <div class="row">
+      <button class="main" id="go">Отправить</button>
+      <button id="photo-btn" title="Фото СТС, ПТС или таблички с VIN — можно вставить в поле через Ctrl+V или перетащить">📷 VIN с фото</button>
+      <input type="file" id="photo" accept="image/*" hidden>
+      <button id="reset" title="Забыть машину и разговор">Новый клиент</button>
+      <label class="opt"><input type="checkbox" id="opt-numbers"> артикулы</label>
+      <label class="opt">аналогов на деталь <select id="opt-analogs"></select></label>
+      <span class="muted" id="state">Enter — отправить, Shift+Enter — новая строка</span>
+    </div>
   </div>
-  <div id="ocr" class="ocr" hidden></div>
-  <div id="out"></div>
 </main>
 <script>
 const $ = s => document.querySelector(s);
@@ -89,39 +125,70 @@ const when = d => d <= 0 ? "в наличии" : d + " " + plural(d, "день",
 const cheaper = o => o.cheaper ? `<div class="cheaper">или ${money(o.cheaper.price)} за ${when(o.cheaper.days)}</div>` : "";
 const SIDE = {front: "передн.", rear: "задн.", left: "лев.", right: "прав."};
 const STATUS = {found: "найдено", choose: "уточнить", not_found: "не найдено"};
-let last = null;
+const PLACEHOLDER_FIRST = $("#text").placeholder;
+const PLACEHOLDER_NEXT = "Следующее сообщение клиента: «а задние?», «дешевле нет?», «давайте первый»…";
+const KEEP_TURNS = 12;   // столько шагов разговора храним в браузере
 
-try { $("#text").value = localStorage.getItem("podbor_text") || ""; } catch (e) {}
+// Разговор: шаги «сообщение клиента → ответ подбора» и память для следующего сообщения.
+// Сервер разговоров не хранит — память приходит в каждом ответе и уходит со следующим сообщением.
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";   // после перезагрузки — к концу разговора
+let chat = {memory: null, turns: []};
+try { chat = Object.assign(chat, JSON.parse(localStorage.getItem("podbor_chat") || "{}")); } catch (e) {}
+function saveChat() {
+  chat.turns = chat.turns.slice(-KEEP_TURNS);
+  try { localStorage.setItem("podbor_chat", JSON.stringify(chat)); }
+  catch (e) { try { localStorage.removeItem("podbor_chat"); } catch (e2) {} }   // переполнено — не беда
+}
 
 // Настройки ответа клиенту — запоминаются в этом браузере
 const opts = {numbers: false, analogs: 3};
 try { Object.assign(opts, JSON.parse(localStorage.getItem("podbor_opts") || "{}")); } catch (e) {}
 function saveOpts() { try { localStorage.setItem("podbor_opts", JSON.stringify(opts)); } catch (e) {} }
+$("#opt-numbers").checked = !!opts.numbers;
+$("#opt-analogs").innerHTML = [0, 1, 2, 3, 5].map(n => `<option value="${n}" ${n === opts.analogs ? "selected" : ""}>${n}</option>`).join("");
 
 async function redraft() {
-  if (!last || !last.vehicle) return;
-  const r = await fetch("/v1/podbor/text", {method: "POST", headers: {"Content-Type": "application/json"},
-                                            body: JSON.stringify({result: last, ...opts})});
-  if (r.ok) { last.text = (await r.json()).text; $("#draft").textContent = last.text; }
+  // Пересобрать ответы с новыми настройками — без новых запросов в каталог
+  for (const t of chat.turns) {
+    if (!t.result || !t.result.status) continue;
+    const r = await fetch("/v1/podbor/text", {method: "POST", headers: {"Content-Type": "application/json"},
+                                              body: JSON.stringify({result: t.result, ...opts})});
+    if (r.ok) t.result.text = (await r.json()).text;
+  }
+  saveChat(); draw();
 }
 
 function setOpt(key, value) { opts[key] = value; saveOpts(); redraft(); }
+$("#opt-numbers").addEventListener("change", e => setOpt("numbers", e.target.checked));
+$("#opt-analogs").addEventListener("change", e => setOpt("analogs", +e.target.value));
 
-async function go(vehicle) {
-  const text = $("#text").value.trim();
-  if (text.length < 3) return;
-  try { localStorage.setItem("podbor_text", text); } catch (e) {}
+async function go(vehicle, again) {
+  const t = $("#text");
+  const text = again ?? t.value.trim();
+  if (!text) return;
+  if (again === undefined) { t.value = ""; chat.turns.push({text, result: null}); }
+  const turn = chat.turns[chat.turns.length - 1];
+  turn.result = null; turn.error = "";
+  draw();
   $("#go").disabled = true; $("#state").textContent = "Ищем в каталоге и у поставщиков…";
   try {
     const r = await fetch("/v1/podbor", {method: "POST", headers: {"Content-Type": "application/json"},
-                                         body: JSON.stringify({text, vehicle: vehicle ?? null, ...opts})});
+      body: JSON.stringify({text, vehicle: vehicle ?? null, memory: chat.memory, ...opts})});
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || ("Ошибка " + r.status));
-    last = data; render(data);
+    turn.result = data;
+    if (data.memory) chat.memory = data.memory;
     $("#state").textContent = "Готово за " + data.seconds + " с";
   } catch (e) {
-    $("#out").innerHTML = `<p class="err">${esc(e.message)}</p>`; $("#state").textContent = "";
-  } finally { $("#go").disabled = false; }
+    turn.error = e.message; $("#state").textContent = "";
+  } finally {
+    $("#go").disabled = false; saveChat(); draw(); t.focus();
+  }
+}
+
+function resetChat() {
+  chat = {memory: null, turns: []}; saveChat(); draw();
+  $("#ocr").hidden = true; $("#state").textContent = "Разговор очищен"; $("#text").focus();
 }
 
 function offersTable(o) {
@@ -137,7 +204,7 @@ function offersTable(o) {
     <p class="muted">Всего вариантов: ${s.articles}, предложений: ${s.offers}, от ${money(s.price_min)} до ${money(s.price_max)}.</p>`;
 }
 
-function variant(v, pi, vi) {
+function variant(v, ti, pi, vi) {
   const side = [SIDE[v.axis], SIDE[v.lr]].filter(Boolean).join(" ");
   const src = v.side_source === "поставщики" ? `по описаниям поставщиков (${v.vote.front} перед / ${v.vote.rear} зад)`
             : v.side_source ? `по каталогу${v.vote.front + v.vote.rear ? `, поставщики: ${v.vote.front} перед / ${v.vote.rear} зад` : ""}` : "";
@@ -146,66 +213,78 @@ function variant(v, pi, vi) {
     <div class="muted">${side ? `<b>${side}</b> ${esc(src)} · ` : ""}${v.amount ? "кол-во " + esc(v.amount) + " · " : ""}узел «${esc(v.unit)}»${v.unit_note ? " · " + esc(v.unit_note) : ""}${v.note ? " · " + esc(v.note) : ""}</div>
     ${v.warning ? `<div class="warn">⚠ ${esc(v.warning)}</div>` : ""}
     ${v.alt ? "" : offersTable(v.offers)}
-    ${v.scheme.image ? `<button onclick="scheme(${pi},${vi},this)">Схема узла${v.scheme.code ? ", позиция " + esc(v.scheme.code) : ""}</button>` : ""}
+    ${v.scheme.image ? `<button onclick="scheme(${ti},${pi},${vi},this)">Схема узла${v.scheme.code ? ", позиция " + esc(v.scheme.code) : ""}</button>` : ""}
   </div>`;
 }
 
-function render(d) {
+// Подробности для менеджера: группы каталога, номера, сторона, все аналоги, схема
+function details(d, ti) {
   const out = [];
-  if (d.vehicle) out.push(`<div class="card"><div class="q">${esc(d.vehicle.summary)}</div>
-     <div class="muted">VIN ${esc(d.request.ident || d.request.plate)} · каталог ${esc(d.vehicle.catalog)}${d.request.model ? " · в заявке: " + esc(d.request.model) : ""}</div>
-     ${d.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}</div>`);
-  if (d.status === "choose_vehicle")
-    out.push(`<div class="card"><div class="q">По VIN несколько вариантов — выберите:</div>${d.vehicles.map((v, i) =>
-      `<div style="margin-top:8px"><button onclick="go(${i})">${esc(v.summary)}</button></div>`).join("")}</div>`);
+  if (d.warnings.length) out.push(`<div class="card">${d.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}</div>`);
   d.positions.forEach((p, pi) => out.push(`<div class="card">
     <div class="q">${pi + 1}. ${esc(p.query)} <span class="badge ${p.status}">${STATUS[p.status]}</span></div>
     ${p.groups.length ? `<div class="muted">Группы каталога: ${p.groups.map(g => esc(g.name)).join(", ")}</div>` : ""}
     ${p.question ? `<div><b>${esc(p.question)}</b></div>` : ""}
     ${p.note ? `<div>${esc(p.note)}</div>` : ""}
-    ${p.variants.map((v, vi) => variant(v, pi, vi)).join("")}
+    ${p.variants.map((v, vi) => variant(v, ti, pi, vi)).join("")}
   </div>`));
-  out.push(`<div class="row"><b>Черновик ответа клиенту</b><button onclick="copyDraft(this)">Скопировать</button>
-    <label class="opt"><input type="checkbox" ${opts.numbers ? "checked" : ""} onchange="setOpt('numbers', this.checked)"> артикулы</label>
-    <label class="opt">аналогов на деталь
-      <select onchange="setOpt('analogs', +this.value)">${[0, 1, 2, 3, 5].map(n =>
-        `<option value="${n}" ${n === opts.analogs ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
-    <pre id="draft">${esc(d.text)}</pre>`);
-  $("#out").innerHTML = out.join("");
+  return out.join("");
 }
 
-async function scheme(pi, vi, btn) {
-  const v = last.positions[pi].variants[vi], s = v.scheme;
-  const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="scheme"><img alt="Схема узла" src="${esc(s.image)}"></div>
-    <div class="scheme-note muted">${s.code ? `Деталь — позиция <b>${esc(s.code)}</b> на схеме, отмечена цветом. ` : ""}Нажмите на схему, чтобы открыть крупно.</div>`;
-  btn.replaceWith(wrap);
-  const box = wrap.querySelector(".scheme"), img = box.querySelector("img"), note = wrap.querySelector(".scheme-note");
-  img.addEventListener("click", () => window.open(s.image, "_blank", "noopener"));
-  if (!s.code) return;
-  try {
-    const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: {"Content-Type": "application/json"},
-                                                             body: JSON.stringify({catalog: s.catalog, ssd: s.ssd, unitId: s.unit_id})});
-    const map = await r.json();
-    const hits = (Array.isArray(map) ? map : []).filter(m => String(m.code) === String(s.code));
-    const draw = () => {
-      // Проценты от исходного размера: отметка остаётся на месте при любом масштабе и повороте экрана
-      const W = img.naturalWidth, H = img.naturalHeight;
-      for (const m of hits) {
-        const h = document.createElement("div"); h.className = "hit";
-        Object.assign(h.style, {left: m.x1 / W * 100 + "%", top: m.y1 / H * 100 + "%",
-                                width: (m.x2 - m.x1) / W * 100 + "%", height: (m.y2 - m.y1) / H * 100 + "%"});
-        box.appendChild(h);
-      }
-      if (hits.length) box.querySelector(".hit").scrollIntoView({block: "center", behavior: "smooth"});
-      else note.innerHTML = `Деталь — позиция <b>${esc(s.code)}</b> на схеме (каталог не дал её координат). Нажмите на схему, чтобы открыть крупно.`;
-    };
-    img.complete && img.naturalWidth ? draw() : img.addEventListener("load", draw);
-  } catch (e) { /* схема без подсветки — тоже полезна, номер позиции написан под ней */ }
+const BOT_NOTE = {
+  chat: "Это сообщение не про подбор (оплата, адрес, «когда забрать») — ответьте сами.",
+  order: "Клиент выбрал — проверьте и оформите заказ.",
+};
+
+function botMessage(t, ti) {
+  if (t.error) return `<div class="msg bot"><span class="err">${esc(t.error)}</span>
+    <div class="tools"><button onclick="retry(${ti})">Повторить</button></div></div>`;
+  const d = t.result;
+  if (!d) return `<div class="msg bot pending">Ищем в каталоге и у поставщиков…</div>`;
+  const choose = d.status === "choose_vehicle" ? `<div class="tools">${d.vehicles.map((v, i) =>
+      `<button onclick="pickVehicle(${ti},${i})">${esc(v.summary)}</button>`).join("")}</div>` : "";
+  const more = d.positions.length || d.warnings.length;
+  return `<div class="msg bot">
+    ${BOT_NOTE[d.status] && (d.status !== "order" || (d.reply && d.reply.picks.length))
+      ? `<div class="muted" style="margin-bottom:6px">${esc(BOT_NOTE[d.status])}</div>` : ""}
+    ${d.text ? `<pre id="draft-${ti}">${esc(d.text)}</pre>` : ""}
+    ${choose}
+    <div class="tools">
+      ${d.text ? `<button onclick="copyDraft(${ti},this)">Скопировать ответ</button>` : ""}
+      ${more ? `<button onclick="toggle(${ti},this)">Подробности</button>` : ""}
+      <span class="muted" style="align-self:center;font-size:13px">${d.seconds} с</span>
+    </div>
+    <div class="details" id="details-${ti}" hidden></div>
+  </div>`;
 }
 
-function copyDraft(btn) {
-  navigator.clipboard.writeText($("#draft").textContent).then(() => { btn.textContent = "Скопировано"; });
+function draw() {
+  const m = chat.memory;
+  const car = $("#car");
+  if (m && (m.ident || m.plate)) {
+    car.hidden = false;
+    car.innerHTML = `<span>Машина: <b>${esc(m.summary || "—")}</b></span>
+      <span class="muted">${esc(m.ident || m.plate)}${m.positions && m.positions.length ? ` · помним позиций: ${m.positions.length}` : ""}</span>`;
+  } else car.hidden = true;
+  $("#text").placeholder = m && (m.ident || m.plate) ? PLACEHOLDER_NEXT : PLACEHOLDER_FIRST;
+  $("#thread").innerHTML = chat.turns.length ? chat.turns.map((t, ti) =>
+    `<div class="msg client">${esc(t.text)}</div>${botMessage(t, ti)}`).join("")
+    : `<div class="empty">Здесь будет разговор с клиентом</div>`;
+  if (chat.turns.length) window.scrollTo(0, document.body.scrollHeight);   // к последнему сообщению
+}
+
+function toggle(ti, btn) {
+  const box = $("#details-" + ti);
+  if (box.hidden && !box.innerHTML) box.innerHTML = details(chat.turns[ti].result, ti);
+  box.hidden = !box.hidden;
+  btn.textContent = box.hidden ? "Подробности" : "Скрыть подробности";
+}
+
+function retry(ti) { if (ti === chat.turns.length - 1) go(null, chat.turns[ti].text); }
+function pickVehicle(ti, i) { if (ti === chat.turns.length - 1) go(i, chat.turns[ti].text); }
+
+function copyDraft(ti, btn) {
+  navigator.clipboard.writeText($("#draft-" + ti).textContent).then(() => { btn.textContent = "Скопировано"; });
 }
 
 // ---------- VIN с фото (СТС, ПТС, табличка) ----------
@@ -320,7 +399,10 @@ $("#text").addEventListener("drop", e => {
 });
 
 $("#go").addEventListener("click", () => go());
-$("#text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) go(); });
+$("#reset").addEventListener("click", resetChat);
+// Enter — отправить, Shift+Enter — новая строка (заявку из ABCP проще вставить, чем набирать)
+$("#text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } });
+draw();
 </script>
 </body>
 </html>
