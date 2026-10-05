@@ -381,8 +381,9 @@ def test_podbor_endpoint_hides_purchase_price():
     from app.main import create_app
 
     s = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
-                 guest_profile_id="777", laximo_user="lx", laximo_pass="pw",
+                 guest_profile_id="777", laximo_user="lx", laximo_pass="pw", podbor_password="секрет-1",
                  state_dir=tempfile.mkdtemp(prefix="podbor-api-"))
+    auth = ("менеджер", "секрет-1")
     fake = Fake()
 
     def laximo(request: httpx.Request) -> httpx.Response:
@@ -402,6 +403,12 @@ def test_podbor_endpoint_hides_purchase_price():
     app = create_app(s, Abcp(s, transport=httpx.MockTransport(abcp)),
                      Laximo(s, transport=httpx.MockTransport(laximo)))
     with TestClient(app) as c:
+        # Без пароля и с чужим — нет; браузер получает запрос на вход
+        r = c.get("/podbor")
+        assert r.status_code == 401 and r.headers["www-authenticate"].startswith("Basic")
+        assert c.post("/v1/podbor", json={"text": "X9FKXXEEBKCB57566 свечи"}).status_code == 401
+        assert c.get("/podbor", auth=("менеджер", "не тот")).status_code == 401
+        c.auth = auth
         r = c.post("/v1/podbor", json={"text": "X9FKXXEEBKCB57566 подшипник задней ступицы"})
         assert r.status_code == 200, r.text
         assert r.json()["positions"][0]["variants"][0]["oem"] == "2101656"
@@ -410,4 +417,10 @@ def test_podbor_endpoint_hides_purchase_price():
         assert c.post("/v1/podbor", json={"text": "x"}).status_code == 422
     off = create_app(replace(s, laximo_user=""), Abcp(s, transport=httpx.MockTransport(abcp)))
     with TestClient(off) as c:
+        c.auth = auth
         assert c.post("/v1/podbor", json={"text": "X9FKXXEEBKCB57566 свечи"}).status_code == 503
+    # Пароль не задан — страницы нет совсем
+    closed = create_app(replace(s, podbor_password=""), Abcp(s, transport=httpx.MockTransport(abcp)))
+    with TestClient(closed) as c:
+        c.auth = auth
+        assert c.get("/podbor").status_code == 404 and c.post("/v1/podbor", json={"text": "x" * 20}).status_code == 404

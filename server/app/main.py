@@ -8,7 +8,7 @@ POST /v1/orders/{number}/app-note  служебная заметка «офор�
 POST /v1/images               картинки товаров для выдачи
 POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
-GET  /podbor                 страница подбора для менеджера
+GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
 DELETE /v1/access-request     доступ появился — закрыть заявку
@@ -27,6 +27,8 @@ GET  /v1/app/apk/{code}       скачать сборку
 PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
 """
 import asyncio
+import base64
+import binascii
 import hmac
 import json
 import logging
@@ -379,22 +381,41 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
 
     # Подбор по заявке: те же гостевые данные (Laximo + цены гостя), но несколько запросов за раз — лимит строже
     podbor_limit = RateLimiter(limit=10, window=60)
+    podbor_fails = RateLimiter(limit=10, window=600)
     podbor_page = Path(__file__).parent / "static" / "podbor.html"
 
-    @app.post("/v1/podbor")
-    async def podbor_run(body: PodborIn, request: Request, authorization: str = Header(default="")):
+    def podbor_auth(request: Request) -> None:
+        """Страница и подбор — только для своих: вход браузера (Basic), имя любое, пароль PODBOR_PASSWORD.
+        Каждый подбор тратит запросы Laximo по тарифу магазина. Без пароля в настройках — подбора нет."""
+        password = state["s"].podbor_password
+        if not password:
+            raise HTTPException(404, "Not Found")
+        ip = client_ip(request)
+        given = ""
+        scheme, _, value = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() == "basic":
+            try:
+                given = base64.b64decode(value.strip()).decode("utf-8").partition(":")[2]
+            except (binascii.Error, UnicodeDecodeError):
+                given = ""
+        if given and hmac.compare_digest(given.encode(), password.encode()):
+            return
+        if given and not podbor_fails.allow("pbf:" + ip):
+            raise HTTPException(429, "Слишком много неверных паролей, подождите 10 минут")
+        raise HTTPException(401, "Нужен пароль", headers={"WWW-Authenticate": 'Basic realm="podbor", charset="UTF-8"'})
+
+    @app.post("/v1/podbor", dependencies=[Depends(podbor_auth)])
+    async def podbor_run(body: PodborIn, request: Request):
         if not state["laximo"].enabled:
             raise HTTPException(503, "Подбор по авто временно недоступен")
-        token = authorization.removeprefix("Bearer ").strip()
-        uid = tokens.verify(state["s"].token_secret, token) if token else None
-        if not podbor_limit.allow("pb:" + (uid or client_ip(request))):
+        if not podbor_limit.allow("pb:" + client_ip(request)):
             raise HTTPException(429, "Слишком много запросов, подождите минуту")
         try:
             return await state["podbor"].run(body.text, body.vehicle)
         except (httpx.HTTPError, AbcpError):
             raise HTTPException(502, "Каталог или поставщики не ответили, попробуйте ещё раз")
 
-    @app.get("/podbor")
+    @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():
         return FileResponse(podbor_page, media_type="text/html; charset=utf-8")
 

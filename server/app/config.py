@@ -42,6 +42,8 @@ class Settings:
     public_url: str = "https://109.73.199.217"
     # Где хранить очередь заявок
     state_dir: str = "/var/lib/avtodrug-api"
+    # Пароль страницы подбора /podbor (вход браузера, имя любое). Пусто — подбор выключен
+    podbor_password: str = ""
 
 
 def load() -> Settings:
@@ -66,6 +68,7 @@ def load() -> Settings:
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
         state_dir=os.environ.get("STATE_DIR", "/var/lib/avtodrug-api"),
+        podbor_password=os.environ.get("PODBOR_PASSWORD", "").strip(),
         bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
         bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
         bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),
