@@ -351,7 +351,7 @@ def test_tree_and_vehicle_cached():
     run("X9FKXXEEBKCB57566 масляный фильтр", e)
     assert [c[0] for c in fake.calls].count("findVehicle") == 1
     assert [c[0] for c in fake.calls].count("listQuickGroup") == 1
-    assert (folder / "trees" / "FORD202201.json").exists()
+    assert list((folder / "trees").glob("FORD202201-*.json"))   # дерево — на машину, не на каталог
     fake2 = Fake()
     run("X9FKXXEEBKCB57566 масляный фильтр", Engine(fake2, folder))   # новый процесс — всё с диска
     # Ни машины, ни дерева, ни состава группы у Laximo больше не спрашиваем; цены — всегда свежие

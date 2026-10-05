@@ -3,6 +3,8 @@
     python -m app.podbor.measure requests vinqu.jsonl            # заявки ABCP: одна группа / выбор / мимо
     python -m app.podbor.measure chats chats.jsonl [отчёт.json]   # переписка Битрикс24: как пишут клиенты
     python -m app.podbor.measure typos chats.jsonl                # какие «опечатки» правятся чаще всего
+    python -m app.podbor.measure crosscheck vinqu.jsonl [chats.jsonl] [отчёт.json] [1500]  # разногласия каталогов
+    python -m app.podbor.measure prices catalog.parquet [отчёт.json] [6000]  # названия одного артикула в разных прайсах
     python -m app.podbor.measure followups chats.jsonl [при.json]  # следующие сообщения: выбор, вопрос, уточнение…
     python -m app.podbor.measure snapshot vinqu.jsonl до.json      # разбор каждой позиции — для сравнения
     python -m app.podbor.measure diff до.json после.json           # что поменялось после правки
@@ -263,6 +265,160 @@ def followups(path: str, out: str | None = None):
         print(f"Примеры по видам: {out}")
 
 
+# ---------- перекрёстная проверка по каталогам: без Laximo и поставщиков ----------
+
+def _trees() -> dict[str, TreeIndex]:
+    """Все сохранённые деревья групп (.podbor-cache/trees) — по одному на каталог."""
+    nt = frozenset(T.stem(w) for w in RULES.get("not_typos", {}).get("words", []))
+    out = {}
+    for f in sorted(Path(".podbor-cache/trees").glob("*.json")):
+        d = json.loads(f.read_text(encoding="utf-8"))
+        if d.get("tree"):
+            out[f.stem] = TreeIndex(d["tree"], STOP, None, RULES["synonyms"], nt)
+    return out
+
+
+def crosscheck(vinqu: str, chats_path: str | None = None, out: str | None = None, top: str = "1500"):
+    """Частые запросы клиентов × все сохранённые каталоги. Номера быстрых групп Laximo общие для всех каталогов,
+    поэтому разногласие — признак ошибки без всякой разметки: «комплект ГРМ» у большинства машин ведёт
+    в «Комплект ремня ГРМ», а у VW — в «ШРУС», хотя группа ремня ГРМ у VW есть.
+    Отчёт: выбросы (у каталога есть группа большинства, а выбран другой), промахи (у большинства нашлось,
+    тут нет), неоднозначные запросы (две группы почти с одной оценкой у многих каталогов)."""
+    freq = collections.Counter()
+    for line in Path(vinqu).read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            freq.update(ENGINE.clean(p).lower() for p in positions(json.loads(line)) if T.stems(p, STOP))
+    if chats_path:
+        pieces, _ = chat_pieces(chats_path)
+        freq.update(p.lower() for p in pieces)
+    queries = [q for q, _ in freq.most_common(int(top)) if 3 <= len(q) <= 80]
+    trees = _trees()
+    print(f"Запросов: {len(queries)}, каталогов: {len(trees)} ({', '.join(trees)})", flush=True)
+    outliers, misses, unsure = [], [], collections.Counter()
+    for n, q in enumerate(queries):
+        if n and n % 200 == 0:
+            print(f"  {n}/{len(queries)}", flush=True)
+        st = T.stems(q, STOP)
+        if ENGINE.outside(st):
+            continue
+        side = T.side(q)
+        pick: dict[str, tuple] = {}
+        for cat, tree in trees.items():
+            r = tree.rank(st, side)
+            if not r or r[0][1] < 0.5:
+                pick[cat] = None
+                continue
+            tie = len(r) > 1 and r[1][1] >= r[0][1] - 0.05 and r[1][0].name.lower() != r[0][0].name.lower()
+            # Ничья («фильтр» одним словом): бот спросит клиента, а не выберет — это не ошибка выбора
+            pick[cat] = (r[0][0].id, r[0][0].name.lower()) if not tie else ("ничья", "ничья")
+            unsure[q] += tie
+        found = [p for p in pick.values() if p and p[0] != "ничья"]
+        if len(found) < 3:
+            continue
+        ids = collections.Counter(p[0] for p in found)
+        names = collections.Counter(p[1] for p in found)
+        main_id, main_n = ids.most_common(1)[0]
+        main_name = names.most_common(1)[0][0]
+        if main_n < len(found) * 0.5:
+            continue   # большинства нет — это не «выброс», а разные устройства у разных машин
+        for cat, p in pick.items():
+            if p and p[0] == "ничья":
+                continue
+            if p is None and len(found) >= len(trees) * 0.6 and main_id in trees[cat].groups:
+                misses.append({"query": q, "catalog": cat, "majority": main_name, "freq": freq[q]})
+            elif p and p[0] != main_id and p[1] != main_name and main_id in trees[cat].groups:
+                # Честное разногласие — только при одинаковом выборе: у большинства тоже есть группа,
+                # которую выбрал этот каталог. Иначе это «у них нет отдельной группы» («сальник распредвала»
+                # у Ford — своя группа, у остальных — общая «Сальники»), а не ошибка.
+                with_both = [c for c, x in pick.items() if x and x[0] == main_id and p[0] in trees[c].groups]
+                if len(with_both) >= 2:
+                    outliers.append({"query": q, "catalog": cat, "chosen": p[1], "majority": main_name,
+                                     "agree": f"{len(with_both)} с обеими группами", "freq": freq[q]})
+    outliers.sort(key=lambda x: -x["freq"])
+    misses.sort(key=lambda x: -x["freq"])
+    print(f"Выбросов: {len(outliers)}, промахов: {len(misses)}, запросов с выбором из двух почти равных групп: {len(unsure)}")
+    for o in outliers[:40]:
+        print(f"  «{o['query']}» ×{o['freq']}  {o['catalog']}: «{o['chosen']}», а у большинства ({o['agree']}) «{o['majority']}»")
+    if out:
+        Path(out).write_text(json.dumps({"outliers": outliers, "misses": misses,
+                                         "unsure": unsure.most_common(300)}, ensure_ascii=False, indent=1),
+                             encoding="utf-8")
+        print(f"Отчёт: {out}")
+
+
+# ---------- прайсы: одно и то же изделие под разными названиями ----------
+
+def prices(path: str, out: str | None = None, sample: str = "6000"):
+    """Названия одного артикула (бренд + номер) в разных прайсах — это одна деталь, значит и группа каталога
+    у всех названий должна быть одна. Где робот разводит их по разным группам или не понимает часть
+    названий — это формулировки, которых он не знает. Без Laximo и без поставщиков: только объединённое
+    дерево групп. Дубли («Колодки торм. перед.» в десяти прайсах) считаются один раз."""
+    import random
+    import pyarrow.parquet as pq
+    from ..abcp import _key
+    names: dict[tuple, set[str]] = collections.defaultdict(set)
+    pf = pq.ParquetFile(path)
+    for i in range(pf.num_row_groups):
+        for r in pf.read_row_group(i, columns=["name", "brand", "article"]).to_pylist():
+            n = re.sub(r"\s+", " ", str(r["name"] or "")).strip().lower()
+            if n and r["article"]:
+                names[(_key(r["brand"]), _key(r["article"]))].add(n)
+    multi = [(k, v) for k, v in names.items() if len(v) >= 3]
+    print(f"Артикулов: {len(names)}, с 3+ разными названиями: {len(multi)}", flush=True)
+    random.seed(5)
+    multi = random.sample(multi, min(int(sample), len(multi)))
+    memo: dict[str, tuple] = {}
+
+    def top(n: str):
+        if n not in memo:
+            st = T.stems(n, STOP)
+            if ENGINE.outside(st):
+                memo[n] = ("не каталог",)
+            else:
+                r = INDEX.rank(st, T.side(n))
+                memo[n] = (r[0][0].name.lower(),) if r and r[0][1] >= 0.5 else ("мимо",)
+        return memo[n][0]
+
+    agree = split = 0
+    wrong, missed = collections.Counter(), collections.Counter()
+    examples: dict[tuple, list] = collections.defaultdict(list)
+    for j, (k, ns) in enumerate(multi):
+        if j and j % 1000 == 0:
+            print(f"  {j}/{len(multi)}", flush=True)
+        got = {n: top(n) for n in ns}
+        votes = collections.Counter(g for g in got.values() if g not in ("мимо", "не каталог"))
+        if not votes:
+            continue
+        main, cnt = votes.most_common(1)[0]
+        if cnt < len(ns) / 2:
+            split += 1   # большинства нет — изделие называют совсем по-разному
+            continue
+        agree += 1
+        for n, g in got.items():
+            if g == "мимо":
+                missed[main] += 1
+                if len(examples[("мимо", main)]) < 6:
+                    examples[("мимо", main)].append(n)
+            elif g != main and g != "не каталог":
+                wrong[(main, g)] += 1
+                if len(examples[(main, g)]) < 6:
+                    examples[(main, g)].append(n)
+    total = sum(len(ns) for _, ns in multi)
+    print(f"Изделий с большинством: {agree}, без большинства: {split}. Названий всего: {total}, "
+          f"из них не в ту группу: {sum(wrong.values())}, не понял: {sum(missed.values())}")
+    print("Чаще всего путает (группа большинства → куда ушло название):")
+    for (a, b), c in wrong.most_common(30):
+        print(f"  {c:4}  «{a}» → «{b}»: {'; '.join(examples[(a, b)][:3])}")
+    print("Чаще всего не понимает (группа большинства: примеры названий):")
+    for a, c in missed.most_common(20):
+        print(f"  {c:4}  «{a}»: {'; '.join(examples[('мимо', a)][:3])}")
+    if out:
+        Path(out).write_text(json.dumps({"wrong": [[a, b, c, examples[(a, b)]] for (a, b), c in wrong.most_common(500)],
+                                         "missed": [[a, c, examples[("мимо", a)]] for a, c in missed.most_common(300)]},
+                                        ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"Отчёт: {out}")
+
+
 def typos(path: str):
     """Какие слова переписки «исправляются» как опечатки: частые — почти наверняка обычные слова (в not_typos)."""
     from .chats import load
@@ -277,4 +433,4 @@ def typos(path: str):
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     {"requests": requests, "chats": chats, "typos": typos, "snapshot": snapshot, "diff": diff,
-     "followups": followups}[cmd](*args)
+     "followups": followups, "crosscheck": crosscheck, "prices": prices}[cmd](*args)

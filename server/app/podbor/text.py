@@ -157,7 +157,9 @@ def words(text: str) -> list[str]:
     return [norm(w) for w in _WORD.findall(text or "")]
 
 
-_ABBR = re.compile(r"([a-zа-яё0-9]+)(\.(?=\s*[a-zа-яё]))?", re.I)
+# Сокращение с точкой — и посреди фразы («торм. колодки»), и в конце или перед скобкой: «фильтр топл.»,
+# «фильтр масл. (вставка)» — без этого «топл» никуда не вело и фильтр уходил в трансмиссионный
+_ABBR = re.compile(r"([a-zа-яё0-9]+)(\.(?=\s*[a-zа-яё]|\s*$|\s*[,;:()\[\]!?/\\]))?", re.I)
 
 
 def stems(text: str, stop: frozenset[str] = frozenset()) -> list[str]:
@@ -165,14 +167,20 @@ def stems(text: str, stop: frozenset[str] = frozenset()) -> list[str]:
     Сокращение с точкой посреди фразы («Комплект торм. колодок», «Повор.кулак») помечаем точкой:
     оно совпадает с любым словом, которое так начинается."""
     out = []
-    for m in _ABBR.finditer(_REMKOMPLEKT.sub("рем", text or "")):
+    src = _REMKOMPLEKT.sub("рем", text or "")
+    for m in _ABBR.finditer(src):
         w = norm(m.group(1))
         if len(w) < 3 or any(ch.isdigit() for ch in w) or side_of_word(w):
             continue
         s = stem(w)
         if s in stop or w in stop:
             continue
-        out.append(w + "." if m.group(2) and len(w) <= 6 else s)
+        abbr = bool(m.group(2)) and len(w) <= 6
+        if abbr and not re.match(r"\s*[a-zа-яё]", src[m.end():], re.I):
+            # В конце фразы точка чаще конец предложения: «Нужен ремень.» Сокращение там — короткое
+            # и на согласную: «фильтр топл.», «возд.», «масл.», «торм.»
+            abbr = len(w) <= 5 and w[-1] not in "аеёиоуыэюяьйaeiouy"
+        out.append(w + "." if abbr else s)
     return out
 
 

@@ -212,6 +212,9 @@ class TreeIndex:
         self.groups: dict[int, Group] = {}
         self.need: dict[tuple[int, tuple[str, ...]], str] = {}   # синоним только для одной стороны
         self.whole: set[tuple[int, tuple[str, ...]]] = set()      # синоним считается только целиком
+        # Синонимы, чьих групп у машины нет: «свечи накаливания» у бензиновой, «цепь ГРМ» у мотора с ремнём.
+        # Такой запрос целиком — не ищем похожее («Свечи зажигания»), а честно не находим
+        self.absent: set[tuple[frozenset[str], str]] = set()
         roots = tree if isinstance(tree, list) else [tree]
         for r in roots:
             if isinstance(r, dict):
@@ -221,6 +224,10 @@ class TreeIndex:
         for syn in synonyms or []:
             gid = next((int(g) for g in syn.get("groups", []) if int(g) in self.groups), None)
             if gid is None:
+                for w in syn["words"]:
+                    st = T.stems(w, stop)
+                    if len(st) >= 2:   # одно слово — слишком общее, чтобы решать за весь каталог
+                        self.absent.add((frozenset(st), T.side(w).axis))
                 continue
             for w in syn["words"]:
                 st = T.stems(w, stop)
@@ -324,6 +331,9 @@ class TreeIndex:
         return mq / wq, mp / wp
 
     def rank(self, q: list[str], want: T.Side) -> list[tuple[Group, float]]:
+        bare = frozenset(s.rstrip(".") for s in q)   # «фильтр топл.» = синоним «фильтр топл»
+        if self.absent and ((bare, want.axis) in self.absent or (bare, "") in self.absent):
+            return []
         q = self.known(q)
         # Главное слово: «ремень генератора», «датчик положения распредвала», «топливный фильтр» → «фильтр»
         head = T.head(q) if len(q) > 1 else None
@@ -447,10 +457,17 @@ class Catalog:
         return found
 
     # --- дерево групп ---
+    @staticmethod
+    def tree_key(v: Vehicle) -> str:
+        """Дерево групп — у каждой машины своё, не у каталога: в TOYOTA00 у Camry 34 группы, которых нет
+        у Fortuner, а у Fortuner 59 своих (дизель, кардан, блокировка). Ключ — каталог и машина (ssd)."""
+        return f"{re.sub(r'[^A-Za-z0-9_-]', '_', v.catalog)}-{hashlib.sha1(v.ssd.encode()).hexdigest()[:16]}"
+
     async def tree(self, v: Vehicle) -> TreeIndex:
-        hit = self._raw.get(v.catalog)
+        key = self.tree_key(v)
+        hit = self._raw.get(key)
         if not hit or time.time() - hit[0] > TREE_TTL:
-            name = f"trees/{re.sub(r'[^A-Za-z0-9_-]', '_', v.catalog)}.json"
+            name = f"trees/{key}.json"
             saved = self._load(name) or {}
             hit = (float(saved.get("saved", 0)), saved.get("tree"))
             if not hit[1] or time.time() - hit[0] > TREE_TTL:
@@ -462,11 +479,11 @@ class Catalog:
                 except Exception:
                     if not hit[1]:
                         raise  # нет ни свежего, ни старого дерева
-            self._raw[v.catalog] = hit
-            self._trees.pop(v.catalog, None)
-        if v.catalog not in self._trees:
-            self._trees[v.catalog] = TreeIndex(hit[1], self.stop, self.learned, self.synonyms, self.not_typos)
-        return self._trees[v.catalog]
+            self._raw[key] = hit
+            self._trees.pop(key, None)
+        if key not in self._trees:
+            self._trees[key] = TreeIndex(hit[1], self.stop, self.learned, self.synonyms, self.not_typos)
+        return self._trees[key]
 
     # --- детали группы ---
     async def details(self, v: Vehicle, group_id: int, full: bool) -> list[Detail]:

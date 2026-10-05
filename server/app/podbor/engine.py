@@ -98,7 +98,8 @@ class Engine:
                       | {"text": n["text"]} for n in rules.get("notes", [])]
         self.not_catalog = [st for st in (T.stems(w, self.stop) for w in rules.get("not_catalog", {}).get("words", [])) if st]
         # Нет деталей в группе — где искать ещё: «комплект ГРМ» у мотора с цепью → группы цепи
-        self.fallback = [{"from": set(f["from"]), "to": f["to"], "note": f["note"]} for f in rules.get("fallback", [])]
+        self.fallback = [{"from": set(f["from"]), "to": f["to"], "note": f["note"],
+                          "require": [T.stem(w) for w in f.get("require", [])]} for f in rules.get("fallback", [])]
         # Соседи уточняют: «диски» рядом с «колодками» — тормозные
         self.context = [{"word": T.stem(c["word"]), "near": [T.stem(w) for w in c["near"]], "add": c["add"],
                          "add_stem": T.stem(c["add"])} for c in rules.get("context", [])]
@@ -357,7 +358,7 @@ class Engine:
             # по всем узлам этих групп и берём, если нашлось
             head = T.head(tree.known(q) or q)
             has = lambda name: any(T.same(head, s) for s in T.stems(name, self.stop))  # noqa: E731
-            if head and head not in T.ADJ and not any(has(c.d.name) for c in cands):
+            if head and head not in T.ADJ and head not in _GENERIC_HEADS and not any(has(c.d.name) for c in cands):
                 lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                              return_exceptions=True)
                 full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)]
@@ -367,8 +368,13 @@ class Engine:
                 else:
                     head_miss = next((w for w in T.words(query) if T.same(T.stem(w), head)), head)
         fallback_note = ""
-        if not cands:
-            # «Комплект ГРМ» у мотора с цепью: в группе ремня пусто — смотрим группы цепи (правило fallback)
+        # «Комплект ГРМ» у мотора с цепью: в группе ремня пусто или нашлось не про ГРМ (у Audi 1.8 TFSI
+        # в «Ремень ГРМ, натяжители» — зубчатый ремень помпы и кожух) — смотрим группы цепи (правило fallback)
+        about = lambda c, words: any(T.same(w, x) for w in words  # noqa: E731
+                                     for x in T.stems(f"{c.d.name} {c.d.unit} {c.d.unit_note}", self.stop))
+        if not cands or any(fb["require"] and not any(about(c, fb["require"]) for c in cands)
+                            and any(g.id in fb["from"] for g, _ in groups) for fb in self.fallback):
+            found_before = cands
             for fb in self.fallback:
                 alt = [(tree.groups[i], best) for i in fb["to"] if i in tree.groups]
                 if not alt or not any(g.id in fb["from"] for g, _ in groups):
@@ -381,6 +387,7 @@ class Engine:
                     groups, fallback_note = alt, fb["note"]
                     pos["groups"] = [{"id": g.id, "name": g.name, "path": g.path, "score": round(s, 2)} for g, s in alt]
                     break
+            cands = cands or found_before
         if not cands:
             return pos
 
@@ -601,11 +608,13 @@ def attr_check(cands: list["Candidate"], query: str) -> tuple[list["Candidate"],
 
 
 _PARKING = [T.stem(w) for w in ("стояночного", "стояночный", "ручного", "ручник")]
+# Общие слова: «комплект ГРМ» — не повод писать «Комплект уточним отдельно»
+_GENERIC_HEADS = {T.stem(w) for w in ("комплект", "набор", "ремкомплект", "к-т", "деталь", "запчасть")}
 _EXCLUSIVE = [(T.stem("ремень"), T.stem("цепи")), (T.stem("цепь"), T.stem("ремня"))]
 # Мелочь при детали в каталоге. Ремкомплекта нет: «ремкомплект подшипника» у Ford — сам подшипник с крепежом
 _SMALL = [T.stem(w) for w in ("пружина", "направляющая", "прокладка", "уплотнительная", "уплотнение", "болт", "гайка", "шайба",
                                "скоба", "клипса", "фиксатор", "заглушка", "кольцо", "стопорное", "датчик", "пыльник",
-                               "сальник", "втулка", "кронштейн", "крышка")]
+                               "сальник", "втулка", "кронштейн", "крышка", "кожух")]
 
 
 def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
