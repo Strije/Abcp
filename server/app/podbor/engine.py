@@ -92,8 +92,8 @@ class Engine:
         stop = {w.lower() for w in rules.get("stop", [])}
         self.stop = frozenset(stop | {T.stem(w) for w in stop})
         self.pr_axis = {code: axis for axis, codes in rules.get("pr_axis", {}).items() for code in codes}
-        self.notes = [{k: [T.stem(w) for w in n[k]] for k in ("query", "detail", "lacks")} | {"text": n["text"]}
-                      for n in rules.get("notes", [])]
+        self.notes = [{k: [T.stem(w) for w in n.get(k, [])] for k in ("query", "detail", "lacks", "unless")}
+                      | {"text": n["text"]} for n in rules.get("notes", [])]
         self.not_catalog = [st for st in (T.stems(w, self.stop) for w in rules.get("not_catalog", {}).get("words", [])) if st]
         # Нет деталей в группе — где искать ещё: «комплект ГРМ» у мотора с цепью → группы цепи
         self.fallback = [{"from": set(f["from"]), "to": f["to"], "note": f["note"]} for f in rules.get("fallback", [])]
@@ -457,6 +457,7 @@ class Engine:
         has = lambda s: any(T.same(s, x) for x in have)  # noqa: E731
         for n in self.notes:
             if all(any(T.same(s, x) for x in q) for s in n["query"]) \
+                    and not any(T.same(s, x) for s in n["unless"] for x in q) \
                     and all(has(s) for s in n["detail"]) and not any(has(s) for s in n["lacks"]):
                 return n["text"]
         if c.member:
