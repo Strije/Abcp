@@ -5,6 +5,7 @@
     python -m app.podbor.measure typos chats.jsonl                # какие «опечатки» правятся чаще всего
     python -m app.podbor.measure crosscheck vinqu.jsonl [chats.jsonl] [отчёт.json] [1500]  # разногласия каталогов
     python -m app.podbor.measure prices catalog.parquet [отчёт.json] [6000]  # названия одного артикула в разных прайсах
+    python -m app.podbor.measure fleet запросы.txt [отчёт.json]  # запросы × деревья машин парка (fleet.py)
     python -m app.podbor.measure followups chats.jsonl [при.json]  # следующие сообщения: выбор, вопрос, уточнение…
     python -m app.podbor.measure snapshot vinqu.jsonl до.json      # разбор каждой позиции — для сравнения
     python -m app.podbor.measure diff до.json после.json           # что поменялось после правки
@@ -419,6 +420,82 @@ def prices(path: str, out: str | None = None, sample: str = "6000"):
         print(f"Отчёт: {out}")
 
 
+# ---------- парк машин: запросы × деревья конкретных машин (fleet.py) ----------
+
+def _fleet_trees() -> dict[str, TreeIndex]:
+    nt = frozenset(T.stem(w) for w in RULES.get("not_typos", {}).get("words", []))
+    ready = json.loads(Path(".podbor-cache/fleet_ready.json").read_text(encoding="utf-8"))
+    out = {}
+    for f in ready:
+        p = Path(".podbor-cache/trees") / f"{f['tree']}.json"
+        if p.exists():
+            out[f"{f['make']} {f['name'][:40]}"] = TreeIndex(json.loads(p.read_text(encoding="utf-8"))["tree"],
+                                                             STOP, None, RULES["synonyms"], nt)
+    return out
+
+
+def lost_words(q: list[str], tree: TreeIndex, g) -> list[str]:
+    """Существительные запроса, которых нет ни в названии выбранной группы, ни в её синонимах:
+    «прокладка крышки головки» → «Прокладка головки цилиндра» теряет «крышки» — это другая деталь."""
+    have = [s for p, _ in g.phrases for s in p] + T.stems(g.name, STOP)
+    known = tree.known(q)
+    return [s for s in known if s not in T.ADJ and s not in _LOST_IGNORE and not any(T.same(s, h) for h in have)]
+
+
+# Слова, без которых деталь та же: «прокладка выпускного коллектора двигателя», «клапан системы вентиляции»
+_LOST_IGNORE = {T.stem(w) for w in ("двигателя", "двигатель", "системы", "система", "включения", "автомобиля", "машины",
+                                    "стекла", "комплект")}
+
+
+def fleet(path: str, out: str | None = None):
+    """Запросы из файла (по одному в строке) по деревьям всех машин парка: как понят — уверенно,
+    слабо, выбор, мимо, не каталог, у машины нет; и «уверенно, но слово потеряно» — самое опасное."""
+    trees = _fleet_trees()
+    qs = [q.strip() for q in Path(path).read_text(encoding="utf-8").splitlines() if q.strip()]
+    print(f"Машин: {len(trees)}, запросов: {len(qs)}")
+    total, report = collections.Counter(), []
+    for q in qs:
+        st = T.stems(q, STOP)
+        if ENGINE.outside(st):
+            total["не каталог"] += 1
+            report.append({"query": q, "main": "не каталог"})
+            continue
+        kinds, names, lost = collections.Counter(), collections.Counter(), collections.Counter()
+        for car, tree in trees.items():
+            r = tree.rank(st, T.side(q))
+            if not r or r[0][1] < 0.5:
+                kinds["мимо / у машины нет"] += 1
+                continue
+            g, s = r[0]
+            if len(r) > 1 and r[1][1] >= s - 0.05 and r[1][0].name.lower() != g.name.lower():
+                kinds["выбор"] += 1
+                names[f"{g.name} | {r[1][0].name}"] += 1
+                continue
+            lw = lost_words(st, tree, g)
+            kind = "уверенно" if s >= 0.8 else "слабо"
+            if lw and kind == "уверенно":
+                kind = "уверенно, но слово потеряно"
+                lost[", ".join(lw)] += 1
+            kinds[kind] += 1
+            names[g.name] += 1
+        main = kinds.most_common(1)[0][0] if kinds else "мимо / у машины нет"
+        total[main] += 1
+        report.append({"query": q, "main": main, "kinds": dict(kinds), "groups": names.most_common(3),
+                       "lost": lost.most_common(2)})
+    order = ["уверенно, но слово потеряно", "слабо", "выбор", "мимо / у машины нет", "уверенно", "не каталог"]
+    for k in order:
+        rows = [r for r in report if r["main"] == k]
+        if not rows:
+            continue
+        print(f"\n== {k}: {len(rows)}")
+        for r in rows:
+            extra = f"  потеряно: {r['lost'][0][0]}" if r.get("lost") else ""
+            print(f"  {r['query'][:50]:<50} → {'; '.join(f'{n} ×{c}' for n, c in r.get('groups', [])[:2])}{extra}")
+    print("\nИтого: " + ", ".join(f"{k} {total[k]}" for k in order if total[k]))
+    if out:
+        Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def typos(path: str):
     """Какие слова переписки «исправляются» как опечатки: частые — почти наверняка обычные слова (в not_typos)."""
     from .chats import load
@@ -433,4 +510,4 @@ def typos(path: str):
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     {"requests": requests, "chats": chats, "typos": typos, "snapshot": snapshot, "diff": diff,
-     "followups": followups, "crosscheck": crosscheck, "prices": prices}[cmd](*args)
+     "followups": followups, "crosscheck": crosscheck, "prices": prices, "fleet": fleet}[cmd](*args)
