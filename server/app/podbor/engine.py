@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from .. import brands as AB
-from ..abcp import _key
+from ..abcp import _key, _num
+from . import dialog as D
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
-from .offers import axis_vote, brand_candidates, curate, lr_vote, oem_brand_for
+from .offers import _offer, axis_vote, brand_candidates, curate, days, lr_vote, oem_brand_for
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
 MAX_POSITIONS = 10
@@ -111,11 +112,14 @@ class Engine:
 
     # ---------- заявка целиком ----------
 
-    async def run(self, text: str, vehicle: int | None = None) -> dict:
+    async def run(self, text: str, vehicle: int | None = None, memory: dict | None = None, analogs: int = 3) -> dict:
+        """Заявка. С памятью прошлого ответа и без VIN в тексте — следующая реплика того же разговора."""
         t0 = time.time()
         req = T.parse(text)
+        if memory and (memory.get("ident") or memory.get("plate")) and not req.ident and not req.plate:
+            return await self._follow(text, req, memory, analogs, t0)
         res: dict[str, Any] = {"request": {"ident": req.ident, "plate": req.plate, "model": req.model,
-                                           "chunks": req.chunks},
+                                           "chunks": req.chunks, "vehicle": vehicle},
                                "status": "ok", "vehicle": None, "vehicles": [], "warnings": [], "positions": []}
         if not req.ident and not req.plate:
             return self._done(res, "no_vin", t0)
@@ -148,11 +152,111 @@ class Engine:
             res["warnings"].append(f"Разобраны первые {MAX_POSITIONS} позиций из {len(items)}")
         return self._done(res, "ok", t0)
 
-    def _done(self, res: dict, status: str, t0: float) -> dict:
+    def _done(self, res: dict, status: str, t0: float, prev: dict | None = None,
+              replaced: list[int] | None = None) -> dict:
         res["status"] = status
         res["seconds"] = round(time.time() - t0, 1)
+        res["memory"] = D.remember(res, prev, replaced)
         res["text"] = draft(res)
         return res
+
+    # ---------- следующая реплика разговора ----------
+
+    async def _follow(self, text: str, req: T.Request, mem: dict, analogs: int, t0: float) -> dict:
+        """«давайте за 1650», «а задние?», «прокладку», «а расходомер воздуха?» — машина и позиции из памяти."""
+        res: dict[str, Any] = {"request": {"ident": mem.get("ident", ""), "plate": mem.get("plate", ""), "model": "",
+                                           "chunks": req.chunks, "vehicle": mem.get("vehicle")},
+                               "status": "ok", "followup": True, "vehicle": None, "vehicles": [], "warnings": [],
+                               "positions": [], "reply": None}
+        try:
+            found = await self.catalog.vehicles(mem.get("ident", ""), mem.get("plate", ""))
+        except LaximoError as e:
+            res["warnings"].append(f"Каталог ответил ошибкой {e.code}")
+            return self._done(res, "catalog_error", t0, mem)
+        if not found:
+            return self._done(res, "vehicle_not_found", t0, mem)
+        v = found[min(mem.get("vehicle") or 0, len(found) - 1)]
+        res["vehicle"] = v.public()
+        try:
+            tree = await self.catalog.tree(v)
+        except LaximoError as e:
+            return self._done(res, "no_quick_groups" if e.code == "E_NOTSUPPORTED" else "catalog_error", t0, mem)
+        positions = mem.get("positions") or []
+        cont = D.content(text, self.stop)
+        known = tree.known(cont)
+        names_old = any(D.refers(text, p, self.stop) for p in positions)
+        new_part = bool(known) and not names_old and T.head(cont) not in T.ADJ
+
+        r = D.offer_reply(text, mem, self.stop, analogs)
+        if r and (r.get("picks") or r.get("answers") or r.get("ask_brand") or not new_part):
+            res["reply"] = await self._reply(r, positions, v)
+            return self._done(res, "answer" if r["kind"] == "answer" else "order", t0, mem)
+
+        jobs: list[tuple[str, T.Side]] = []
+        replaced: list[int] = []
+        last_turn = max((p.get("turn", 0) for p in positions), default=0)
+        if positions and not cont:
+            # «а задние?», «обе», «левую и правую» — сторона к позиции, по которой спрашивали, или к последним
+            open_ = [i for i, p in enumerate(positions) if p.get("question")]
+            idx = open_ or [i for i, p in enumerate(positions) if p.get("turn", 0) == last_turn]
+            for i in idx:
+                p = positions[i]
+                sides = D.sides_wanted(text, p)
+                base = D.strip_side(p["query"])
+                jobs += [(D.side_query(base, s), s) for s in sides]
+                if sides and i in open_:
+                    replaced += [i] * len(sides)
+        elif positions and cont and all(s in T.ADJ for s in cont) and not new_part:
+            # «а верхнюю?», «моторное», «впускной» — признак к детали, по которой спрашивали, или к последней
+            for i in D.targets(mem):
+                p = positions[i]
+                q = D.replace_adj(p["query"], text)
+                jobs.append((q, T.side(q)))
+                if p.get("question"):
+                    replaced.append(i)
+        else:
+            asked = [i for i, p in enumerate(positions) if p.get("asked")]
+            alone = tree.rank(cont, T.Side()) if cont else []
+            sure = bool(alone) and alone[0][1] >= 0.8 and (len(alone) < 2 or alone[1][1] < alone[0][1] - 0.05)
+            if asked and cont and len(cont) <= 2 and not sure:
+                # Ответ на вопрос бота: «ГБЦ» → «прокладка», «масло» → «моторное 5 литров»
+                for i in asked:
+                    q = f"{positions[i]['query']} {self.clean(text)}"
+                    jobs.append((q, T.side(q)))
+                    replaced.append(i)
+            elif known:
+                # Новая деталь на ту же машину; «до скольки работаете?» в каталоге не найдётся — это менеджеру
+                jobs = self.split(req.chunks, tree)
+        if not jobs:
+            return self._done(res, "chat", t0, mem)
+        res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
+        return self._done(res, "ok", t0, mem, replaced)
+
+    async def _reply(self, r: dict, positions: list[dict], v: Vehicle) -> dict:
+        """Ответ про показанные предложения — в виде, который можно сохранить и пересобрать в текст."""
+        def item(kind: str, p: dict, x: dict | None, **extra) -> dict:
+            out = {"type": kind, "query": p["query"], "name": x["var"]["name"] if x else "",
+                   "who": x["who"] if x else "", "offer": x["offer"] if x else None,
+                   "axis": x["var"]["axis"] if x else "", "lr": x["var"]["lr"] if x else ""}
+            return out | extra | ({"why": x["why"]} if x and x.get("why") else {})
+        answers = [item(k if x else "none_" + k, p, x) for k, p, x in r.get("answers", [])]
+        for a in r.get("ask_brand", []):
+            p = positions[a["position"]]
+            got = None
+            # Все номера позиции, и «тот же оригинал» тоже: у свечей Audi Bosch есть у 06H905611, а у 06H905621 нет
+            for var in p.get("variants", [])[:MAX_VARIANTS]:
+                try:
+                    _, rows = await self.offers(var["oem"], v.brand)
+                except Exception:
+                    rows = []
+                rows = [x for x in rows or [] if AB.get().key(x.get("brand")) == a["brand"] and _num(x.get("price")) > 0]
+                if rows:
+                    best = min(rows, key=lambda x: (days(x.get("deliveryPeriod")), _num(x.get("price"))))
+                    got = item("brand", p, {"var": var, "who": "", "offer": _offer(best)})
+                    break
+            answers.append(got or item("no_brand", p, None, word=a["word"]))
+        picks = [{"type": "pick", **x} for x in r.get("picks", [])]
+        return {"kind": r["kind"], "answers": answers, "picks": picks, "unclear": r.get("unclear", [])}
 
     # ---------- позиции ----------
 
@@ -314,6 +418,7 @@ class Engine:
                     and not any(T.same(w, s) for w in a["unless"] for s in q):
                 pos["status"] = "choose"
                 pos["question"] = (pos["question"] + " " if pos["question"] else "") + a["text"]
+                pos["asked"] = True
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
         pos["note"] = fallback_note or self._note(q, query, main, tree)
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
@@ -574,7 +679,9 @@ def nice_name(desc: str, brand: str = "", number: str = "") -> str:
     for x in (brand, number, re.sub(r"[\s.\-/]", "", number or "")):
         if x and len(x) >= 3:
             t = re.sub(re.escape(x), " ", t, flags=re.I)
-    t = re.sub(r"\s+", " ", re.sub(r"[|;]+", " ", t)).strip(" ,.-—()[]")
+    # Свой артикул поставщика в начале: «173-609_ _Колодки тормозные» → «Колодки тормозные»
+    t = re.sub(r"^\s*(?=[\w./-]*\d)[\w./-]*[-_/][\w./-]*[\s_]+(?=[^\W\d_])", "", t)
+    t = re.sub(r"\s+", " ", re.sub(r"[|;_]+", " ", t)).strip(" ,.-—()[]")
     letters = [c for c in t if c.isalpha()]
     if letters and sum(c.isupper() for c in letters) / len(letters) > 0.7:
         t = t.lower()
@@ -675,8 +782,15 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         return "\n".join(lines)
     if st == "no_positions":
         return "Машину нашли. Напишите, какие запчасти нужны."
+    if st == "chat":
+        return ""   # не про подбор: оплата, адрес, «когда забрать» — отвечает менеджер
+    if st in ("order", "answer"):
+        return reply_text(res["reply"], numbers)
     v = res["vehicle"]
-    lines = ["Здравствуйте! Подобрали запчасти по VIN для вашего автомобиля:", v.get("short") or v["summary"]]
+    if res.get("followup"):
+        lines = []   # продолжение разговора: без приветствия и машины, они уже были
+    else:
+        lines = ["Здравствуйте! Подобрали запчасти по VIN для вашего автомобиля:", v.get("short") or v["summary"]]
     lines += [f"Обратите внимание: {w[0].lower() + w[1:]}." for w in res["warnings"]]
     found = 0
     for i, p in enumerate(res["positions"], 1):
@@ -729,4 +843,61 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     lines.append("")
     lines.append("Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем." if found
                  else "Уточним по позициям и напишем.")
-    return "\n".join(lines)
+    return "\n".join(lines).strip("\n")
+
+
+def _title(x: dict) -> str:
+    """«Колодки тормозные передние» — название из каталога, со стороной, если её нет в названии."""
+    # Словами клиента: «Колодки передние», а не «1 комплект тормозных колодок с индик. износа…»
+    name = x.get("query") or ru_name(base_name(x.get("name") or ""))
+    name = name[:1].upper() + name[1:]
+    side = T.side_label(name, x.get("axis", ""), x.get("lr", "")).lower()
+    return f"{name} {side}" if side and not T.side(name).axis and not T.side(name).lr else name
+
+
+def reply_text(r: dict, numbers: bool = False) -> str:
+    """Ответ на реплику про показанные предложения: «Оформляем: …, итого» или «Самый недорогой — …»."""
+    lines: list[str] = []
+    for a in r.get("answers", []):
+        t, title = a["type"], _title(a)
+        if t == "cheapest":
+            lines += [f"{title} — самый недорогой вариант:", _offer_line(a["offer"], numbers, who=a["who"])]
+        elif t == "original":
+            lines += [f"{title} — оригинал:", _offer_line(a["offer"], numbers, who="оригинал")]
+        elif t == "none_original":
+            lines.append(f"{title}: оригинала у поставщиков сейчас нет — только аналоги.")
+        elif t == "best":
+            why = {"гарантия магазина": "на него гарантия магазина",
+                   "частая замена": "его чаще всего берут",
+                   "оригинал": "это оригинал"}.get(a.get("why", ""), "")
+            lines += [f"{title} — советуем этот вариант" + (f": {why}." if why else "."),
+                      _offer_line(a["offer"], numbers, who=a["who"])]
+        elif t == "brand":
+            lines += [f"{title} — есть:", _offer_line(a["offer"], numbers, who=a["who"])]
+        elif t == "no_brand":
+            lines.append(f"{title}: фирмы {a.get('word', '')} у поставщиков сейчас нет.")
+        elif t.startswith("none_"):
+            lines.append(f"{title}: уточним и напишем.")
+        lines.append("")
+    picks = r.get("picks", [])
+    if picks:
+        lines.append("Оформляем:")
+        total, longest = 0.0, 0
+        for x in picks:
+            o, qty = x["offer"], x.get("qty") or 1
+            line = _offer_line(o, numbers, _title(x), "оригинал" if x["who"] == "оригинал" else "")
+            if qty > 1:
+                price = money(o["price"])
+                line = line.replace(f" — {price}", f" — {price} × {qty} = {money(o['price'] * qty)}", 1)
+            lines.append(line)
+            total += o["price"] * qty
+            longest = max(longest, o["days"])
+            k = re.match(r"\d+", x.get("amount") or "")
+            if not x.get("qty") and k and int(k.group(0)) > 1:
+                lines.append(f"   Цена за штуку, на машину нужно {int(k.group(0))} — сколько штук оформить?")
+        lines.append(f"Итого: {money(total)}. " + ("Всё в наличии." if longest <= 0 else f"Срок — {when(longest)}."))
+    for q in r.get("unclear", []):
+        lines.append(f"По позиции «{q}» напишите, какой вариант оформить — фирму или цену.")
+    if r.get("kind") == "order" and not picks and not r.get("unclear"):
+        lines.append("Напишите, какой вариант оформить — фирму или цену.")
+    return "\n".join(lines).strip("\n")

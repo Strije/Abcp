@@ -30,7 +30,7 @@ async def page():
 
 @app.post("/v1/podbor")
 async def podbor(body: PodborIn):
-    res = await engine.run(body.text, body.vehicle)
+    res = await engine.run(body.text, body.vehicle, body.memory, body.analogs)
     res["text"] = draft(res, body.numbers, body.analogs)
     return res
 

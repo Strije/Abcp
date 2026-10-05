@@ -448,7 +448,7 @@ def test_podbor_endpoint_hides_purchase_price():
         assert r.json()["positions"][0]["variants"][0]["oem"] == "2101656"
         assert "priceIn" not in r.text and "123456" not in r.text and "distributorId" not in r.text
         assert c.get("/podbor").status_code == 200 and "Подбор по VIN" in c.get("/podbor").text
-        assert c.post("/v1/podbor", json={"text": "x"}).status_code == 422
+        assert c.post("/v1/podbor", json={"text": ""}).status_code == 422
         # Настройки ответа клиенту: артикулы включаются, пересборка — без нового подбора
         res = r.json()
         assert "2101656" not in res["text"]
@@ -559,3 +559,42 @@ def test_neighbors_context_gearbox_and_ssangyong():
     res = {"status": "vehicle_not_found", "request": {"ident": "Z8UA0B1SSBP036638", "model": "SsangYong Kyron",
                                                       "chunks": []}}
     assert "корейский VIN" in draft(res)
+
+
+# ---------- разговор: следующие сообщения без VIN ----------
+
+def test_dialog_side_choice_and_cheaper():
+    e = Engine(Fake(), None, set())
+    first = run("XW7BF4FK30S064389 колодки передние", e)
+    assert first["memory"]["ident"] == "XW7BF4FK30S064389" and len(first["memory"]["positions"]) == 1
+    rear = run("а задние?", e, memory=first["memory"])
+    assert rear["status"] == "ok" and rear["followup"]
+    assert [v["oem"] for v in rear["positions"][0]["variants"]] == ["04466-33180"]
+    assert not rear["text"].startswith("Здравствуйте")   # продолжение — без приветствия
+    assert len(rear["memory"]["positions"]) == 2         # передние помним: «а задние» — это ещё одна позиция
+    # «давайте первый» — про последний ответ (задние), первая строка — оригинал
+    pick = run("давайте первый", e, memory=rear["memory"])
+    assert pick["status"] == "order"
+    assert [(x["offer"]["number"], x["offer"]["price"]) for x in pick["reply"]["picks"]] == [("04466-33180", 7000)]
+    assert "Оформляем" in pick["text"] and "Итого: 7 000 ₽" in pick["text"]
+    cheap = run("дешевле нет?", e, memory=rear["memory"])
+    assert cheap["status"] == "answer" and "самый недорогой" in cheap["text"] and "700 ₽" in cheap["text"]
+    # Цена называет вариант: «за 9000» — передние, оригинал
+    by_price = run("беру передние за 9000", e, memory=rear["memory"])
+    assert [x["offer"]["number"] for x in by_price["reply"]["picks"]] == ["04465-33471"]
+    vague = run("Заказывайте", e, memory=rear["memory"])
+    assert vague["status"] == "order" and not vague["reply"]["picks"] and "какой вариант" in vague["text"]
+    other = run("До скольки работаете?", e, memory=rear["memory"])
+    assert other["status"] == "chat" and other["text"] == ""
+
+
+def test_dialog_answer_to_question_replaces_position():
+    e = Engine(Fake(), None, set())
+    first = run("X9FKXXEEBKCB57566 подшипник ступицы", e)
+    assert first["positions"][0]["question"]
+    ans = run("задний", e, memory=first["memory"])
+    assert [v["oem"] for v in ans["positions"][0]["variants"]] == ["2101656"]
+    assert len(ans["memory"]["positions"]) == 1   # ответ на вопрос заменяет позицию, а не добавляет
+    # Новый VIN посреди разговора — новая машина, старые позиции забыты
+    fresh = run("XW7BF4FK30S064389 колодки задние", e, memory=ans["memory"])
+    assert fresh["memory"]["ident"] == "XW7BF4FK30S064389" and len(fresh["memory"]["positions"]) == 1

@@ -96,10 +96,11 @@ class AccessIn(BaseModel):
 
 
 class PodborIn(BaseModel):
-    text: str = Field(min_length=3, max_length=4000)
+    text: str = Field(min_length=1, max_length=4000)
     vehicle: int | None = Field(default=None, ge=0, le=50)  # какой вариант машины, если по VIN их несколько
     numbers: bool = False                                   # артикулы в ответе клиенту
     analogs: int = Field(default=3, ge=0, le=5)             # сколько аналогов на деталь в ответе клиенту
+    memory: dict | None = None                              # память прошлого ответа: следующая реплика без VIN
 
 
 class PodborTextIn(BaseModel):
@@ -432,7 +433,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if not podbor_limit.allow("pb:" + client_ip(request)):
             raise HTTPException(429, "Слишком много запросов, подождите минуту")
         try:
-            res = await state["podbor"].run(body.text, body.vehicle)
+            res = await state["podbor"].run(body.text, body.vehicle, body.memory, body.analogs)
         except (httpx.HTTPError, AbcpError):
             raise HTTPException(502, "Каталог или поставщики не ответили, попробуйте ещё раз")
         res["text"] = podbor.draft(res, body.numbers, body.analogs)
