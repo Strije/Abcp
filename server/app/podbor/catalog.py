@@ -201,8 +201,9 @@ class TreeIndex:
     WHOLE_REC = 0.5   # синоним: доля веса фразы, которая должна совпасть, и обязательно его главное слово
 
     def __init__(self, tree: Any, stop: frozenset[str], learned: dict[str, list[str]] | None = None,
-                 synonyms: list[dict] | None = None):
+                 synonyms: list[dict] | None = None, not_typos: frozenset[str] = frozenset()):
         self.stop = stop
+        self.not_typos = not_typos
         self.groups: dict[int, Group] = {}
         self.need: dict[tuple[int, tuple[str, ...]], str] = {}   # синоним только для одной стороны
         self.whole: set[tuple[int, tuple[str, ...]]] = set()      # синоним считается только целиком
@@ -244,9 +245,14 @@ class TreeIndex:
         self._split: dict[str, list[str]] = {}
 
     def fix(self, s: str) -> str:
-        """Опечатка в одну букву → слово каталога («масленн» → «маслян», «шруз» → «шрус»)."""
+        """Опечатка в одну букву → слово каталога («масленн» → «маслян», «подшибник» → «подшипник»).
+        Первая буква не меняется (котор ≠ мотор, балон ≠ салон), и не трогаем обычные слова, похожие
+        на детали: «готов» ≠ «голов», «Гранта» ≠ «граната», «решение» ≠ «ремень» (список из переписки)."""
         if s not in self._fix:
-            self._fix[s] = s if s.endswith(".") or any(T.same(s, v) for v in self.vocab)                 else next((v for v in sorted(self.vocab) if T.near(s, v)), s)
+            if s.endswith(".") or s in self.not_typos or any(T.same(s, v) for v in self.vocab):
+                self._fix[s] = s
+            else:
+                self._fix[s] = next((v for v in sorted(self.vocab) if v[:1] == s[:1] and T.near(s, v)), s)
         return self._fix[s]
 
     def _walk(self, node: dict, path: list[str]):
@@ -353,8 +359,10 @@ def _safe(s: str) -> str:
 
 
 class Catalog:
-    def __init__(self, call: Call, folder: Path | None, stop: frozenset[str], synonyms: list[dict] | None = None):
+    def __init__(self, call: Call, folder: Path | None, stop: frozenset[str], synonyms: list[dict] | None = None,
+                 not_typos: frozenset[str] = frozenset()):
         self.synonyms = synonyms or []
+        self.not_typos = not_typos
         self.call = call
         self.folder = folder
         self.stop = stop
@@ -445,7 +453,7 @@ class Catalog:
             self._raw[v.catalog] = hit
             self._trees.pop(v.catalog, None)
         if v.catalog not in self._trees:
-            self._trees[v.catalog] = TreeIndex(hit[1], self.stop, self.learned, self.synonyms)
+            self._trees[v.catalog] = TreeIndex(hit[1], self.stop, self.learned, self.synonyms, self.not_typos)
         return self._trees[v.catalog]
 
     # --- детали группы ---

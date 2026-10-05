@@ -99,7 +99,8 @@ class Engine:
         self.ask = [{"query": [T.stem(w) for w in a["query"]], "unless": [T.stem(w) for w in a.get("unless", [])],
                      "text": a["text"]} for a in rules.get("ask", [])]
         self.src = src
-        self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []))
+        not_typos = frozenset(T.stem(w) for w in rules.get("not_typos", {}).get("words", []))
+        self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []), not_typos)
         self.warranty = {AB.get().key(b) for b in (warranty or set())}
         self._own: dict[tuple[int, tuple[str, ...]], tuple | None] = {}
 

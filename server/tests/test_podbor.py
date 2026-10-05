@@ -526,3 +526,14 @@ def test_chat_shortcuts_and_oil_question():
     e = Engine(Fake(), None, set())
     ask = {a["text"] for a in e.ask if all(any(T.same(w, s) for s in T.stems("масло")) for w in a["query"])}
     assert any("Какое масло" in t for t in ask)
+
+
+def test_typo_fix_keeps_real_words():
+    """Опечатки правим («подшибник»), но не обычные слова: «готов» ≠ «голов», «котор» ≠ «мотор» (первая буква)."""
+    from app.podbor.catalog import TreeIndex
+    tree = node(0, "x", link=False, children=[node(1, "Подшипник ступичный"), node(2, "Головка блока цилиндров"),
+                                               node(3, "Мотор печки"), node(4, "Граната")])
+    ix = TreeIndex(tree, frozenset(), None, None, frozenset({T.stem("Гранта")}))
+    assert ix.fix(T.stem("подшибник")) == T.stem("подшипник")
+    assert ix.fix(T.stem("который")) == T.stem("который")      # не «мотор»: первая буква другая
+    assert ix.fix(T.stem("Гранта")) == T.stem("Гранта")        # Лада Гранта — не «граната»
