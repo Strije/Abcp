@@ -515,3 +515,14 @@ def test_original_with_leading_zero_and_english_names():
     assert o["original"] and o["original"]["price"] == 900
     assert ru_name(base_name("BELT, ALTERNATOR AND A/C COMPRESSOR")) == "Ремень генератора и кондиционера"
     assert ru_name(base_name("BELT, POWER STEERING")) == "Ремень ГУР"
+
+
+def test_chat_shortcuts_and_oil_question():
+    """Из переписки: «с/блок», «ш/о», «п/о», «к-т» — сокращения, а не разделители; «масло» без уточнения — спросить."""
+    assert T.split_pieces("С/блок внутренний зад. ниж. рычага") == ["сайлентблок внутренний зад. ниж. рычага"]
+    assert T.split_pieces("ш/о нижняя, к-т колодок") == ["шаровая опора нижняя", "комплект колодок"]
+    assert T.parse("X9FKXXEEBKCB57566 г/ц сцепления").chunks == ["главный цилиндр сцепления"]
+    from app.podbor.engine import Engine
+    e = Engine(Fake(), None, set())
+    ask = {a["text"] for a in e.ask if all(any(T.same(w, s) for s in T.stems("масло")) for w in a["query"])}
+    assert any("Какое масло" in t for t in ask)

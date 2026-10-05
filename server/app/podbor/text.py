@@ -87,7 +87,7 @@ def parse(text: str) -> Request:
             if token:
                 body = re.sub(re.escape(token), " ", body, flags=re.I)
         body = _VIN_TOKEN.sub(" ", body)
-    r.chunks = split_chunks(body)
+    r.chunks = split_chunks(expand(body))
     return r
 
 
@@ -97,8 +97,29 @@ def split_chunks(body: str) -> list[str]:
     return [p.strip(" ,.-—–\t") for p in parts if p and p.strip(" ,.-—–\t")]
 
 
+# Сокращения через «/» и «к-т» — раскрываем до разбора, иначе «/» режет позицию пополам:
+# «С/блок внутренний зад. ниж. рычага», «сальник ступицы и п/о», «г/ц сцепления».
+_SHORT = [
+    (re.compile(r"(?<![а-яё])с\s*/\s*б(?:лок(?:и|а|ов)?)?(?![а-яё])", re.I), "сайлентблок"),
+    (re.compile(r"(?<![а-яё])ш\s*/\s*о(?:пор[аыу])?(?![а-яё])", re.I), "шаровая опора"),
+    (re.compile(r"(?<![а-яё])п\s*/\s*о(?:с[ьи])?(?![а-яё])", re.I), "полуось"),
+    (re.compile(r"(?<![а-яё])г\s*/\s*ц(?![а-яё])", re.I), "главный цилиндр"),
+    (re.compile(r"(?<![а-яё])р\s*/\s*ц(?![а-яё])", re.I), "рабочий цилиндр"),
+    (re.compile(r"(?<![а-яё])р\s*/\s*к(?![а-яё])", re.I), "ремкомплект"),
+    (re.compile(r"(?<![а-яё])т\s*/\s*ж(?![а-яё])", re.I), "тормозная жидкость"),
+    (re.compile(r"(?<![а-яё])о\s*/\s*ж(?![а-яё])", re.I), "охлаждающая жидкость"),
+    (re.compile(r"(?<![а-яё])к-?к?т(?![а-яё])\.?", re.I), "комплект"),
+]
+
+
+def expand(text: str) -> str:
+    for rx, full in _SHORT:
+        text = rx.sub(full, text)
+    return text
+
+
 def split_pieces(chunk: str) -> list[str]:
-    return [p.strip() for p in re.split(r",|\+|\s+и\s+|/", chunk) if p.strip()]
+    return [p.strip() for p in re.split(r",|\+|\s+и\s+|/", expand(chunk)) if p.strip()]
 
 
 # Прилагательное: окончание прилагательного и основа на -н/-ск/-ов/-ев/-ющ… («топливный» → «топливн»).
