@@ -7,6 +7,8 @@ GET  /v1/topup?amount=        ссылка на пополнение балан�
 POST /v1/orders/{number}/app-note  служебная заметка «оформлен через приложение» (для статистики)
 POST /v1/images               картинки товаров для выдачи
 POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
+POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
+GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
 DELETE /v1/access-request     доступ появился — закрыть заявку
@@ -25,6 +27,8 @@ GET  /v1/app/apk/{code}       скачать сборку
 PUT  /v1/app/apk/{code}       загрузка сборки из CI (токен X-Upload-Token)
 """
 import asyncio
+import base64
+import binascii
 import hmac
 import json
 import logging
@@ -33,11 +37,12 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from . import access, bitrix, push, releases, tokens
+from . import access, bitrix, podbor, push, releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
@@ -88,6 +93,11 @@ class AccessIn(BaseModel):
     missing: list[str] = Field(default_factory=list, max_length=10)
 
 
+class PodborIn(BaseModel):
+    text: str = Field(min_length=3, max_length=4000)
+    vehicle: int | None = Field(default=None, ge=0, le=50)  # какой вариант машины, если по VIN их несколько
+
+
 class RestoreIn(BaseModel):
     emailOrMobile: str = Field(min_length=5, max_length=120)
     code: str = Field(default="", max_length=20)
@@ -129,6 +139,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["bx"] = bitrix.Bitrix(state["abcp"].http, bitrix.BitrixState(folder), s.bitrix_client_id,
                                     s.bitrix_client_secret, s.public_url)
         state["chat"] = bitrix.ChatStore(folder)
+        state["podbor"] = podbor.Engine(podbor.Direct(state["laximo"], state["abcp"], s.guest_profile_id),
+                                        folder / "podbor", warranty_brands())
         app.state.bx = state["bx"]
         tasks = []
         if state["pusher"].enabled and s.order_watch_interval > 0:
@@ -177,6 +189,12 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     # Гарантии избранных брендов: панель ABCP «Избранные бренды» + avtodrug92.ru/garantija.
     # Меняются в файле на сервере — приложение подхватит без новой версии.
     warranty_file = Path(__file__).parent / "data" / "brand_warranty.json"
+
+    def warranty_brands() -> set[str]:
+        try:
+            return set(json.loads(warranty_file.read_text(encoding="utf-8")).get("brands", {}))
+        except (FileNotFoundError, ValueError):
+            return set()
 
     @app.get("/v1/brands/warranty")
     async def brand_warranty():
@@ -360,6 +378,46 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             raise HTTPException(502, "Каталог не ответил, попробуйте ещё раз")
         # Ответ как есть (и ошибки E_… тоже), но 5xx Laximo — это 502 для приложения
         return Response(text, status_code=502 if code >= 500 else code, media_type="application/json")
+
+    # Подбор по заявке: те же гостевые данные (Laximo + цены гостя), но несколько запросов за раз — лимит строже
+    podbor_limit = RateLimiter(limit=10, window=60)
+    podbor_fails = RateLimiter(limit=10, window=600)
+    podbor_page = Path(__file__).parent / "static" / "podbor.html"
+
+    def podbor_auth(request: Request) -> None:
+        """Страница и подбор — только для своих: вход браузера (Basic), имя любое, пароль PODBOR_PASSWORD.
+        Каждый подбор тратит запросы Laximo по тарифу магазина. Без пароля в настройках — подбора нет."""
+        password = state["s"].podbor_password
+        if not password:
+            raise HTTPException(404, "Not Found")
+        ip = client_ip(request)
+        given = ""
+        scheme, _, value = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() == "basic":
+            try:
+                given = base64.b64decode(value.strip()).decode("utf-8").partition(":")[2]
+            except (binascii.Error, UnicodeDecodeError):
+                given = ""
+        if given and hmac.compare_digest(given.encode(), password.encode()):
+            return
+        if given and not podbor_fails.allow("pbf:" + ip):
+            raise HTTPException(429, "Слишком много неверных паролей, подождите 10 минут")
+        raise HTTPException(401, "Нужен пароль", headers={"WWW-Authenticate": 'Basic realm="podbor", charset="UTF-8"'})
+
+    @app.post("/v1/podbor", dependencies=[Depends(podbor_auth)])
+    async def podbor_run(body: PodborIn, request: Request):
+        if not state["laximo"].enabled:
+            raise HTTPException(503, "Подбор по авто временно недоступен")
+        if not podbor_limit.allow("pb:" + client_ip(request)):
+            raise HTTPException(429, "Слишком много запросов, подождите минуту")
+        try:
+            return await state["podbor"].run(body.text, body.vehicle)
+        except (httpx.HTTPError, AbcpError):
+            raise HTTPException(502, "Каталог или поставщики не ответили, попробуйте ещё раз")
+
+    @app.get("/podbor", dependencies=[Depends(podbor_auth)])
+    async def podbor_html():
+        return FileResponse(podbor_page, media_type="text/html; charset=utf-8")
 
     @app.post("/v1/push/token")
     async def push_token(body: PushTokenIn, uid: str = Depends(current_uid)):

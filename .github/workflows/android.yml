@@ -1,8 +1,11 @@
 name: Android build
 
 on:
+  # Правка только сервера или документов — не новая версия приложения (иначе клиентам уйдёт пустое обновление)
   push:
+    paths-ignore: ["server/**", "docs/**", "**.md"]
   pull_request:
+    paths-ignore: ["server/**", "docs/**", "**.md"]
   workflow_dispatch:
 
 jobs:

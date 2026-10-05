@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Подбор по VIN — Автодруг92</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #677085; --line: #e3e6ec;
+    --accent: #e8590c; --ok: #2b8a3e; --warn: #b26b00; --ask: #1c64c8; --bad: #c92a2a;
+    --chip: #f0f2f5; --mark: rgba(232, 89, 12, .28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1d2128; --text: #e6e9ef; --muted: #98a1b3; --line: #2e343e;
+            --chip: #262b33; --mark: rgba(255, 140, 60, .35); }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .hint { color: var(--muted); margin: 0 0 14px; }
+  textarea { width: 100%; min-height: 130px; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+             background: var(--card); color: var(--text); font: inherit; resize: vertical; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0 18px; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; background: var(--chip); color: var(--text); }
+  button.main { background: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 12px 0; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; color: #fff; vertical-align: 1px; }
+  .found { background: var(--ok); } .choose { background: var(--ask); } .not_found { background: var(--bad); }
+  .chip { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--chip); margin: 2px 4px 2px 0; }
+  .warn { color: var(--warn); }
+  .q { font-weight: 600; font-size: 16px; }
+  .variant { border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 10px; }
+  .oem { font-family: ui-monospace, Consolas, monospace; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+  td, th { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; white-space: nowrap; }
+  .scheme { position: relative; display: inline-block; margin-top: 10px; max-width: 100%; }
+  .scheme img { max-width: 100%; display: block; background: #fff; border-radius: 8px; }
+  .scheme .hit { position: absolute; border: 2px solid var(--accent); background: var(--mark); border-radius: 4px; }
+  pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font: inherit; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Подбор по VIN</h1>
+  <p class="hint">Вставьте заявку как есть — из формы ABCP или из переписки. Номера берутся из каталога Laximo и предложений ABCP; сторона проверяется по каталогу и по описаниям поставщиков. Цены — гостевые.</p>
+  <textarea id="text" placeholder="Модель авто: FORD FOCUS III 1.6 2012
+VIN/FRAME: X9FKXXEEBKCB57566
+Запрос состоит из следующих позиций: подшипник задней ступицы, масляный фильтр"></textarea>
+  <div class="row">
+    <button class="main" id="go">Подобрать</button>
+    <span class="muted" id="state">Ctrl+Enter — подобрать</span>
+  </div>
+  <div id="out"></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const money = x => Math.round(x).toLocaleString("ru-RU") + " ₽";
+const when = d => d <= 0 ? "в наличии" : "~" + d + " дн.";
+const SIDE = {front: "передн.", rear: "задн.", left: "лев.", right: "прав."};
+const STATUS = {found: "найдено", choose: "уточнить", not_found: "не найдено"};
+let last = null;
+
+try { $("#text").value = localStorage.getItem("podbor_text") || ""; } catch (e) {}
+
+async function go(vehicle) {
+  const text = $("#text").value.trim();
+  if (text.length < 3) return;
+  try { localStorage.setItem("podbor_text", text); } catch (e) {}
+  $("#go").disabled = true; $("#state").textContent = "Ищем в каталоге и у поставщиков…";
+  try {
+    const r = await fetch("/v1/podbor", {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({text, vehicle: vehicle ?? null})});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || ("Ошибка " + r.status));
+    last = data; render(data);
+    $("#state").textContent = "Готово за " + data.seconds + " с";
+  } catch (e) {
+    $("#out").innerHTML = `<p class="err">${esc(e.message)}</p>`; $("#state").textContent = "";
+  } finally { $("#go").disabled = false; }
+}
+
+function offersTable(o) {
+  if (!o) return `<p class="muted">Цен нет — уточнит менеджер.</p>`;
+  const rows = [];
+  if (o.original) rows.push(`<tr><td><b>${esc(o.original.brand)} ${esc(o.original.number)}</b> <span class="chip">оригинал</span></td>
+     <td class="num">${money(o.original.price)}</td><td class="num">${when(o.original.days)}</td></tr>`);
+  for (const a of o.analogs) rows.push(`<tr><td>${esc(a.brand)} ${esc(a.number)}<br><span class="muted">${esc(a.description)}</span>
+     ${a.tags.map(t => `<span class="chip">${esc(t)}</span>`).join("")}${a.confirm >= 2 ? `<span class="chip">★${a.confirm}</span>` : ""}</td>
+     <td class="num">${money(a.price)}</td><td class="num">${when(a.days)}</td></tr>`);
+  const s = o.stats;
+  return `<table><tr><th>Что</th><th class="num">Цена</th><th class="num">Срок</th></tr>${rows.join("")}</table>
+    <p class="muted">Всего вариантов: ${s.articles}, предложений: ${s.offers}, от ${money(s.price_min)} до ${money(s.price_max)}.</p>`;
+}
+
+function variant(v, pi, vi) {
+  const side = [SIDE[v.axis], SIDE[v.lr]].filter(Boolean).join(" ");
+  const src = v.side_source === "поставщики" ? `по описаниям поставщиков (${v.vote.front} перед / ${v.vote.rear} зад)`
+            : v.side_source ? `по каталогу${v.vote.front + v.vote.rear ? `, поставщики: ${v.vote.front} перед / ${v.vote.rear} зад` : ""}` : "";
+  return `<div class="variant">
+    <div>${v.alt ? '<span class="chip">тот же оригинал</span> ' : ""}<span class="oem">${esc(v.brand)} ${esc(v.oem)}</span> — ${esc(v.name)}</div>
+    <div class="muted">${side ? `<b>${side}</b> ${esc(src)} · ` : ""}${v.amount ? "кол-во " + esc(v.amount) + " · " : ""}узел «${esc(v.unit)}»${v.unit_note ? " · " + esc(v.unit_note) : ""}${v.note ? " · " + esc(v.note) : ""}</div>
+    ${v.warning ? `<div class="warn">⚠ ${esc(v.warning)}</div>` : ""}
+    ${v.alt ? "" : offersTable(v.offers)}
+    ${v.scheme.image ? `<button onclick="scheme(${pi},${vi},this)">Схема узла${v.scheme.code ? ", позиция " + esc(v.scheme.code) : ""}</button>` : ""}
+  </div>`;
+}
+
+function render(d) {
+  const out = [];
+  if (d.vehicle) out.push(`<div class="card"><div class="q">${esc(d.vehicle.summary)}</div>
+     <div class="muted">VIN ${esc(d.request.ident || d.request.plate)} · каталог ${esc(d.vehicle.catalog)}${d.request.model ? " · в заявке: " + esc(d.request.model) : ""}</div>
+     ${d.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}</div>`);
+  if (d.status === "choose_vehicle")
+    out.push(`<div class="card"><div class="q">По VIN несколько вариантов — выберите:</div>${d.vehicles.map((v, i) =>
+      `<div style="margin-top:8px"><button onclick="go(${i})">${esc(v.summary)}</button></div>`).join("")}</div>`);
+  d.positions.forEach((p, pi) => out.push(`<div class="card">
+    <div class="q">${pi + 1}. ${esc(p.query)} <span class="badge ${p.status}">${STATUS[p.status]}</span></div>
+    ${p.groups.length ? `<div class="muted">Группы каталога: ${p.groups.map(g => esc(g.name)).join(", ")}</div>` : ""}
+    ${p.question ? `<div><b>${esc(p.question)}</b></div>` : ""}
+    ${p.note ? `<div>${esc(p.note)}</div>` : ""}
+    ${p.variants.map((v, vi) => variant(v, pi, vi)).join("")}
+  </div>`));
+  out.push(`<div class="row"><b>Черновик ответа клиенту</b><button onclick="copyDraft(this)">Скопировать</button></div><pre id="draft">${esc(d.text)}</pre>`);
+  $("#out").innerHTML = out.join("");
+}
+
+async function scheme(pi, vi, btn) {
+  const v = last.positions[pi].variants[vi], s = v.scheme;
+  const box = document.createElement("div"); box.className = "scheme";
+  box.innerHTML = `<img alt="Схема узла" src="${esc(s.image)}">`;
+  btn.replaceWith(box);
+  const img = box.querySelector("img");
+  try {
+    const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                             body: JSON.stringify({catalog: s.catalog, ssd: s.ssd, unitId: s.unit_id})});
+    const map = await r.json();
+    const draw = () => {
+      const k = img.clientWidth / img.naturalWidth;
+      for (const m of (Array.isArray(map) ? map : [])) {
+        if (String(m.code) !== String(s.code)) continue;
+        const h = document.createElement("div"); h.className = "hit";
+        Object.assign(h.style, {left: m.x1 * k + "px", top: m.y1 * k + "px", width: (m.x2 - m.x1) * k + "px", height: (m.y2 - m.y1) * k + "px"});
+        box.appendChild(h);
+      }
+    };
+    img.complete ? draw() : img.addEventListener("load", draw);
+  } catch (e) { /* схема без подсветки — тоже полезна */ }
+}
+
+function copyDraft(btn) {
+  navigator.clipboard.writeText($("#draft").textContent).then(() => { btn.textContent = "Скопировано"; });
+}
+
+$("#go").addEventListener("click", () => go());
+$("#text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) go(); });
+</script>
+</body>
+</html>
