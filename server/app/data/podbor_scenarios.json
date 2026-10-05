@@ -1,0 +1,81 @@
+[
+  {"name": "Audi: передние колодки и диски, вежливость", "turns": [
+    {"say": "Здравствуйте! XW8ZZZ8K7AG200538 нужны передние колодки и диски, спасибо",
+     "expect": {"status": "ok", "positions": 2, "found": ["колод", "диск"], "axis": "front", "no_text": ["спасибо"]}}]},
+  {"name": "Audi: колодки перед и зад", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 колодки перед и зад", "expect": {"positions": 2, "found": ["колод"]}}]},
+  {"name": "Audi: опечатка, вопрос о стороне", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 подшибник ступицы", "expect": {"question": true, "text": ["передний или задний"]}}]},
+  {"name": "Audi: ГРМ — у мотора цепь", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 комплект ГРМ", "expect": {"found": ["цеп"], "text": ["цепь ГРМ, а не ремень"]}}]},
+  {"name": "Audi: масло — моторное или в коробку", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 масло", "expect": {"question": true}}]},
+  {"name": "Audi: народные названия фильтров", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 салонник, воздухан, масляный",
+     "expect": {"positions": 3, "found": ["фильтр"], "question": false}}]},
+  {"name": "Audi: ГБЦ и клапаны", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 Здравствуйте можно узнать цену и сроки ГБЦ, надо 2 впускных и 2 выпускных клапана",
+     "expect": {"positions": 3, "question": true, "found": ["клапан"]}}]},
+  {"name": "Audi: датчик коленвала и лямбда", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 датчик коленвала, лямбда", "expect": {"positions": 2, "absent": ["детонац"]}}]},
+  {"name": "Audi: сокращения с/б и ш/о", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 с/б передних рычагов, ш/о нижняя", "expect": {"positions": 2}}]},
+  {"name": "Audi: химия не из каталога", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 очиститель тормозов и щетки дворника",
+     "expect": {"positions": 2, "text": ["не из каталога"], "found": ["щёт"]}}]},
+  {"name": "Audi: шаблон ABCP с неверным годом и мотором", "turns": [
+    {"say": "Модель авто: AUDI A4 2014 2.0 TDI\nVIN/FRAME: XW8ZZZ8K7AG200538\nЗапрос состоит из следующих позиций: помпа, термостат",
+     "expect": {"positions": 2, "text": ["2014 год", "двигатель 2.0"]}}]},
+  {"name": "Audi: коробка — вариатор, не МКПП", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр салона", "expect": {"no_text": ["МКПП", "АКПП"]}}]},
+
+  {"name": "Разговор: колодки передние → а задние", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 колодки передние", "expect": {"axis": "front"}},
+    {"say": "а задние?", "expect": {"status": "ok", "positions": 1, "axis": "rear", "found": ["колод"],
+                                   "no_text": ["Здравствуйте"]}}]},
+  {"name": "Разговор: ступица → ответ «передний»", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 подшипник ступицы", "expect": {"question": true}},
+    {"say": "передний", "expect": {"status": "ok", "positions": 1, "axis": "front", "question": false}}]},
+  {"name": "Разговор: ступица → «обе»", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 ступица", "expect": {"question": true}},
+    {"say": "мне обе нужны", "expect": {"status": "ok", "positions": 2}}]},
+  {"name": "Разговор: ГБЦ → прокладка", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 ГБЦ", "expect": {"question": true}},
+    {"say": "прокладка", "expect": {"status": "ok", "positions": 1, "found": ["проклад"]}}]},
+  {"name": "Разговор: шаровая нижняя → а верхнюю", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 шаровая опора нижняя", "expect": {"positions": 1}},
+    {"say": "а верхнюю?", "expect": {"status": "ok", "positions": 1}}]},
+  {"name": "Разговор: новая деталь без VIN", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 свечи зажигания", "expect": {"found": ["свеч"]}},
+    {"say": "А расходомер воздуха?", "expect": {"status": "ok", "positions": 1, "no_text": ["свеч"]}}]},
+  {"name": "Разговор: дешевле нет?", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр масляный", "expect": {"found": ["фильтр"]}},
+    {"say": "Дешевле нет?", "expect": {"status": "answer", "text": ["самый недорогой"]}}]},
+  {"name": "Разговор: оригинал есть?", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр воздушный", "expect": {"found": ["фильтр"]}},
+    {"say": "а оригинал есть?", "expect": {"status": "answer", "text": ["оригинал"]}}]},
+  {"name": "Разговор: какой лучше?", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 колодки передние", "expect": {"axis": "front"}},
+    {"say": "Какой лучше?", "expect": {"status": "answer", "text": ["советуем"]}}]},
+  {"name": "Разговор: фирма, которой нет в ответе", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 свечи зажигания", "expect": {"found": ["свеч"]}},
+    {"say": "А Бош есть?", "expect": {"status": "answer"}}]},
+  {"name": "Разговор: выбор первого варианта", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр салона", "expect": {"positions": 1}},
+    {"say": "давайте первый", "expect": {"status": "order", "picks": 1, "text": ["Оформляем", "Итого"]}}]},
+  {"name": "Разговор: выбор оригинала", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр масляный", "expect": {"positions": 1}},
+    {"say": "оригинал давайте", "expect": {"status": "order", "picks": 1, "text": ["оригинал", "Итого"]}}]},
+  {"name": "Разговор: «заказывайте» без варианта", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 колодки передние", "expect": {"axis": "front"}},
+    {"say": "Заказывайте", "expect": {"status": "order", "picks": 0, "text": ["какой вариант"]}}]},
+  {"name": "Разговор: не про запчасти — менеджеру", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр салона", "expect": {"positions": 1}},
+    {"say": "До скольки работаете?", "expect": {"status": "chat"}}]},
+  {"name": "Разговор: новая машина посреди разговора", "turns": [
+    {"say": "XW8ZZZ8K7AG200538 фильтр салона", "expect": {"positions": 1}},
+    {"say": "KPTA0B1SSBP036638 фильтр салона", "expect": {"status": "no_quick_groups"}}]},
+
+  {"name": "SsangYong: российский VIN — просим корейский", "turns": [
+    {"say": "SsangYong Korando Z8UTA0B1SDP000123 колодки", "expect": {"text": ["начинается на букву K"]}}]}
+]
