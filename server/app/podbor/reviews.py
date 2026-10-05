@@ -77,7 +77,7 @@ def _stems(texts: list[str]) -> list[str]:
 
 def find(brand: str, texts: list[str]) -> dict | None:
     """Отзывы о фирме по этому виду детали. Вид — по словам запроса, названия из каталога и группы:
-    главное слово вида («опора» в «опора шаровая») должно совпасть, остальные — по большей части."""
+    должны совпасть все слова вида, кроме стороны («опора шаровая» ~ «шаровая опора нижняя»)."""
     rows = _table().get(AB.get().key(brand))
     if not rows:
         return None
@@ -89,7 +89,8 @@ def find(brand: str, texts: list[str]) -> dict | None:
             continue
         share = sum(any(T.same(c, s) for s in st) for c in cs) / len(cs)
         key = (share, labeled(r))
-        if share >= 0.5 and key > best_key:
+        # Все слова вида, кроме стороны: «свеча накаливания» — не «свеча зажигания»
+        if share == 1 and key > best_key:
             best, best_key = r, key
     return best
 

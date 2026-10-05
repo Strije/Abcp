@@ -613,3 +613,11 @@ def test_brand_reviews_client_sees_only_good():
     assert "хорошие отзывы владельцев" in _offer_line(dict(o, reviews=R.public(good)), False)
     assert "отзывы" not in _offer_line(dict(o, reviews=R.public(weak)), False)
     R._table.cache_clear()
+
+
+def test_brand_reviews_need_whole_category():
+    from app.podbor import reviews as R
+    R._table.cache_clear()
+    r = R.find("Stellox", ["свечи зажигания", "Свеча зажигания"])
+    assert r is None or r["category"] != "свеча накаливания"
+    R._table.cache_clear()
