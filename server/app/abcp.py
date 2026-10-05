@@ -2,9 +2,7 @@
 
 Списки ABCP приходят то массивом, то объектом {"0": {...}} — разбираем оба варианта.
 """
-import asyncio
 import re
-import time
 from typing import Any
 
 import logging
@@ -60,21 +58,7 @@ class Abcp:
             headers={"Accept": "application/json"},
             transport=transport,
         )
-        self._img_cache: dict[str, tuple[float, list[str]]] = {}
         self._profiles: dict[str, str] = {}
-        self._img_sem = asyncio.Semaphore(6)
-        self._ai_day = ""
-        self._ai_used = 0
-
-    def _articles_info_allowed(self) -> bool:
-        """Суточный предохранитель для articles/info (лимит тарифа ABCP — 10 в сутки)."""
-        day = time.strftime("%Y-%m-%d")
-        if day != self._ai_day:
-            self._ai_day, self._ai_used = day, 0
-        if self._ai_used >= self.s.articles_info_per_day:
-            return False
-        self._ai_used += 1
-        return True
 
     async def close(self):
         await self.http.aclose()
@@ -181,34 +165,6 @@ class Abcp:
         if not link:
             raise AbcpError(502, "ABCP не выдал ссылку на пополнение")
         return link
-
-    # ---------- картинки (articles/info, format=i) ----------
-
-    async def images(self, brand: str, number: str, ttl: float = 24 * 3600) -> list[str]:
-        key = f"{brand.upper()}|{number.upper()}"
-        hit = self._img_cache.get(key)
-        if hit and hit[0] > time.time():
-            return hit[1]
-        if not self._articles_info_allowed():
-            return []
-        async with self._img_sem:
-            try:
-                data = await self._get("articles/info", self._admin({"brand": brand, "number": number, "format": "bni"}))
-            except (AbcpError, httpx.HTTPError) as e:
-                # Ошибку не кэшируем: иначе «нет картинок» запомнилось бы на сутки
-                log.warning("images %s %s: %s", brand, number, getattr(e, "message", e))
-                return []
-        urls: list[str] = []
-        for art in items(data) or ([data] if isinstance(data, dict) else []):
-            for img in art.get("images") or []:
-                name = img.get("name") if isinstance(img, dict) else img
-                if name:
-                    urls.append(_img_url(str(name).strip()))
-        urls = list(dict.fromkeys(urls))
-        self._img_cache[key] = (time.time() + ttl, urls)
-        if len(self._img_cache) > 20000:  # не даём кэшу расти бесконечно
-            self._img_cache.clear()
-        return urls
 
     # ---------- регистрация и восстановление пароля (клиентские операции без входа) ----------
     # ABCP выполняет их только с разрешённых IP — поэтому идут через сервер, а не с телефона.

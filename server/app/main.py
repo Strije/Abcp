@@ -293,9 +293,9 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
 
     @app.post("/v1/images")
     async def images(body: ImagesIn, uid: str = Depends(current_uid)):
-        a: Abcp = state["abcp"]
-        results = await asyncio.gather(*(a.images(i.brand, i.number) for i in body.items))
-        return {f"{i.brand}|{i.number}": urls for i, urls in zip(body.items, results)}
+        # articles/info не используем: на тарифе 10 запросов в сутки на весь магазин — бесполезно.
+        # Адрес оставлен для установленных версий приложения: пустой ответ они понимают (фото — из поиска).
+        return {}
 
     def guest_guard(request: Request) -> str:
         pid = state["s"].guest_profile_id
