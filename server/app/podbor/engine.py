@@ -182,51 +182,14 @@ class Engine:
         except LaximoError as e:
             return self._done(res, "no_quick_groups" if e.code == "E_NOTSUPPORTED" else "catalog_error", t0, mem)
         positions = mem.get("positions") or []
-        cont = D.content(text, self.stop)
-        known = tree.known(cont)
-        names_old = any(D.refers(text, p, self.stop) for p in positions)
-        new_part = bool(known) and not names_old and T.head(cont) not in T.ADJ
-
-        r = D.offer_reply(text, mem, self.stop, analogs)
-        if r and (r.get("picks") or r.get("answers") or r.get("ask_brand") or not new_part):
+        plan = D.plan(text, mem, self.stop, tree, analogs, self.clean)
+        if plan["kind"] in ("pick", "pick_unclear", "answer"):
+            r = plan["reply"]
             res["reply"] = await self._reply(r, positions, v)
             return self._done(res, "answer" if r["kind"] == "answer" else "order", t0, mem)
-
-        jobs: list[tuple[str, T.Side]] = []
-        replaced: list[int] = []
-        last_turn = max((p.get("turn", 0) for p in positions), default=0)
-        if positions and not cont:
-            # «а задние?», «обе», «левую и правую» — сторона к позиции, по которой спрашивали, или к последним
-            open_ = [i for i, p in enumerate(positions) if p.get("question")]
-            idx = open_ or [i for i, p in enumerate(positions) if p.get("turn", 0) == last_turn]
-            for i in idx:
-                p = positions[i]
-                sides = D.sides_wanted(text, p)
-                base = D.strip_side(p["query"])
-                jobs += [(D.side_query(base, s), s) for s in sides]
-                if sides and i in open_:
-                    replaced += [i] * len(sides)
-        elif positions and cont and all(s in T.ADJ for s in cont) and not new_part:
-            # «а верхнюю?», «моторное», «впускной» — признак к детали, по которой спрашивали, или к последней
-            for i in D.targets(mem):
-                p = positions[i]
-                q = D.replace_adj(p["query"], text)
-                jobs.append((q, T.side(q)))
-                if p.get("question"):
-                    replaced.append(i)
-        else:
-            asked = [i for i, p in enumerate(positions) if p.get("asked")]
-            alone = tree.rank(cont, T.Side()) if cont else []
-            sure = bool(alone) and alone[0][1] >= 0.8 and (len(alone) < 2 or alone[1][1] < alone[0][1] - 0.05)
-            if asked and cont and len(cont) <= 2 and not sure:
-                # Ответ на вопрос бота: «ГБЦ» → «прокладка», «масло» → «моторное 5 литров»
-                for i in asked:
-                    q = f"{positions[i]['query']} {self.clean(text)}"
-                    jobs.append((q, T.side(q)))
-                    replaced.append(i)
-            elif known:
-                # Новая деталь на ту же машину; «до скольки работаете?» в каталоге не найдётся — это менеджеру
-                jobs = self.split(req.chunks, tree)
+        jobs, replaced = plan["jobs"], plan["replaced"]
+        if plan["kind"] == "new":
+            jobs = self.split(req.chunks, tree)
         if not jobs:
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))

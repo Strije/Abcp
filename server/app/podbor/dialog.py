@@ -17,14 +17,24 @@ from . import text as T
 
 MAX_REMEMBERED = 12
 
-ACCEPT = re.compile(r"\b(?:давайте|давай|беру|берём|берем|возьму|возьмём|возьмем|заказыва\w*|закаж\w*|заказу\w*|"
+ACCEPT = re.compile(r"\b(?:давайте|давай|беру|берём|берем|возьму|возьмём|возьмем|заказыва\w*|закаж\w*|заказу\w*|заказать|"
                     r"оформ\w*|выбер\w*|выбираю|подходит|устраивает)\b", re.I)
 CHEAPER = re.compile(r"дешевл|подешевл|бюджетн|недорог|дорог", re.I)
 ORIGINAL = re.compile(r"\bориг(?:инал\w*)?\b", re.I)
 BEST = re.compile(r"\b(?:какой|какая|какие|какую|что|кого)\b.{0,25}\b(?:лучше|посовету\w*|порекоменду\w*|совету\w*)\b"
                   r"|\bчто\s+лучше\b|\bлучше\s+взять\b", re.I)
 QUESTION = re.compile(r"\?|\b(?:есть|нет|нету|имеется|бывает|найдется|найдётся)\b", re.I)
-BOTH = re.compile(r"\b(?:обе|оба|обои|обоих|все|те\s+и\s+те|и\s+те\s+и\s+другие|пару|комплект\s+на\s+ось)\b", re.I)
+# «все» и «пару» сюда не входят: «В наличии все?», «цена за штуку или за пару?» — вопросы менеджеру
+BOTH = re.compile(r"\b(?:обе|оба|обои|обоих|те\s+и\s+те|и\s+те\s+и\s+другие|комплект\s+на\s+ось|на\s+обе\s+стороны|"
+                  r"с\s+двух\s+сторон)\b", re.I)
+# Отсрочка и отказ: «подумаю», «закажу попозже», «не актуально» — это не выбор, отвечает менеджер
+DEFER = re.compile(r"подума|подумать|попозже|позже|потом\s+(?:закаж|напиш|отпиш)|отпиш[уе]с|перезвон|наберу|сообщу|"
+                   r"не\s+надо|не\s+нужн|не\s+заказыв|отмен|не\s*актуал|передумал|в\s+другом\s+месте|нашл[иа]?\b|нашёл|нашел|"
+                   r"определимся|согласую|пока\s+не|пока\s+ни|думает|думаю|отбой|решу|дам\s+ответ", re.I)
+# Вопросы, на которые память подбора не отвечает: наличие, цена за штуку, сроки, оплата, адрес, фото
+MANAGER = re.compile(r"наличи|за\s+(?:штуку|шт|пару|1|одну|один|комплект)\b|правильно|верно|когда|во\s+сколько|сколько\s+ехать|"
+                     r"адрес|оплат|карт[уы]|чек|qr|ссылк|фото|скидк|возврат|доставк|отправ|забрать|заберу|работаете|"
+                     r"банк|сбер|перевод|перевести", re.I)
 QTY = re.compile(r"\b(\d{1,2})\s*(?:шт|штук|штуки|компл|комплект|к-т)\w*", re.I)
 NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:[  ]\d{3})+|\d{3,6})(?:[.,]\d{1,2})?(?![\w])")
 ORDINAL = re.compile(r"\b(?:(?P<n>[1-9])\s*(?:-?(?:й|ой|ый|ий|я|е))?\s*(?:вариант|позици\w*|пункт)"
@@ -46,7 +56,15 @@ BRAND_RU = {"бош": "BOSCH", "хелла": "HELLA", "хела": "HELLA", "ма
             "кайаба": "KYB", "каяба": "KYB", "кйб": "KYB", "гейтс": "GATES", "контитех": "CONTITECH",
             "скф": "SKF", "фаг": "FAG", "ина": "INA", "трв": "TRW", "брембо": "BREMBO", "ферадо": "FERODO",
             "мейл": "MEYLE", "майле": "MEYLE", "сваг": "SWAG", "феби": "FEBI", "кронер": "KRONER",
-            "лузар": "LUZAR", "маршал": "MARSHALL", "стеллокс": "STELLOX", "тойота": "TOYOTA"}
+            "лузар": "LUZAR", "маршал": "MARSHALL", "стеллокс": "STELLOX", "тойота": "TOYOTA",
+            "триали": "TRIALLI", "триалли": "TRIALLI", "миля": "MILES", "майлз": "MILES", "майлс": "MILES",
+            "патрон": "PATRON", "линкс": "LYNXAUTO", "азуми": "AZUMI", "сангсин": "SANGSIN", "кортеко": "CORTECO",
+            "викторрейнц": "VICTOR REINZ", "рейнц": "VICTOR REINZ", "мобис": "MOBIS", "филтрон": "FILTRON",
+            "фильтрон": "FILTRON", "кнехт": "KNECHT", "лукойл": "LUKOIL", "шелл": "SHELL", "мотул": "MOTUL",
+            "суфикс": "SUFIX", "пиленга": "PILENGA", "элринг": "ELRING", "полкар": "POLCAR", "циммерман": "ZIMMERMANN",
+            "зимерман": "ZIMMERMANN", "кашияма": "KASHIYAMA", "нагамочи": "SB NAGAMOCHI", "нагомочи": "SB NAGAMOCHI",
+            "мапко": "MAPCO", "депо": "DEPO", "тайк": "TYC", "абсел": "ABSEL", "квадро": "QUATTRO FRENI",
+            "кватро": "QUATTRO FRENI", "кваттро": "QUATTRO FRENI", "сакура": "SAKURA", "мотюль": "MOTUL"}
 _NOT_BRAND = {"ok", "ок", "abs", "vin", "вин", "грм", "гбц", "акпп", "мкпп", "шрус", "дпкв", "дпрв", "тнвд", "egr",
               "lh", "rh", "fr", "rr", "the", "for", "and", "set", "kit", "oem"}
 
@@ -58,7 +76,7 @@ AXIS_WORD = {"front": T.FRONT, "rear": T.REAR, "left": T.LEFT, "right": T.RIGHT}
 def _slim_offers(o: dict | None) -> dict | None:
     if not o:
         return None
-    keep = ("brand", "number", "description", "price", "days", "tags", "cheaper")
+    keep = ("brand", "number", "description", "price", "days", "tags", "cheaper", "reviews")
     return {"original": {k: o["original"].get(k) for k in keep} if o.get("original") else None,
             "analogs": [{k: a.get(k) for k in keep} for a in o.get("analogs", [])],
             "stats": o.get("stats") or {}}
@@ -327,12 +345,18 @@ def _cheapest(p: dict) -> dict | None:
 
 
 def _best(p: dict) -> dict | None:
-    """«Какой лучше?» — то, за что ручается магазин: гарантия магазина, потом «часто берут», потом оригинал."""
+    """«Какой лучше?» — то, за что ручается магазин: гарантия магазина, потом хорошие отзывы владельцев
+    (3+ отзыва, лучший счёт), потом «часто берут», потом оригинал."""
     lst = all_offers(p)
-    for tag in ("гарантия магазина", "частая замена"):
-        x = next((x for x in lst if tag in (x["offer"].get("tags") or [])), None)
-        if x:
-            return dict(x, why=tag)
+    x = next((x for x in lst if "гарантия магазина" in (x["offer"].get("tags") or [])), None)
+    if x:
+        return dict(x, why="гарантия магазина")
+    rated = [x for x in lst if (x["offer"].get("reviews") or {}).get("client")]
+    if rated:
+        return dict(max(rated, key=lambda x: x["offer"]["reviews"]["score"]), why="отзывы")
+    x = next((x for x in lst if "частая замена" in (x["offer"].get("tags") or [])), None)
+    if x:
+        return dict(x, why="частая замена")
     x = next((x for x in lst if x["who"] == "оригинал"), None)
     return dict(x, why="оригинал") if x else None
 
@@ -341,6 +365,24 @@ def _best(p: dict) -> dict | None:
 
 OPPOSITE = [("верхн", "нижн"), ("передн", "задн"), ("лев", "прав"), ("внутрен", "наружн"), ("впускн", "выпускн"),
             ("внешн", "внутрен"), ("продольн", "поперечн")]
+
+
+# Вопрос про уже предложенную деталь: «В сборе она?», «Это же комплект на 4 цилиндра?», «он с абс?»
+ABOUT_OFFER = re.compile(r"(?:\b(?:это|он|она|оно|они|эти|этот|эта|такой|такая)\b.*\?|\?.*\b(?:это|он|она|оно|они)\b)",
+                         re.I | re.S)
+_ADJ_WORD = re.compile(r"(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ую|юю|ым|им|ых|их|ыми|ими)$")
+_NOUN_LIKE = re.compile(r"(?:ние|тие|ье|ьё)$")
+
+
+# Общие слова: «детали приедут», «машина у мастера», «кулак» в «Кулакова» — не новая деталь
+GENERIC = {T.stem(w) for w in ("деталь", "детали", "запчасть", "запчасти", "машина", "авто", "автомобиль", "механик",
+                                "мастер", "вопрос", "товар", "заказ", "кулаков", "цена", "фирма", "производитель")}
+
+
+def adj_word(w: str) -> bool:
+    """«задние», «угольный», «внутрение» — да; «сцепление», «крепление», «ремень» — нет."""
+    w = w.lower()
+    return bool(_ADJ_WORD.search(w)) and not _NOUN_LIKE.search(w)
 
 
 def content(text: str, stop: frozenset[str]) -> list[str]:
@@ -403,3 +445,87 @@ def targets(mem: dict) -> list[int]:
     ps = mem.get("positions", [])
     open_ = [i for i, p in enumerate(ps) if p.get("question")]
     return open_ or ([len(ps) - 1] if ps else [])
+
+
+# ---------- что это за реплика ----------
+
+KINDS = {
+    "pick": "выбор варианта",
+    "pick_unclear": "согласие без варианта — переспросим",
+    "answer": "вопрос по предложению",
+    "side": "уточнение стороны",
+    "attr": "уточнение признака",
+    "reply": "ответ на вопрос бота",
+    "new": "новая деталь",
+    "chat": "не про подбор — менеджеру",
+}
+
+
+def plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
+         clean=lambda t: t.strip()) -> dict:
+    """Что делать со следующим сообщением клиента. Общая для сервера и замера по переписке
+    (python -m app.podbor.measure followups), чтобы замер мерил то, что работает на самом деле.
+    tree — дерево групп машины (TreeIndex); jobs — запросы для подбора: (текст, сторона)."""
+    positions = mem.get("positions") or []
+    cont = content(text, stop)
+    known = tree.known(cont)
+    names_old = any(refers(text, p, stop) for p in positions)
+    surface = [w for w in T.words(text) if T.stem(w) in cont]
+    adj_only = bool(surface) and all(adj_word(w) for w in surface)
+    # Главное слово — первое не прилагательное из каталога: «Есть к нему шланг?» → «шланг»
+    # Точно из словаря каталога (длинные — и с опечаткой): «Кулакова 18/3» — адрес, «трени» — не «тренога»
+    noun = next((s for w in surface if not adj_word(w) and (s := T.stem(w)) not in GENERIC
+                 and (s in tree.vocab or (len(s) >= 6 and tree.fix(s) in known))), None)
+    new_part = bool(noun) and not names_old
+    out: dict[str, Any] = {"kind": "chat", "reply": None, "jobs": [], "replaced": []}
+    if DEFER.search(text):
+        return out
+    manager = bool(MANAGER.search(text))
+
+    r = offer_reply(text, mem, stop, analogs)
+    if r and (r.get("picks") or r.get("answers") or r.get("ask_brand") or not new_part):
+        kind = "answer" if r["kind"] == "answer" else "pick" if r.get("picks") else "pick_unclear"
+        return out | {"kind": kind, "reply": r}
+
+    jobs, replaced = out["jobs"], out["replaced"]
+    last_turn = max((p.get("turn", 0) for p in positions), default=0)
+    if positions and not cont and not manager:
+        # «а задние?», «обе», «левую и правую» — сторона к позиции, по которой спрашивали, или к последним
+        open_ = [i for i, p in enumerate(positions) if p.get("question")]
+        idx = open_ or [i for i, p in enumerate(positions) if p.get("turn", 0) == last_turn]
+        for i in idx:
+            p = positions[i]
+            sides = sides_wanted(text, p)
+            base = strip_side(p["query"])
+            jobs += [(side_query(base, s), s) for s in sides]
+            if sides and i in open_:
+                replaced += [i] * len(sides)
+        if jobs:
+            out["kind"] = "side"
+    elif positions and cont and not manager and adj_only and len(known) == len(cont):
+        # Только слова каталога: «угольный», «внутренний»; «не актуально», «да нормально» — не признак детали
+        # «а верхнюю?», «моторное», «впускной» — признак к детали, по которой спрашивали, или к последней
+        for i in targets(mem):
+            p = positions[i]
+            q = replace_adj(p["query"], text)
+            jobs.append((q, T.side(q)))
+            if p.get("question"):
+                replaced.append(i)
+        out["kind"] = "attr"
+    else:
+        asked = [i for i, p in enumerate(positions) if p.get("asked")]
+        alone = tree.rank(cont, T.Side()) if cont else []
+        sure = bool(alone) and alone[0][1] >= 0.8 and (len(alone) < 2 or alone[1][1] < alone[0][1] - 0.05)
+        if asked and cont and len(cont) <= 2 and not sure:
+            # Ответ на вопрос бота: «ГБЦ» → «прокладка», «масло» → «моторное 5 литров»
+            for i in asked:
+                q = f"{positions[i]['query']} {clean(text)}"
+                jobs.append((q, T.side(q)))
+                replaced.append(i)
+            out["kind"] = "reply"
+        elif new_part and not re.search(r"фото|ссылк|оплат|возврат|банк|номер|код[ыа]?\b|карт", text, re.I) \
+                and not ABOUT_OFFER.search(text):
+            # Новая деталь на ту же машину: главное слово — из каталога («А фара?», «катушка зажигания»).
+            # «Оно резиновая?», «до скольки работаете?» — менеджеру
+            out["kind"] = "new"
+    return out

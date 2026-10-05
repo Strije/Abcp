@@ -3,6 +3,7 @@
     python -m app.podbor.measure requests vinqu.jsonl            # заявки ABCP: одна группа / выбор / мимо
     python -m app.podbor.measure chats chats.jsonl [отчёт.json]   # переписка Битрикс24: как пишут клиенты
     python -m app.podbor.measure typos chats.jsonl                # какие «опечатки» правятся чаще всего
+    python -m app.podbor.measure followups chats.jsonl [при.json]  # следующие сообщения: выбор, вопрос, уточнение…
     python -m app.podbor.measure snapshot vinqu.jsonl до.json      # разбор каждой позиции — для сравнения
     python -m app.podbor.measure diff до.json после.json           # что поменялось после правки
 
@@ -157,6 +158,108 @@ def chats(path: str, out: str | None = None):
     print(f"Отчёт: {out}")
 
 
+# ---------- следующие сообщения: что клиент пишет после ответа с ценами ----------
+
+PRICE_LINE = re.compile(r"(?<![\d.,])(\d{1,3}(?:[  ]\d{3})+|\d{3,6})(?:[.,]\d{1,2})?\s*(?:р\b|р\.|руб|₽)", re.I)
+HEADER = re.compile(r"^\s*\*?\s*\d{1,2}[.)]\s*(.+)$")
+
+
+def _days(line: str) -> int:
+    t = line.lower()
+    if "на сегодня" in t or "в наличии" in t:
+        return 0
+    if "на завтра" in t or "завтра" in t:
+        return 1
+    m = re.search(r"(\d{1,2})(?:\s*-\s*\d{1,2})?\s*(?:дн|дня|дней|день)", t)
+    return int(m.group(1)) if m else 2
+
+
+def offer_memory(manager: str, asked: list[str]) -> dict:
+    """Память, как будто ответ с ценами дал бот: позиции — заголовки «1. Колодки передние» или то,
+    что спрашивал клиент; предложения — строки с ценой («ZEKKERT 1шт. 5850р. на сегодня»)."""
+    from .dialog import brand_words
+    positions: list[dict] = []
+
+    def new_pos(query: str):
+        positions.append({"query": query, "side": {}, "status": "found", "question": "", "turn": 1,
+                          "variants": [{"name": query, "oem": "", "brand": "", "axis": T.side(query).axis,
+                                        "lr": T.side(query).lr, "amount": "", "alt": False,
+                                        "offers": {"original": None, "analogs": [], "stats": {}}}]})
+
+    for line in manager.splitlines():
+        line = line.strip(" *\t")
+        if not line:
+            continue
+        price = PRICE_LINE.search(line)
+        head = HEADER.match(line)
+        if head and not price:
+            new_pos(head.group(1).strip(" *"))
+            continue
+        if not price:
+            continue
+        if not positions:
+            new_pos(asked[0] if asked else "деталь")
+        brands = brand_words(line)
+        o = {"brand": brands[0][0] if brands else line.split()[0].strip("-:"), "number": "", "description": line,
+             "price": float(re.sub(r"\D", "", price.group(1))), "days": _days(line), "tags": [], "cheaper": None}
+        offers = positions[-1]["variants"][0]["offers"]
+        if re.search(r"\bориг", line, re.I) and not offers["original"]:
+            offers["original"] = o
+        else:
+            offers["analogs"].append(o)
+    return {"ident": "X", "plate": "", "turn": 1, "positions": positions}
+
+
+def clean_reply(text: str) -> str:
+    """Реплика клиента без того, что приклеил Битрикс: сообщения робота («Благодарим за заказ…»),
+    цитаты между «------», «Открыть», «(изменено)», пропущенные звонки."""
+    text = re.split(r"Отправлено роботом", text)[0]
+    text = re.sub(r"-{10,}.*?(?:-{10,}|$)", " ", text, flags=re.S)
+    lines = [ln.strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln and not re.fullmatch(r"(?:открыть|\(изменено\)|\[call\s*-\s*miss\]|\[тел\]|\[имя\].*)",
+                                                            ln, re.I)]
+    return "\n".join(lines).strip()
+
+
+def followups(path: str, out: str | None = None):
+    """Вторые сообщения клиентов: первое сообщение клиента после ответа менеджера с ценами,
+    разобранное тем же dialog.plan, что работает на сервере. Дерево групп — объединение сохранённых."""
+    import random
+    from .chats import load
+    from .dialog import KINDS, plan
+    rows = load(path)
+    freq = collections.Counter(m["text"].strip().lower()[:80] for r in rows for m in r["messages"] if m["role"] == "client")
+    tmpl = {t for t, c in freq.items() if c >= 15}
+    cases = []
+    for r in rows:
+        ms = r["messages"]
+        i = next((i for i, m in enumerate(ms) if m["role"] == "manager" and PRICE_LINE.search(m["text"])), None)
+        if i is None:
+            continue
+        nxt = next((t for m in ms[i + 1:] if m["role"] == "client"
+                    and not JUNK.match(m["text"].strip()) and m["text"].strip().lower()[:80] not in tmpl
+                    and re.search(r"[а-яёa-z]", t := clean_reply(m["text"]), re.I)), None)
+        if not nxt or len(nxt) > 300:
+            continue
+        asked = [ENGINE.clean(p) for m in ms[:i] if m["role"] == "client"
+                 for ch in T.parse(m["text"]).chunks for p in [ch] if INDEX.known(T.stems(p, STOP))]
+        cases.append((nxt, offer_memory(ms[i]["text"], asked)))
+    counts = collections.Counter()
+    per = collections.defaultdict(list)
+    for text, mem in cases:
+        kind = plan(text, mem, STOP, INDEX, 3, ENGINE.clean)["kind"] if mem["positions"] else "chat"
+        counts[kind] += 1
+        per[kind].append(text)
+    print(f"Диалогов с ответом-ценой и ответом клиента: {len(cases)}")
+    for k, c in counts.most_common():
+        print(f"  {KINDS[k]:<38} {c:5}  {c * 100 / len(cases):5.1f}%")
+    if out:
+        random.seed(7)
+        Path(out).write_text(json.dumps({k: random.sample(v, min(60, len(v))) for k, v in per.items()},
+                                        ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"Примеры по видам: {out}")
+
+
 def typos(path: str):
     """Какие слова переписки «исправляются» как опечатки: частые — почти наверняка обычные слова (в not_typos)."""
     from .chats import load
@@ -170,4 +273,5 @@ def typos(path: str):
 
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
-    {"requests": requests, "chats": chats, "typos": typos, "snapshot": snapshot, "diff": diff}[cmd](*args)
+    {"requests": requests, "chats": chats, "typos": typos, "snapshot": snapshot, "diff": diff,
+     "followups": followups}[cmd](*args)
