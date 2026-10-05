@@ -39,8 +39,17 @@
   th { color: var(--muted); font-weight: 500; }
   td.num { text-align: right; white-space: nowrap; }
   .scheme { position: relative; display: inline-block; margin-top: 10px; max-width: 100%; }
-  .scheme img { max-width: 100%; display: block; background: #fff; border-radius: 8px; }
-  .scheme .hit { position: absolute; border: 2px solid var(--accent); background: var(--mark); border-radius: 4px; }
+  .scheme img { max-width: 100%; display: block; background: #fff; border-radius: 8px; cursor: zoom-in; }
+  /* Laximo размечает номер-выноску детали, а не её контур: делаем выноску заметной издалека */
+  .scheme .hit { position: absolute; background: rgba(255, 214, 0, .55); outline: 3px solid #e8590c;
+                 border-radius: 3px; box-shadow: 0 0 0 4px rgba(232, 89, 12, .25); }
+  .scheme .hit::after { content: ""; position: absolute; left: 50%; top: 50%; width: 64px; height: 64px;
+                        margin: -32px 0 0 -32px; border: 3px solid #e8590c; border-radius: 50%;
+                        animation: ping 1.4s ease-out infinite; pointer-events: none; }
+  @keyframes ping { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .scheme .hit::after { animation: none; opacity: .8; } }
+  .scheme-note { font-size: 13px; margin-top: 4px; }
+  .cheaper { font-size: 12px; color: var(--muted); }
   pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font: inherit; }
   .err { color: var(--bad); }
 </style>
@@ -62,7 +71,10 @@ VIN/FRAME: X9FKXXEEBKCB57566
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = x => Math.round(x).toLocaleString("ru-RU") + " ₽";
-const when = d => d <= 0 ? "в наличии" : "~" + d + " дн.";
+const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one
+  : (n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14)) ? few : many;
+const when = d => d <= 0 ? "в наличии" : d + " " + plural(d, "день", "дня", "дней");
+const cheaper = o => o.cheaper ? `<div class="cheaper">или ${money(o.cheaper.price)} за ${when(o.cheaper.days)}</div>` : "";
 const SIDE = {front: "передн.", rear: "задн.", left: "лев.", right: "прав."};
 const STATUS = {found: "найдено", choose: "уточнить", not_found: "не найдено"};
 let last = null;
@@ -90,12 +102,12 @@ function offersTable(o) {
   if (!o) return `<p class="muted">Цен нет — уточнит менеджер.</p>`;
   const rows = [];
   if (o.original) rows.push(`<tr><td><b>${esc(o.original.brand)} ${esc(o.original.number)}</b> <span class="chip">оригинал</span></td>
-     <td class="num">${money(o.original.price)}</td><td class="num">${when(o.original.days)}</td></tr>`);
+     <td class="num">${when(o.original.days)}</td><td class="num">${money(o.original.price)}${cheaper(o.original)}</td></tr>`);
   for (const a of o.analogs) rows.push(`<tr><td>${esc(a.brand)} ${esc(a.number)}<br><span class="muted">${esc(a.description)}</span>
      ${a.tags.map(t => `<span class="chip">${esc(t)}</span>`).join("")}${a.confirm >= 2 ? `<span class="chip">★${a.confirm}</span>` : ""}</td>
-     <td class="num">${money(a.price)}</td><td class="num">${when(a.days)}</td></tr>`);
+     <td class="num">${when(a.days)}</td><td class="num">${money(a.price)}${cheaper(a)}</td></tr>`);
   const s = o.stats;
-  return `<table><tr><th>Что</th><th class="num">Цена</th><th class="num">Срок</th></tr>${rows.join("")}</table>
+  return `<table><tr><th>Аналоги — сначала что привезём быстрее</th><th class="num">Срок</th><th class="num">Цена</th></tr>${rows.join("")}</table>
     <p class="muted">Всего вариантов: ${s.articles}, предложений: ${s.offers}, от ${money(s.price_min)} до ${money(s.price_max)}.</p>`;
 }
 
@@ -133,25 +145,32 @@ function render(d) {
 
 async function scheme(pi, vi, btn) {
   const v = last.positions[pi].variants[vi], s = v.scheme;
-  const box = document.createElement("div"); box.className = "scheme";
-  box.innerHTML = `<img alt="Схема узла" src="${esc(s.image)}">`;
-  btn.replaceWith(box);
-  const img = box.querySelector("img");
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `<div class="scheme"><img alt="Схема узла" src="${esc(s.image)}"></div>
+    <div class="scheme-note muted">${s.code ? `Деталь — позиция <b>${esc(s.code)}</b> на схеме, отмечена цветом. ` : ""}Нажмите на схему, чтобы открыть крупно.</div>`;
+  btn.replaceWith(wrap);
+  const box = wrap.querySelector(".scheme"), img = box.querySelector("img"), note = wrap.querySelector(".scheme-note");
+  img.addEventListener("click", () => window.open(s.image, "_blank", "noopener"));
+  if (!s.code) return;
   try {
     const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: {"Content-Type": "application/json"},
                                                              body: JSON.stringify({catalog: s.catalog, ssd: s.ssd, unitId: s.unit_id})});
     const map = await r.json();
+    const hits = (Array.isArray(map) ? map : []).filter(m => String(m.code) === String(s.code));
     const draw = () => {
-      const k = img.clientWidth / img.naturalWidth;
-      for (const m of (Array.isArray(map) ? map : [])) {
-        if (String(m.code) !== String(s.code)) continue;
+      // Проценты от исходного размера: отметка остаётся на месте при любом масштабе и повороте экрана
+      const W = img.naturalWidth, H = img.naturalHeight;
+      for (const m of hits) {
         const h = document.createElement("div"); h.className = "hit";
-        Object.assign(h.style, {left: m.x1 * k + "px", top: m.y1 * k + "px", width: (m.x2 - m.x1) * k + "px", height: (m.y2 - m.y1) * k + "px"});
+        Object.assign(h.style, {left: m.x1 / W * 100 + "%", top: m.y1 / H * 100 + "%",
+                                width: (m.x2 - m.x1) / W * 100 + "%", height: (m.y2 - m.y1) / H * 100 + "%"});
         box.appendChild(h);
       }
+      if (hits.length) box.querySelector(".hit").scrollIntoView({block: "center", behavior: "smooth"});
+      else note.innerHTML = `Деталь — позиция <b>${esc(s.code)}</b> на схеме (каталог не дал её координат). Нажмите на схему, чтобы открыть крупно.`;
     };
-    img.complete ? draw() : img.addEventListener("load", draw);
-  } catch (e) { /* схема без подсветки — тоже полезна */ }
+    img.complete && img.naturalWidth ? draw() : img.addEventListener("load", draw);
+  } catch (e) { /* схема без подсветки — тоже полезна, номер позиции написан под ней */ }
 }
 
 function copyDraft(btn) {

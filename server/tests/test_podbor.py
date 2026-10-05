@@ -270,7 +270,10 @@ def test_rear_hub_is_an_assembly():
     assert sum(1 for a in o["analogs"] if a["number"] == "713679190") == 1
     tags = {t for a in o["analogs"] for t in a["tags"]}
     assert {"дешевле всего", "быстрее всего", "частая замена", "гарантия магазина"} <= tags
-    assert "2 шт. на автомобиль" in r["text"] and "9 020 ₽" in r["text"]
+    assert "на машину нужно 2 шт." in r["text"] and "9 020 ₽" in r["text"]
+    assert "Ford Focus CB8, 2012 г., 1.6 л 123 л.с." in r["text"]
+    # Аналоги — по сроку: сначала что привезём быстрее
+    assert [a["days"] for a in o["analogs"]] == sorted(a["days"] for a in o["analogs"])
 
 
 def test_hub_without_side_asks_front_or_rear():
@@ -307,13 +310,21 @@ def test_group_members_beat_words():
     pads = next(p for p in r["positions"] if p["query"] == "колодки передние")
     assert pads["status"] == "found" and "1900071" not in [v["oem"] for v in pads["variants"]]
     assert [v["alt"] for v in pads["variants"]] == [False, True]   # Motorcraft — тот же оригинал
-    assert "Версия Motorcraft" in r["text"]
+    assert "Тот же оригинал в версии Motorcraft: 1809256" in r["text"]
 
 
 def test_side_only_piece_repeats_detail():
     r = run("X9FKXXEEBKCB57566 колодки передние и задние")
     assert [(p["side"]["axis"], [v["oem"] for v in p["variants"]][0]) for p in r["positions"]] == \
         [("front", "1712024"), ("rear", "1683374")]
+
+
+def test_comma_separates_sides():
+    """«подшипник ступицы, колодки передние»: «передние» — только про колодки, про подшипник спросим."""
+    r = run("X9FKXXEEBKCB57566 подшипник ступицы, колодки передние")
+    hub = r["positions"][0]
+    assert hub["side"]["axis"] == "" and hub["status"] == "choose"
+    assert r["positions"][1]["side"]["axis"] == "front"
 
 
 def test_left_and_right_are_a_pair_unless_asked():

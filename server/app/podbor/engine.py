@@ -140,9 +140,12 @@ class Engine:
                                and len(details) == len(parts)):
                 out.append((self.clean(chunk), whole))
                 continue
+            # «Колодки и диски передние» — сторона на обе детали. «Подшипник ступицы, колодки передние» —
+            # через запятую разные позиции: «передние» относится только к колодкам.
+            shared = T.Side() if "," in chunk else whole
             for i, x in enumerate(parts):
                 if not x["only_side"]:
-                    out.append((self.clean(x["text"]), T.Side(x["side"].axis or whole.axis, x["side"].lr or whole.lr)))
+                    out.append((self.clean(x["text"]), T.Side(x["side"].axis or shared.axis, x["side"].lr or shared.lr)))
                     continue
                 near = (next((y for y in reversed(parts[:i]) if not y["only_side"]), None)
                         or next((y for y in parts[i + 1:] if not y["only_side"]), None))
@@ -399,12 +402,41 @@ def money(x: float) -> str:
     return f"{int(round(x)):,}".replace(",", " ") + " ₽"
 
 
+def plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n)
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    return few if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else many
+
+
 def when(days: int) -> str:
-    return "в наличии" if days <= 0 else f"~{days} дн."
+    """Срок поставки так, как его скажет менеджер: «в наличии», «1 день», «6 дней»."""
+    return "в наличии" if days <= 0 else f"{days} {plural(days, 'день', 'дня', 'дней')}"
+
+
+def nice_brand(b: str) -> str:
+    """«FORD» → «Ford», «FEBI BILSTEIN» → «Febi Bilstein»; аббревиатуры (NGK, SKF, TRW) и «LYNXauto» — как есть."""
+    b = (b or "").strip()
+    return b.title() if b.isupper() and len(b.replace(" ", "").replace("-", "")) > 3 else b
+
+
+# Пометки аналогов, которые понятны клиенту. «Быстрее всего» не пишем: список и так по сроку.
+CLIENT_TAGS = {"дешевле всего": "самый дешёвый", "частая замена": "часто берут", "гарантия магазина": "гарантия магазина"}
+
+
+def _offer_line(o: dict, label: str = "", what: str = "") -> str:
+    line = f"{label}{nice_brand(o['brand'])} {o['number']}{what} — {money(o['price'])}, {when(o['days'])}"
+    if o.get("cheaper"):
+        line += f" (или {money(o['cheaper']['price'])} за {when(o['cheaper']['days'])})"
+    tags = [CLIENT_TAGS[t] for t in o.get("tags", []) if t in CLIENT_TAGS]
+    return line + (f" · {', '.join(tags)}" if tags else "")
 
 
 def _side_ru(var: dict) -> str:
-    return " ".join(x for x in (T.AXIS_RU.get(var["axis"], ""), T.LR_RU.get(var["lr"], "")) if x)
+    """Сторона для клиента: «Спереди слева» — без «передн.» каталога и без согласования рода."""
+    side = " ".join(x for x in ({"front": "спереди", "rear": "сзади"}.get(var["axis"], ""),
+                                {"left": "слева", "right": "справа"}.get(var["lr"], "")) if x)
+    return side[:1].upper() + side[1:]
 
 
 def draft(res: dict) -> str:
@@ -422,44 +454,60 @@ def draft(res: dict) -> str:
         return "\n".join(lines)
     if st == "no_positions":
         return "Машину нашли. Напишите, какие запчасти нужны."
-    lines = [f"Ваш автомобиль: {res['vehicle']['summary']}."]
-    lines += [f"⚠ {w}" for w in res["warnings"]]
+    v = res["vehicle"]
+    lines = ["Здравствуйте! Подобрали запчасти по VIN для вашего автомобиля:", v.get("short") or v["summary"]]
+    lines += [f"Обратите внимание: {w[0].lower() + w[1:]}." for w in res["warnings"]]
+    found = 0
     for i, p in enumerate(res["positions"], 1):
-        lines += ["", f"{i}. {p['query']}"]
+        lines += ["", f"{i}) {p['query'][:1].upper() + p['query'][1:]}"]
         if p["status"] == "not_found":
-            lines.append(p["note"] or "В каталоге для вашей машины такой позиции не нашли — подберёт менеджер.")
+            if "не деталь каталога" in p["note"]:
+                lines.append("   Это не из каталога автомобиля — подберём по названию и напишем.")
+            else:
+                lines.append("   В каталоге для вашей машины сразу не нашли — уточним и напишем.")
             continue
-        if p["note"]:
-            lines.append(p["note"])
         if p["question"]:
-            lines.append(p["question"])
-        shown = 3 if p["status"] == "choose" else 5
+            lines.append("   " + p["question"].replace("В каталоге несколько вариантов — уточните по примечанию или по номеру "
+                                               "позиции на схеме.", "Есть несколько вариантов, уточните, какой нужен:"))
+        if p["note"] and "не нашли" not in p["note"]:
+            lines.append("   " + p["note"])
+        shown = 2 if p["status"] == "choose" else 3
+        under = len(lines)   # куда вставлять «тот же оригинал» — сразу под строкой оригинала
         for var in p["variants"]:
-            side = _side_ru(var)
             o = var["offers"]
             if var["alt"]:
-                price = f" — {money(o['original']['price'])}" if o and o["original"] else ""
-                what = "Версия Motorcraft" if "motorcraft" in var["name"].lower() else "Тот же оригинал под другим номером"
-                lines.append(f"{what}: {var['brand']} {var['oem']}{price}")
+                what = "Тот же оригинал в версии Motorcraft" if "motorcraft" in var["name"].lower() \
+                    else "Тот же оригинал под другим номером"
+                price = f" — {money(o['original']['price'])}, {when(o['original']['days'])}" \
+                    if o and o["original"] else ""
+                lines.insert(under, f"   {what}: {var['oem']}{price}")
+                under += 1
                 continue
-            name, _, rest = var["name"].partition(",")
-            n = re.match(r"\d+", var["amount"] or "")
-            amount = f", {n.group(0)} шт. на автомобиль" if n and n.group(0) != "1" else ""
-            head = f"Оригинал: {var['brand']} {var['oem']} «{name.strip()}»" + (f" ({side})" if side else "") + amount
+            found += 1
+            name = var["name"].partition(",")[0].strip()
+            side = _side_ru(var)
+            what = f" «{name}»"
+            label = f"{side} — оригинал " if side else "Оригинал "
             if o and o["original"]:
-                head += f" — {money(o['original']['price'])}, {when(o['original']['days'])}"
-            lines.append(head)
-            if rest.strip():
-                lines.append(f"Из каталога: {rest.strip()}")
+                # Номер — из каталога: поставщики пишут его как попало («1 712 024»)
+                lines.append("   " + _offer_line(dict(o["original"], number=var["oem"]), label, what))
+            else:
+                lines.append(f"   {label}{nice_brand(var['brand'])} {var['oem']}{what}")
+            n = re.match(r"\d+", var["amount"] or "")
+            if n and n.group(0) != "1":
+                lines.append(f"   Цена за штуку, на машину нужно {n.group(0)} шт.")
+            under = len(lines)
             if var["warning"]:
-                lines.append(f"⚠ {var['warning']}")
+                lines.append(f"   ⚠ {var['warning']}")
             if o and o["analogs"]:
-                lines.append("Аналоги:")
-                for a in o["analogs"][:shown]:
-                    tags = f" ({', '.join(a['tags'])})" if a["tags"] else ""
-                    lines.append(f"• {a['brand']} {a['number']} — {money(a['price'])}, {when(a['days'])}{tags}")
-                s = o["stats"]
-                lines.append(f"Всего вариантов: {s['articles']}, от {money(s['price_min'])} до {money(s['price_max'])}.")
+                lines.append("   Аналоги (сначала — что привезём быстрее):")
+                lines += ["   • " + _offer_line(a) for a in o["analogs"][:shown]]
+                more = o["stats"]["articles"] - 1 - len(o["analogs"][:shown])
+                if more > 0:
+                    lines.append(f"   Есть ещё {more} {plural(more, 'вариант', 'варианта', 'вариантов')} — подберём под бюджет.")
             elif o is None:
-                lines.append("Цены уточнит менеджер.")
+                lines.append("   Цену и срок уточним.")
+    lines.append("")
+    lines.append("Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем." if found
+                 else "Уточним по позициям и напишем.")
     return "\n".join(lines)

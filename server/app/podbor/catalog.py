@@ -60,9 +60,31 @@ class Vehicle:
             parts.append("выпуск " + when.replace("/", "."))
         return ", ".join(parts)
 
+    def short(self) -> str:
+        """Для клиента: «Ford Focus CB8, 2012 г., 1.6 л 123 л.с., АКПП» — без кодов моторов и диапазонов лет."""
+        a = self.attrs
+        brand = self.brand.title() if self.brand.isupper() and len(self.brand) > 3 else self.brand
+        name = re.sub(r"\s*\(?\b(19|20)\d\d\s*[-–]\s*((19|20)\d\d)?\)?\s*$", "", self.name).strip()
+        parts = [f"{brand} {name}".strip()]
+        year = a.get("manufactured") or (re.search(r"(19|20)\d\d", a.get("date", "")) or [""])[0]
+        if year:
+            parts.append(f"{year[:4]} г.")
+        eng = " ".join(a.get(k, "") for k in ("engine", "engine_info"))
+        vol = re.search(r"\b(\d)[.,](\d)\s*L\b", eng, re.I) or re.search(r"\b(\d)(\d)\d\d\s*CC\b", eng, re.I)
+        hp = re.search(r"\b(\d{2,3})\s*(?:PS|hp|л\.?\s*с)", eng, re.I)
+        motor = " ".join(x for x in (f"{vol.group(1)}.{vol.group(2)} л" if vol else "",
+                                     f"{hp.group(1)} л.с." if hp else "") if x)
+        if motor:
+            parts.append(motor)
+        box = a.get("transmission", "").upper()
+        kpp = "АКПП" if re.search(r"АКПП|AUTO|AT\b|DSG|CVT|ВАРИАТ|DCPS|POWERSHIFT", box) else "МКПП" if box else ""
+        if kpp:
+            parts.append(kpp)
+        return ", ".join(parts)
+
     def public(self) -> dict:
         return {"brand": self.brand, "name": self.name, "catalog": self.catalog,
-                "summary": self.summary(), "attributes": self.attrs}
+                "summary": self.summary(), "short": self.short(), "attributes": self.attrs}
 
 
 def parse_vehicles(data: Any) -> list[Vehicle]:

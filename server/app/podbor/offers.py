@@ -100,53 +100,78 @@ def days(hours: Any) -> int:
     return 0 if h <= 0 else math.ceil(h / 24)
 
 
-def _offer(r: dict, tags: list[str] | None = None, count: int = 1) -> dict:
-    return {"brand": r.get("brand"), "number": r.get("number"), "description": r.get("description") or "",
-            "price": _num(r.get("price")), "days": days(r.get("deliveryPeriod")),
-            "confirm": int(r.get("confirmCount") or 0), "offers": count, "tags": tags or []}
+def _offer(r: dict, tags: list[str] | None = None, count: int = 1, cheaper: dict | None = None) -> dict:
+    o = {"brand": r.get("brand"), "number": r.get("number"), "description": r.get("description") or "",
+         "price": _num(r.get("price")), "days": days(r.get("deliveryPeriod")),
+         "confirm": int(r.get("confirmCount") or 0), "offers": count, "tags": tags or [], "cheaper": None}
+    # Тот же артикул дешевле, но дольше: «1 110 ₽ завтра или 900 ₽ через неделю» — пусть клиент выбирает.
+    # В разы дешевле (оригинал Ford за 1 640 ₽ при 12 640 ₽) — скорее ошибка в прайсе, такое не предлагаем.
+    if cheaper is not None and cheaper is not r:
+        p, d = _num(cheaper.get("price")), days(cheaper.get("deliveryPeriod"))
+        if o["price"] * 0.3 <= p < o["price"] * 0.95 and d > o["days"]:
+            o["cheaper"] = {"price": p, "days": d}
+    return o
+
+
+def _speed(r: dict) -> tuple[int, float]:
+    return days(r.get("deliveryPeriod")), _num(r.get("price"))
+
+
+def _cost(r: dict) -> tuple[float, int]:
+    return _num(r.get("price")), days(r.get("deliveryPeriod"))
 
 
 def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5) -> dict:
-    """Оригинал и до `limit` аналогов: самый дешёвый, самый быстрый, ★ частая замена,
-    бренд с гарантией магазина, дальше — по цене."""
+    """Оригинал и до `limit` аналогов — по одному на бренд, в порядке «что быстрее привезти».
+    В выборку обязательно попадают самый дешёвый, ★ частая замена и бренд с гарантией магазина;
+    остальные места — самым быстрым. У каждого артикула — самое быстрое предложение и, если есть,
+    более дешёвое, но долгое."""
     clean = [r for r in rows if _num(r.get("price")) > 0 and str(r.get("isUsed") or "0") in ("0", "", "False", "false")]
-    best: dict[tuple, dict] = {}
+    fast: dict[tuple, dict] = {}
+    cheap: dict[tuple, dict] = {}
     count: dict[tuple, int] = {}
     for r in clean:
         k = (bkey(r.get("brand")), _key(r.get("numberFix") or r.get("number")))
         count[k] = count.get(k, 0) + 1
-        cur = best.get(k)
-        if cur is None or (_num(r.get("price")), days(r.get("deliveryPeriod"))) < \
-                (_num(cur.get("price")), days(cur.get("deliveryPeriod"))):
-            best[k] = r
+        if k not in fast or _speed(r) < _speed(fast[k]):
+            fast[k] = r
+        if k not in cheap or _cost(r) < _cost(cheap[k]):
+            cheap[k] = r
     okeys, onum = original_keys(car_brand), _key(oem)
-    original = next((_offer(r, ["оригинал"], count[k]) for k, r in best.items() if k[0] in okeys and k[1] == onum), None)
-    analogs = {k: r for k, r in best.items() if not (k[0] in okeys and k[1] == onum)}
+    is_orig = lambda k: k[0] in okeys and k[1] == onum  # noqa: E731
+    ok = next((k for k in fast if is_orig(k)), None)
+    original = _offer(fast[ok], ["оригинал"], count[ok], cheap[ok]) if ok else None
 
-    picks: dict[tuple, list[str]] = {}
+    # Один артикул на бренд: Krauf с тремя номерами за одну цену — это один вариант, а не три
+    per_brand: dict[str, tuple] = {}
+    for k in fast:
+        if not is_orig(k) and (k[0] not in per_brand or _speed(fast[k]) < _speed(fast[per_brand[k[0]]])):
+            per_brand[k[0]] = k
+    pool = list(per_brand.values())
+    by_speed = sorted(pool, key=lambda k: _speed(fast[k]))
+    by_cost = sorted(pool, key=lambda k: _cost(cheap[k]))
 
-    def add(key, tag):
-        if key is not None:
-            picks.setdefault(key, []).append(tag)
-
-    by_price = sorted(analogs, key=lambda k: (_num(analogs[k].get("price")), days(analogs[k].get("deliveryPeriod"))))
-    if by_price:
-        add(by_price[0], "дешевле всего")
-        add(min(analogs, key=lambda k: (days(analogs[k].get("deliveryPeriod")), _num(analogs[k].get("price")))),
-            "быстрее всего")
-        frequent = [k for k in by_price if int(analogs[k].get("confirmCount") or 0) >= 2]
-        add(frequent[0] if frequent else None, "частая замена")
-        guaranteed = [k for k in by_price if k[0] in warranty]
-        add(guaranteed[0] if guaranteed else None, "гарантия магазина")
-    for k in by_price:
-        if len(picks) >= limit:
+    tags: dict[tuple, list[str]] = {}
+    if pool:
+        tags.setdefault(by_cost[0], []).append("дешевле всего")
+        tags.setdefault(by_speed[0], []).append("быстрее всего")
+        frequent = [k for k in by_cost if int(fast[k].get("confirmCount") or cheap[k].get("confirmCount") or 0) >= 2]
+        if frequent:
+            tags.setdefault(frequent[0], []).append("частая замена")
+        guaranteed = [k for k in by_cost if k[0] in warranty]
+        if guaranteed:
+            tags.setdefault(guaranteed[0], []).append("гарантия магазина")
+    chosen = list(tags)[:limit]
+    for k in by_speed:
+        if len(chosen) >= limit:
             break
-        picks.setdefault(k, [])
-    chosen = sorted(list(picks.items())[:limit], key=lambda kv: _num(analogs[kv[0]].get("price")))
-    prices = [_num(r.get("price")) for r in best.values()]
+        if k not in chosen:
+            chosen.append(k)
+    chosen.sort(key=lambda k: _speed(fast[k]))
+    prices = [_num(r.get("price")) for r in cheap.values()]
     return {
         "original": original,
-        "analogs": [_offer(analogs[k], tags, count[k]) for k, tags in chosen],
-        "stats": {"offers": len(clean), "articles": len(best),
+        "analogs": [_offer(fast[k], tags.get(k, []), count[k], cheap[k]) for k in chosen],
+        "stats": {"offers": len(clean), "articles": len(fast),
                   "price_min": min(prices) if prices else 0, "price_max": max(prices) if prices else 0},
     }
