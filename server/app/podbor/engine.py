@@ -95,6 +95,11 @@ class Engine:
         self.notes = [{k: [T.stem(w) for w in n[k]] for k in ("query", "detail", "lacks")} | {"text": n["text"]}
                       for n in rules.get("notes", [])]
         self.not_catalog = [st for st in (T.stems(w, self.stop) for w in rules.get("not_catalog", {}).get("words", [])) if st]
+        # Нет деталей в группе — где искать ещё: «комплект ГРМ» у мотора с цепью → группы цепи
+        self.fallback = [{"from": set(f["from"]), "to": f["to"], "note": f["note"]} for f in rules.get("fallback", [])]
+        # Соседи уточняют: «диски» рядом с «колодками» — тормозные
+        self.context = [{"word": T.stem(c["word"]), "near": [T.stem(w) for w in c["near"]], "add": c["add"],
+                         "add_stem": T.stem(c["add"])} for c in rules.get("context", [])]
         # Многозначные слова: «ГБЦ» — головка целиком или прокладка? Спросить, если в позиции нет уточнения
         self.ask = [{"query": [T.stem(w) for w in a["query"]], "unless": [T.stem(w) for w in a.get("unless", [])],
                      "text": a["text"]} for a in rules.get("ask", [])]
@@ -130,6 +135,9 @@ class Engine:
         try:
             tree = await self.catalog.tree(v)
         except LaximoError as e:
+            if e.code == "E_NOTSUPPORTED":
+                # У каталога нет быстрых групп (SsangYong, АвтоВАЗ): машину нашли, детали — только вручную
+                return self._done(res, "no_quick_groups", t0)
             res["warnings"].append(f"Каталог групп недоступен ({e.code})")
             return self._done(res, "catalog_error", t0)
         items = self.split(req.chunks, tree)
@@ -153,6 +161,11 @@ class Engine:
         «Колодки передние и задние» → две: одно слово стороны повторяет соседнюю деталь."""
         out: list[tuple[str, T.Side]] = []
         for chunk in chunks:
+            # «…колодки и диски, спасибо» — вежливый хвост через запятую не делает из одной позиции две
+            segs = chunk.split(",")
+            while len(segs) > 1 and all(w in self.stop for w in T.words(segs[-1])):
+                segs.pop()
+            chunk = ",".join(segs)
             whole = T.side(chunk)
             pieces = share_noun(T.split_pieces(chunk), self.stop)
             if len(pieces) == 1:
@@ -165,8 +178,8 @@ class Engine:
                 if not st:
                     if ps.axis or ps.lr:
                         parts.append({"text": p, "side": ps, "only_side": True, "top": None})
-                    elif parts:
-                        parts[-1]["text"] += " " + p
+                    elif parts and not all(w in self.stop or w.isdigit() for w in T.words(p)):
+                        parts[-1]["text"] += " " + p   # «оригинал» — к детали; «спасибо» не приклеиваем
                     continue
                 ranked = tree.rank(st, ps)
                 top = ranked[0][0].id if ranked and ranked[0][1] >= 0.5 else None
@@ -174,6 +187,7 @@ class Engine:
                     parts[-1]["text"] += ", " + p   # «комплект», «оригинал» — уточнение к предыдущей детали
                 else:
                     parts.append({"text": p, "side": ps, "only_side": False, "top": top})
+            self._context(parts, tree)
             details = [x for x in parts if not x["only_side"]]
             if not details or (len({x["top"] for x in details if x["top"] is not None}) < 2
                                and len(details) == len(parts)):
@@ -192,6 +206,34 @@ class Engine:
                     base = T.RIGHT.sub("", T.LEFT.sub("", T.REAR.sub("", T.FRONT.sub("", near["text"]))))
                     out.append((self.clean(f"{base} {x['text']}"), x["side"]))
         return out
+
+    def _context(self, parts: list[dict], tree: TreeIndex):
+        """Соседние позиции уточняют друг друга: «колодки и диски» — диски тормозные, а не колёсные;
+        «салонник, воздухан, масляный» — масляный фильтр (существительное из группы соседа)."""
+        items = [x for x in parts if not x["only_side"]]
+        for i, x in enumerate(items):
+            st = T.stems(x["text"], self.stop)
+            if not st:
+                continue
+            others = [s for y in items if y is not x for s in T.stems(y["text"], self.stop)]
+            changed = False
+            for rule in self.context:
+                if T.same(T.head(st), rule["word"]) and not any(T.same(rule["add_stem"], s) for s in st) \
+                        and any(T.same(n, s) for n in rule["near"] for s in others):
+                    x["text"] += " " + rule["add"]
+                    changed = True
+                    break   # «диски» и «диск» — одна основа: второй раз не добавляем
+            if all(s in T.ADJ for s in st):
+                for y in items[i - 1::-1] + items[i + 1:] if i else items[i + 1:]:
+                    g = tree.groups.get(y["top"]) if y["top"] is not None else None
+                    noun = next((w for w in T.words(g.name) if T.stem(w) not in T.ADJ), "") if g else ""
+                    if noun:
+                        x["text"] += " " + noun
+                        changed = True
+                        break
+            if changed:
+                r = tree.rank(T.stems(x["text"], self.stop), x["side"])
+                x["top"] = r[0][0].id if r and r[0][1] >= 0.5 else None
 
     def clean(self, query: str) -> str:
         """«Здравствуйте, вин , нужны передние колодки» → «передние колодки»."""
@@ -238,6 +280,21 @@ class Engine:
                                          return_exceptions=True)
             pool += [d for x in lists if isinstance(x, list) for d in x]
             cands = self._candidates(tree, q, want, groups, pool, members)
+        fallback_note = ""
+        if not cands:
+            # «Комплект ГРМ» у мотора с цепью: в группе ремня пусто — смотрим группы цепи (правило fallback)
+            for fb in self.fallback:
+                alt = [(tree.groups[i], best) for i in fb["to"] if i in tree.groups]
+                if not alt or not any(g.id in fb["from"] for g, _ in groups):
+                    continue
+                lists = await asyncio.gather(*(self.catalog.details(v, g.id, False) for g, _ in alt),
+                                             return_exceptions=True)
+                pool = [d for x in lists if isinstance(x, list) for d in x]
+                cands = self._candidates(tree, q, want, alt, pool, {(d.group_id, _key(d.oem)) for d in pool})
+                if cands:
+                    groups, fallback_note = alt, fb["note"]
+                    pos["groups"] = [{"id": g.id, "name": g.name, "path": g.path, "score": round(s, 2)} for g, s in alt]
+                    break
         if not cands:
             return pos
 
@@ -248,6 +305,7 @@ class Engine:
         kinds: dict[tuple, list[Candidate]] = {}
         for c in kept:
             kinds.setdefault(c.kind, []).append(c)
+        kinds = by_suppliers(kinds, tree.known(q))
         pos["variants"] = [self._variant(c, v, alt=i > 0) for cs in kinds.values()
                            for i, c in enumerate(sorted(cs, key=lambda c: (not (c.rows and _has_original(c, v)), -c.score)))]
         pos["status"], pos["question"] = verdict(list(kinds), want, query)
@@ -257,7 +315,7 @@ class Engine:
                 pos["status"] = "choose"
                 pos["question"] = (pos["question"] + " " if pos["question"] else "") + a["text"]
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
-        pos["note"] = self._note(q, query, main, tree)
+        pos["note"] = fallback_note or self._note(q, query, main, tree)
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
             self.catalog.learn(main.d.group_id, main.d.name)
         return pos
@@ -410,6 +468,24 @@ class Engine:
         return f"Отдельно «{' '.join(dict.fromkeys(words))}» в каталоге не нашли — для этой машины там «{c.d.name}»."
 
 
+def by_suppliers(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> dict[tuple, list["Candidate"]]:
+    """В группе несколько разных деталей (у VAG в «Электронике двигателя» — «Датчик импульсов», детонации,
+    давления), а клиент назвал какую: «датчик коленвала». Оставляем те, у которых поставщики в описаниях
+    пишут это слово («датчик положения коленвала»), если у других его нет совсем."""
+    if len(kinds) < 2 or len(known) < 2:
+        return kinds
+    head = T.head(known)
+    words = [s for s in known if s != head]
+    share = {}
+    for k, cs in kinds.items():
+        descs = {str(r.get("description") or "").lower() for c in cs for r in (c.rows or [])} - {""}
+        if len(descs) >= 5:
+            share[k] = sum(1 for d in descs if any(T.same(w, s) for w in words for s in T.stems(d))) / len(descs)
+    if not share or max(share.values()) < 0.3:
+        return kinds
+    return {k: cs for k, cs in kinds.items() if share.get(k, 1.0) >= 0.05}
+
+
 def share_noun(pieces: list[str], stop: frozenset[str]) -> list[str]:
     """Кусок из одних прилагательных берёт существительное у соседа с той же конструкцией
     «прилагательное + существительное»: «2 впускных и 2 выпускных клапана» — у следующего,
@@ -509,7 +585,7 @@ def nice_name(desc: str, brand: str = "", number: str = "") -> str:
     for o, c in ("()", "[]"):
         if t.count(o) > t.count(c) and t.rindex(o) > 0:
             t, cut = t[:t.rindex(o)], True
-    t = t.rstrip(" ,.-—/")
+    t = re.sub(r"(?:\s+(?:и|с|для|на|в|от|по))+$", "", t.rstrip(" ,.-—/"))   # «Подшипник ступицы и»
     return t + "…" if cut else t
 
 
@@ -538,17 +614,19 @@ def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "", fallback:
     return line + (f" · {', '.join(tags)}" if tags else "")
 
 
-def _block(var: dict, alts: list[dict], numbers: bool, analogs: int) -> tuple[list[str], int]:
+def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str = "") -> tuple[list[str], int]:
     """Строки одного варианта: оригинал, тот же оригинал под другим номером, аналоги по сроку."""
     out = []
     o = var["offers"]
     catalog_name = ru_name(base_name(var["name"]))
+    if catalog_name.lower().strip(" .…") in _VAGUE:   # у VAG бывает и просто «Деталь»
+        catalog_name = query[:1].upper() + query[1:]
     if o and o["original"]:
         # Номер — из каталога: поставщики пишут его как попало («1 712 024»). Название — поставщика, если оно
         # про ту же деталь («Колодки тормозные передние»), иначе каталожное: «Focus 2011-> задний» ни о чём
         orig = dict(o["original"], number=var["oem"])
         theirs = nice_name(orig["description"], orig["brand"], orig["number"])
-        same = any(T.same(a, b) for a in T.stems(theirs) for b in T.stems(catalog_name))
+        same = theirs.lower().strip(" .…") not in _VAGUE and             any(T.same(a, b) for a in T.stems(theirs) for b in T.stems(catalog_name))
         out.append(_offer_line(orig, numbers, theirs if same else catalog_name, "оригинал"))
     else:
         num = f" {var['oem']}" if numbers else ""
@@ -574,10 +652,22 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     if st == "no_vin":
         return "Пришлите, пожалуйста, VIN (17 знаков) или номер кузова — подберём точно по вашей машине."
     if st == "vehicle_not_found":
+        req = res.get("request") or {}
+        if re.match(r"[ZX]", req.get("ident", "")) and \
+                re.search(r"ssang|санг|саньен|санйон|korando|kyron|actyon|rexton|корандо|кайрон|актион|рекстон",
+                          (req.get("model", "") + " " + " ".join(req.get("chunks", []))), re.I):
+            # SsangYong российской сборки: каталог знает только корейский VIN (начинается на K)
+            return ("У SsangYong российской сборки VIN в каталоге не ищется. Пришлите, пожалуйста, корейский VIN — "
+                    "он начинается на букву K: в ПТС в «Особых отметках» (номер шасси) или на табличке "
+                    "в проёме водительской двери.")
         return ("По этому VIN машина в каталоге не нашлась. Проверьте VIN или пришлите фото СТС — "
                 "подберём вручную.")
     if st == "catalog_error":
         return "Каталог сейчас не отвечает, подберём вручную."
+    if st == "no_quick_groups":
+        v = res["vehicle"]
+        return (f"Ваш автомобиль: {(v.get('short') or v['summary']).rstrip('.')}.\n"
+                "По этой машине каталог не даёт быстрый поиск деталей — менеджер подберёт вручную и напишет.")
     if st == "choose_vehicle":
         lines = ["По VIN нашлось несколько вариантов машины, уточните ваш:"]
         lines += [f"{i + 1}) {x['summary']}" for i, x in enumerate(res["vehicles"])]
@@ -610,12 +700,15 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 groups[-1][1].append(var)
             else:
                 groups.append((var, []))
+        # Сначала передние, потом задние; левые перед правыми — как читает клиент
+        order = {"front": 0, "": 1, "rear": 2}
+        groups.sort(key=lambda g: (order.get(g[0]["axis"], 1), {"left": 0, "": 1, "right": 2}.get(g[0]["lr"], 1)))
         many = len(groups) > 1
         labels = [T.side_label(query, var["axis"], var["lr"]) for var, _ in groups]
         seen: dict[str, int] = {}
         for n, (var, alts) in enumerate(groups, 1):
             found += 1
-            rows, more = _block(var, alts, numbers, analogs if not many else min(analogs, 2))
+            rows, more = _block(var, alts, numbers, analogs if not many else min(analogs, 2), query)
             amount = re.match(r"\d+", var["amount"] or "")
             k = int(amount.group(0)) if amount else 1   # каталог пишет и «2», и «01»
             per = f"на машину нужно {k} шт., цены за штуку" if k > 1 else ""

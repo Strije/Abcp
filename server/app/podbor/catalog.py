@@ -68,7 +68,8 @@ class Vehicle:
     def short(self) -> str:
         """Для клиента: «Ford Focus CB8, 2012 г., 1.6 л 123 л.с., АКПП» — без кодов моторов и диапазонов лет."""
         a = self.attrs
-        brand = self.brand.title() if self.brand.isupper() and len(self.brand) > 3 else self.brand
+        brand = _MAKE_NAMES.get(self.brand.upper().replace(" ", "")) or \
+            (self.brand.title() if self.brand.isupper() and len(self.brand) > 3 else self.brand)
         name = re.sub(r"\s*\(?\b(19|20)\d\d\s*[-–]\s*((19|20)\d\d)?\)?\s*$", "", self.name).strip()
         if name.isupper() and len(name) > 3:
             name = name.title()   # «FORTUNER» → «Fortuner»; «X5», «CX-5» не трогаем
@@ -83,8 +84,12 @@ class Vehicle:
                                      f"{hp.group(1)} л.с." if hp else "") if x)
         if motor:
             parts.append(motor)
+        # Коробку пишем, только если каталог назвал её словами: у VAG там код («LKS») — по нему
+        # не понять, механика это или вариатор multitronic, а ошибка в ответе клиенту хуже пропуска
         box = a.get("transmission", "").upper()
-        kpp = "АКПП" if re.search(r"АКПП|AUTO|AT\b|DSG|CVT|ВАРИАТ|DCPS|POWERSHIFT", box) else "МКПП" if box else ""
+        kpp = ("вариатор" if re.search(r"CVT|ВАРИАТ|MULTITRONIC", box)
+               else "АКПП" if re.search(r"АКПП|AUTO|\bAT\b|DSG|S.?TRONIC|TIPTRONIC|DCPS|POWERSHIFT|РОБОТ", box)
+               else "МКПП" if re.search(r"МКПП|MANUAL|\bMT\b|МЕХАН|\d.?(?:СТУП|SPEED).*(?:МЕХ|MAN)", box) else "")
         if kpp:
             parts.append(kpp)
         return ", ".join(parts)
@@ -335,6 +340,8 @@ class TreeIndex:
                     continue
                 if prec and rec:
                     f = w * 2 * prec * rec / (prec + rec)
+                    if len(q) == 1 and not T.same(q[0], T.head(p)):
+                        f *= 0.8   # «масло» — не «Датчик давления масла»: в группе главное слово другое
                     if head and any(T.same(head, t) for t in p):
                         f += 0.1 if T.same(head, T.head(p)) else 0.0
                     elif head:
@@ -352,6 +359,11 @@ class TreeIndex:
 # ---------- обращения к Laximo с кэшем ----------
 
 Call = Callable[[str, dict], Awaitable[Any]]
+
+
+# Как марки пишут люди, если «.title()» исказит: SSANGYONG → SsangYong, не Ssangyong
+_MAKE_NAMES = {"SSANGYONG": "SsangYong", "MERCEDES-BENZ": "Mercedes-Benz", "LANDROVER": "Land Rover",
+               "ALFAROMEO": "Alfa Romeo", "GREATWALL": "Great Wall", "DS": "DS", "MG": "MG", "GMC": "GMC"}
 
 
 def _safe(s: str) -> str:

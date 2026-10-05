@@ -537,3 +537,25 @@ def test_typo_fix_keeps_real_words():
     assert ix.fix(T.stem("подшибник")) == T.stem("подшипник")
     assert ix.fix(T.stem("который")) == T.stem("который")      # не «мотор»: первая буква другая
     assert ix.fix(T.stem("Гранта")) == T.stem("Гранта")        # Лада Гранта — не «граната»
+
+
+def test_neighbors_context_gearbox_and_ssangyong():
+    from app.podbor.catalog import TreeIndex, Vehicle
+    from app.podbor.engine import draft
+    e = Engine(Fake(), None, set())
+    tree = TreeIndex(node(0, "x", link=False, children=[
+        node(15, "Колодки тормозные"), node(544, "Диск тормозной"), node(514, "Диски"),
+        node(2, "Фильтр масляный"), node(3, "Фильтр воздушный", "воздухан"), node(137, "Насос масляный")]),
+        e.stop, None, [{"words": ["воздухан"], "groups": [3]}])
+    got = [q for q, _ in e.split(["передние колодки и диски, спасибо"], tree)]
+    assert got == ["передние колодки", "диски тормозные"]          # рядом с колодками — тормозные
+    got = [q for q, _ in e.split(["воздухан, масляный"], tree)]
+    assert got[1] == "масляный фильтр"                              # существительное из группы соседа
+    # Код коробки VAG («LKS») — не повод писать «МКПП»: это мог быть вариатор
+    car = Vehicle("AU", "0", "s", "AUDI", "A4/Avant", {"manufactured": "2010", "transmission": "LKS(SA)"})
+    assert "КПП" not in car.short() and "вариатор" in Vehicle("AU", "0", "s", "AUDI", "A4",
+                                                               {"transmission": "multitronic"}).short()
+    # SsangYong российской сборки: просим корейский VIN
+    res = {"status": "vehicle_not_found", "request": {"ident": "Z8UA0B1SSBP036638", "model": "SsangYong Kyron",
+                                                      "chunks": []}}
+    assert "корейский VIN" in draft(res)
