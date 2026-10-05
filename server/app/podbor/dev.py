@@ -9,9 +9,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
 
-from ..main import PodborIn
+from ..main import PodborIn, PodborTextIn
 from .cli import warranty_brands
-from .engine import Engine
+from .engine import Engine, draft
 from .sources import Remote
 
 REMOTE = os.environ.get("PODBOR_REMOTE", "https://109.73.199.217")
@@ -30,7 +30,14 @@ async def page():
 
 @app.post("/v1/podbor")
 async def podbor(body: PodborIn):
-    return await engine.run(body.text, body.vehicle)
+    res = await engine.run(body.text, body.vehicle)
+    res["text"] = draft(res, body.numbers, body.analogs)
+    return res
+
+
+@app.post("/v1/podbor/text")
+async def podbor_text(body: PodborTextIn):
+    return {"text": draft(body.result, body.numbers, body.analogs)}
 
 
 @app.post("/v1/laximo/{method}")

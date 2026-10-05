@@ -121,12 +121,32 @@ def _cost(r: dict) -> tuple[float, int]:
     return _num(r.get("price")), days(r.get("deliveryPeriod"))
 
 
-def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5) -> dict:
+# Мелочь, которую поставщики привязывают кроссами к номеру детали: к колодкам — «Ремкомплект колодок»,
+# к компрессору — клапаны и муфты. Если деталь сама не такая, это не аналог.
+_SMALL = {T.stem(w) for w in ("ремкомплект", "пыльник", "датчик", "болт", "гайка", "шайба", "скоба", "пружина",
+                               "направляющая", "втулка", "клипса", "крепление", "кронштейн", "клапан", "прокладка",
+                               "уплотнитель", "кольцо", "сальник", "трубка", "шланг", "реле", "муфта", "фиксатор",
+                               "заглушка", "колпачок", "монтажный", "смазка", "щуп", "наклейка")}
+
+
+def not_the_part(description: str, name: str) -> bool:
+    """«Ремкомплект передних тормозных колодок» при детали «Колодки тормозные» — не аналог."""
+    st = T.stems(description)
+    h = T.head(st) if st else None
+    if not h or not any(T.same(h, s) for s in _SMALL):
+        return False
+    return not any(T.same(h, s) for s in T.stems(name))
+
+
+def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5, name: str = "") -> dict:
     """Оригинал и до `limit` аналогов — по одному на бренд, в порядке «что быстрее привезти».
     В выборку обязательно попадают самый дешёвый, ★ частая замена и бренд с гарантией магазина;
     остальные места — самым быстрым. У каждого артикула — самое быстрое предложение и, если есть,
     более дешёвое, но долгое."""
     clean = [r for r in rows if _num(r.get("price")) > 0 and str(r.get("isUsed") or "0") in ("0", "", "False", "false")]
+    if name:
+        clean = [r for r in clean if not not_the_part(str(r.get("description") or ""), name)
+                 or _key(r.get("numberFix") or r.get("number")) == _key(oem)]
     fast: dict[tuple, dict] = {}
     cheap: dict[tuple, dict] = {}
     count: dict[tuple, int] = {}

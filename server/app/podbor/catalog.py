@@ -65,6 +65,8 @@ class Vehicle:
         a = self.attrs
         brand = self.brand.title() if self.brand.isupper() and len(self.brand) > 3 else self.brand
         name = re.sub(r"\s*\(?\b(19|20)\d\d\s*[-–]\s*((19|20)\d\d)?\)?\s*$", "", self.name).strip()
+        if name.isupper() and len(name) > 3:
+            name = name.title()   # «FORTUNER» → «Fortuner»; «X5», «CX-5» не трогаем
         parts = [f"{brand} {name}".strip()]
         year = a.get("manufactured") or (re.search(r"(19|20)\d\d", a.get("date", "")) or [""])[0]
         if year:

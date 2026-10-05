@@ -7,6 +7,7 @@ GET  /v1/topup?amount=        ссылка на пополнение балан�
 POST /v1/orders/{number}/app-note  служебная заметка «оформлен через приложение» (для статистики)
 POST /v1/images               картинки товаров для выдачи
 POST /v1/laximo/{method}      подбор по авто через Laximo (пароль Laximo — только на сервере)
+POST /v1/podbor/text         ответ клиенту из готового подбора с другими настройками (артикулы, число аналогов)
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
 GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
@@ -97,6 +98,15 @@ class AccessIn(BaseModel):
 class PodborIn(BaseModel):
     text: str = Field(min_length=3, max_length=4000)
     vehicle: int | None = Field(default=None, ge=0, le=50)  # какой вариант машины, если по VIN их несколько
+    numbers: bool = False                                   # артикулы в ответе клиенту
+    analogs: int = Field(default=3, ge=0, le=5)             # сколько аналогов на деталь в ответе клиенту
+
+
+class PodborTextIn(BaseModel):
+    """Пересобрать ответ клиенту из уже полученного подбора — без новых запросов в каталог."""
+    result: dict
+    numbers: bool = False
+    analogs: int = Field(default=3, ge=0, le=5)
 
 
 class RestoreIn(BaseModel):
@@ -422,9 +432,18 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if not podbor_limit.allow("pb:" + client_ip(request)):
             raise HTTPException(429, "Слишком много запросов, подождите минуту")
         try:
-            return await state["podbor"].run(body.text, body.vehicle)
+            res = await state["podbor"].run(body.text, body.vehicle)
         except (httpx.HTTPError, AbcpError):
             raise HTTPException(502, "Каталог или поставщики не ответили, попробуйте ещё раз")
+        res["text"] = podbor.draft(res, body.numbers, body.analogs)
+        return res
+
+    @app.post("/v1/podbor/text", dependencies=[Depends(podbor_auth)])
+    async def podbor_text(body: PodborTextIn):
+        try:
+            return {"text": podbor.draft(body.result, body.numbers, body.analogs)}
+        except (KeyError, TypeError, AttributeError, IndexError, ValueError):
+            raise HTTPException(422, "Это не результат подбора")
 
     @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():

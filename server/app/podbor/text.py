@@ -219,5 +219,68 @@ def side(text: str, pr_axis: dict[str, str] | None = None) -> Side:
     return Side(axis, lr)
 
 
+# ---------- согласование: «Нужен передний подшипник», «Нужна передняя стойка», «Нужны передние колодки» ----------
+
+# Женский род на мягкий знак — остальные на «-ь» в запчастях мужского рода («ремень», «шкворень»)
+_FEM_SOFT = {"дверь", "ось", "полуось", "цепь", "петля", "тяга", "щель", "сеть", "мазь"}
+_FORMS = {
+    "m": {"need": "Нужен", "front": "передний", "rear": "задний", "left": "левый", "right": "правый"},
+    "f": {"need": "Нужна", "front": "передняя", "rear": "задняя", "left": "левая", "right": "правая"},
+    "n": {"need": "Нужно", "front": "переднее", "rear": "заднее", "left": "левое", "right": "правое"},
+    "pl": {"need": "Нужны", "front": "передние", "rear": "задние", "left": "левые", "right": "правые"},
+}
+_NEED_WORDS = {"нужен", "нужна", "нужно", "нужны", "надо", "нужен", "нужно", "интересует", "есть", "для"}
+
+
+def _adj_kind(w: str) -> str | None:
+    for end, kind in (("ая", "f"), ("яя", "f"), ("ое", "n"), ("ее", "n"), ("ые", "pl"), ("ие", "pl"),
+                      ("ый", "m"), ("ий", "m"), ("ой", "m")):
+        if w.endswith(end):
+            return kind
+    return None
+
+
+# Сокращения: род по главному слову расшифровки («ГБЦ» — головка, «АКПП» — коробка)
+_ABBR_GENDER = {"гбц": "f", "акпп": "f", "мкпп": "f", "кпп": "f", "шрус": "m", "шруз": "m", "грм": "m", "тнвд": "m",
+                "эбу": "m", "дмрв": "m", "гур": "m", "эур": "m", "абс": "f", "abs": "f", "дпкв": "m", "дпрв": "m"}
+
+
+def gender(query: str) -> str:
+    """Род и число главного слова запроса: m / f / n / pl. Первое существительное — не прилагательное,
+    не сторона и не «нужен»; если одни прилагательные («шаровая») — по окончанию прилагательного."""
+    ws = [w for w in words(query) if len(w) >= 3 and not w.isdigit() and re.fullmatch(r"[а-яё]+", w)]
+    first_adj = None
+    for w in ws:
+        if side_of_word(w) or w in _NEED_WORDS:
+            continue
+        if _ADJ_END.search(w) and _ADJ_STEM.search(stem(w)):
+            first_adj = first_adj or _adj_kind(w)
+            continue
+        if w in _ABBR_GENDER:
+            return _ABBR_GENDER[w]
+        if w[-1] in "ыи":
+            return "pl"
+        if w[-1] in "ая":
+            return "f"
+        if w[-1] in "оеё":
+            return "n"
+        if w[-1] == "ь":
+            return "f" if w in _FEM_SOFT else "m"
+        return "m"
+    return first_adj or "pl"
+
+
+def side_label(query: str, axis: str, lr: str = "") -> str:
+    """«Передний», «Задняя левая», «Передние» — сторона в согласии с деталью из запроса."""
+    f = _FORMS[gender(query)]
+    s = " ".join(f[x] for x in (axis, lr) if x)
+    return s[:1].upper() + s[1:]
+
+
+def ask_axis(query: str) -> str:
+    f = _FORMS[gender(query)]
+    return f"{f['need']} {f['front']} или {f['rear']}?"
+
+
 AXIS_RU = {"front": "передн.", "rear": "задн."}
 LR_RU = {"left": "лев.", "right": "прав."}

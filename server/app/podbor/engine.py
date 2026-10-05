@@ -115,7 +115,7 @@ class Engine:
         out: list[tuple[str, T.Side]] = []
         for chunk in chunks:
             whole = T.side(chunk)
-            pieces = T.split_pieces(chunk)
+            pieces = share_noun(T.split_pieces(chunk), self.stop)
             if len(pieces) == 1:
                 if T.stems(chunk, self.stop):
                     out.append((self.clean(chunk), whole))
@@ -158,7 +158,9 @@ class Engine:
         """«Здравствуйте, вин , нужны передние колодки» → «передние колодки»."""
         ws = re.split(r"(\s+|,)", query)
         i = 0
-        while i < len(ws) and (not ws[i].strip(" ,.!") or ws[i].strip(" ,.!").lower() in self.stop):
+        # Пропускаем стоп-слова и связки: «Здравствуйте, можно узнать цену и сроки, масляный фильтр» → «масляный фильтр»
+        while i < len(ws) and (not ws[i].strip(" ,.!?") or ws[i].strip(" ,.!?").lower() in self.stop
+                               or ws[i].strip(" ,.!?").lower() in ("и", "а", "по", "на", "в", "к", "с")):
             i += 1
         return re.sub(r"\s+", " ", re.sub(r"\s*,\s*(,\s*)+", ", ", "".join(ws[i:]))).strip(" ,.") or query.strip()
 
@@ -204,7 +206,7 @@ class Engine:
             kinds.setdefault(c.kind, []).append(c)
         pos["variants"] = [self._variant(c, v, alt=i > 0) for cs in kinds.values()
                            for i, c in enumerate(sorted(cs, key=lambda c: (not (c.rows and _has_original(c, v)), -c.score)))]
-        pos["status"], pos["question"] = verdict(list(kinds), want)
+        pos["status"], pos["question"] = verdict(list(kinds), want, query)
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
         pos["note"] = self._note(q, query, main, tree)
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
@@ -342,7 +344,7 @@ class Engine:
             "vote": {"front": c.vote[1], "rear": c.vote[2]}, "warning": c.warning, "score": round(c.score, 2),
             "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
                        "image": image_url(d.image) if d.image else "", "code": d.code_on_image},
-            "offers": curate(c.rows, d.oem, v.brand, self.warranty) if c.rows else None,
+            "offers": curate(c.rows, d.oem, v.brand, self.warranty, name=d.name) if c.rows else None,
         }
 
     def _note(self, q: list[str], query: str, c: Candidate, tree: TreeIndex) -> str:
@@ -362,18 +364,40 @@ class Engine:
         return f"Отдельно «{' '.join(dict.fromkeys(words))}» в каталоге не нашли — для этой машины там «{c.d.name}»."
 
 
+def share_noun(pieces: list[str], stop: frozenset[str]) -> list[str]:
+    """Кусок из одних прилагательных берёт существительное у соседа с той же конструкцией
+    «прилагательное + существительное»: «2 впускных и 2 выпускных клапана» — у следующего,
+    «масляный фильтр, воздушный, салонник» — у предыдущего («салонник» без прилагательного не годится)."""
+    def noun_of(piece: str) -> str:
+        st = T.stems(piece, stop)
+        h = T.head(st) if st else None
+        if not h or h in T.ADJ or not any(s in T.ADJ for s in st):
+            return ""
+        return next((w for w in T.words(piece) if T.stem(w) == h), "")
+
+    out = list(pieces)
+    for i, p in enumerate(pieces):
+        st = T.stems(p, stop)
+        if not st or any(s not in T.ADJ for s in st):
+            continue
+        noun = (noun_of(pieces[i + 1]) if i + 1 < len(pieces) else "") or (noun_of(pieces[i - 1]) if i else "")
+        if noun:
+            out[i] = f"{p} {noun}"
+    return out
+
+
 def _has_original(c: Candidate, v: Vehicle) -> bool:
     o = curate(c.rows or [], c.d.oem, v.brand, set())
     return bool(o["original"])
 
 
-def verdict(kinds: list[tuple[str, str, str]], want: T.Side) -> tuple[str, str]:
+def verdict(kinds: list[tuple[str, str, str]], want: T.Side, query: str = "") -> tuple[str, str]:
     if len(kinds) == 1:
         return "found", ""
     axes = {k[0] for k in kinds}
     lrs = [k[1] for k in kinds]
     if not want.axis and len(axes - {""}) > 1:
-        return "choose", "Нужны передние или задние?"
+        return "choose", T.ask_axis(query)   # «Нужен передний или задний?» — в согласии с деталью
     if len(axes) == 1 and "" not in lrs and len(set(lrs)) == len(kinds) and not want.lr:
         return "found", ""   # левая и правая — разные номера, нужны обе
     return "choose", "В каталоге несколько вариантов — уточните по примечанию или по номеру позиции на схеме."
@@ -420,26 +444,80 @@ def nice_brand(b: str) -> str:
     return b.title() if b.isupper() and len(b.replace(" ", "").replace("-", "")) > 3 else b
 
 
+def nice_name(desc: str, brand: str = "", number: str = "") -> str:
+    """Наименование поставщика для клиента: без бренда и артикула внутри, без КРИКА заглавными, не длиннее 60 знаков.
+    «ПОДШИПНИК СТУПИЦЫ ПЕРЕДНЕЙ FAG 713679190» → «Подшипник ступицы передней»."""
+    t = desc or ""
+    for x in (brand, number, re.sub(r"[\s.\-/]", "", number or "")):
+        if x and len(x) >= 3:
+            t = re.sub(re.escape(x), " ", t, flags=re.I)
+    t = re.sub(r"\s+", " ", re.sub(r"[|;]+", " ", t)).strip(" ,.-—()[]")
+    letters = [c for c in t if c.isalpha()]
+    if letters and sum(c.isupper() for c in letters) / len(letters) > 0.7:
+        t = t.lower()
+    t = t[:1].upper() + t[1:]
+    cut = len(t) > 60
+    if cut:
+        t = t[:60].rsplit(" ", 1)[0]
+    # Не оставлять открытую скобку: «Подшипник ступицы (с ABS, 42x45x82» → «Подшипник ступицы»
+    for o, c in ("()", "[]"):
+        if t.count(o) > t.count(c) and t.rindex(o) > 0:
+            t, cut = t[:t.rindex(o)], True
+    t = t.rstrip(" ,.-—/")
+    return t + "…" if cut else t
+
+
 # Пометки аналогов, которые понятны клиенту. «Быстрее всего» не пишем: список и так по сроку.
 CLIENT_TAGS = {"дешевле всего": "самый дешёвый", "частая замена": "часто берут", "гарантия магазина": "гарантия магазина"}
 
 
-def _offer_line(o: dict, label: str = "", what: str = "") -> str:
-    line = f"{label}{nice_brand(o['brand'])} {o['number']}{what} — {money(o['price'])}, {when(o['days'])}"
+def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "") -> str:
+    """«• Kroner — Ступица задняя с подшипником — 3 930 ₽, 1 день · гарантия магазина».
+    Артикул — только если менеджер включил его в настройках: клиенту он обычно не нужен."""
+    brand = nice_brand(o["brand"])
+    head = f"{brand} {o['number']}" if numbers else brand
+    if who:
+        head += f" ({who})"
+    title = name or nice_name(o.get("description", ""), o["brand"], o["number"])
+    line = f"• {head}" + (f" — {title}" if title else "") + f" — {money(o['price'])}, {when(o['days'])}"
     if o.get("cheaper"):
         line += f" (или {money(o['cheaper']['price'])} за {when(o['cheaper']['days'])})"
     tags = [CLIENT_TAGS[t] for t in o.get("tags", []) if t in CLIENT_TAGS]
     return line + (f" · {', '.join(tags)}" if tags else "")
 
 
-def _side_ru(var: dict) -> str:
-    """Сторона для клиента: «Спереди слева» — без «передн.» каталога и без согласования рода."""
-    side = " ".join(x for x in ({"front": "спереди", "rear": "сзади"}.get(var["axis"], ""),
-                                {"left": "слева", "right": "справа"}.get(var["lr"], "")) if x)
-    return side[:1].upper() + side[1:]
+def _block(var: dict, alts: list[dict], numbers: bool, analogs: int) -> tuple[list[str], int]:
+    """Строки одного варианта: оригинал, тот же оригинал под другим номером, аналоги по сроку."""
+    out = []
+    o = var["offers"]
+    catalog_name = var["name"].partition(",")[0].strip()
+    if o and o["original"]:
+        # Номер — из каталога: поставщики пишут его как попало («1 712 024»). Название — поставщика, если оно
+        # про ту же деталь («Колодки тормозные передние»), иначе каталожное: «Focus 2011-> задний» ни о чём
+        orig = dict(o["original"], number=var["oem"])
+        theirs = nice_name(orig["description"], orig["brand"], orig["number"])
+        same = any(T.same(a, b) for a in T.stems(theirs) for b in T.stems(catalog_name))
+        out.append(_offer_line(orig, numbers, theirs if same else catalog_name, "оригинал"))
+    else:
+        num = f" {var['oem']}" if numbers else ""
+        out.append(f"• {nice_brand(var['brand'])}{num} (оригинал) — {catalog_name} — цену и срок уточним")
+    for a in alts:
+        ao = a["offers"]
+        who = "Motorcraft, тот же оригинал" if "motorcraft" in a["name"].lower() else "тот же оригинал"
+        if ao and ao["original"]:
+            x = dict(ao["original"], number=a["oem"])
+            out.append(_offer_line(x, numbers, nice_name(x["description"], x["brand"], x["number"]), who))
+    more = 0
+    if o and o["analogs"]:
+        shown = o["analogs"][:analogs]
+        out += [_offer_line(a, numbers) for a in shown]
+        more = o["stats"]["articles"] - 1 - len(shown)
+    return out, max(more, 0)
 
 
-def draft(res: dict) -> str:
+def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
+    """Ответ клиенту. По позиции: при нескольких вариантах — блоки «Передний:» / «Задний:», в каждом
+    «• Фирма — наименование — цена, срок», оригинал первым, дальше аналоги — что привезём быстрее."""
     st = res["status"]
     if st == "no_vin":
         return "Пришлите, пожалуйста, VIN (17 знаков) или номер кузова — подберём точно по вашей машине."
@@ -459,7 +537,8 @@ def draft(res: dict) -> str:
     lines += [f"Обратите внимание: {w[0].lower() + w[1:]}." for w in res["warnings"]]
     found = 0
     for i, p in enumerate(res["positions"], 1):
-        lines += ["", f"{i}) {p['query'][:1].upper() + p['query'][1:]}"]
+        query = p["query"]
+        lines += ["", f"{i}) {query[:1].upper() + query[1:]}"]
         if p["status"] == "not_found":
             if "не деталь каталога" in p["note"]:
                 lines.append("   Это не из каталога автомобиля — подберём по названию и напишем.")
@@ -467,46 +546,40 @@ def draft(res: dict) -> str:
                 lines.append("   В каталоге для вашей машины сразу не нашли — уточним и напишем.")
             continue
         if p["question"]:
-            lines.append("   " + p["question"].replace("В каталоге несколько вариантов — уточните по примечанию или по номеру "
-                                               "позиции на схеме.", "Есть несколько вариантов, уточните, какой нужен:"))
+            lines.append("   " + p["question"].replace(
+                "В каталоге несколько вариантов — уточните по примечанию или по номеру позиции на схеме.",
+                "Есть несколько вариантов, уточните, какой нужен:"))
         if p["note"] and "не нашли" not in p["note"]:
             lines.append("   " + p["note"])
-        shown = 2 if p["status"] == "choose" else 3
-        under = len(lines)   # куда вставлять «тот же оригинал» — сразу под строкой оригинала
+        # Варианты: основной номер и «тот же оригинал» под другими номерами (Motorcraft) — к нему
+        groups: list[tuple[dict, list[dict]]] = []
         for var in p["variants"]:
-            o = var["offers"]
-            if var["alt"]:
-                what = "Тот же оригинал в версии Motorcraft" if "motorcraft" in var["name"].lower() \
-                    else "Тот же оригинал под другим номером"
-                price = f" — {money(o['original']['price'])}, {when(o['original']['days'])}" \
-                    if o and o["original"] else ""
-                lines.insert(under, f"   {what}: {var['oem']}{price}")
-                under += 1
-                continue
-            found += 1
-            name = var["name"].partition(",")[0].strip()
-            side = _side_ru(var)
-            what = f" «{name}»"
-            label = f"{side} — оригинал " if side else "Оригинал "
-            if o and o["original"]:
-                # Номер — из каталога: поставщики пишут его как попало («1 712 024»)
-                lines.append("   " + _offer_line(dict(o["original"], number=var["oem"]), label, what))
+            if var["alt"] and groups:
+                groups[-1][1].append(var)
             else:
-                lines.append(f"   {label}{nice_brand(var['brand'])} {var['oem']}{what}")
-            n = re.match(r"\d+", var["amount"] or "")
-            if n and n.group(0) != "1":
-                lines.append(f"   Цена за штуку, на машину нужно {n.group(0)} шт.")
-            under = len(lines)
-            if var["warning"]:
-                lines.append(f"   ⚠ {var['warning']}")
-            if o and o["analogs"]:
-                lines.append("   Аналоги (сначала — что привезём быстрее):")
-                lines += ["   • " + _offer_line(a) for a in o["analogs"][:shown]]
-                more = o["stats"]["articles"] - 1 - len(o["analogs"][:shown])
-                if more > 0:
-                    lines.append(f"   Есть ещё {more} {plural(more, 'вариант', 'варианта', 'вариантов')} — подберём под бюджет.")
-            elif o is None:
-                lines.append("   Цену и срок уточним.")
+                groups.append((var, []))
+        many = len(groups) > 1
+        labels = [T.side_label(query, var["axis"], var["lr"]) for var, _ in groups]
+        seen: dict[str, int] = {}
+        for n, (var, alts) in enumerate(groups, 1):
+            found += 1
+            rows, more = _block(var, alts, numbers, analogs if not many else min(analogs, 2))
+            amount = re.match(r"\d+", var["amount"] or "")
+            k = int(amount.group(0)) if amount else 1   # каталог пишет и «2», и «01»
+            per = f"на машину нужно {k} шт., цены за штуку" if k > 1 else ""
+            if many:
+                side = labels[n - 1]
+                if not side or labels.count(side) > 1:
+                    # Несколько вариантов на одной стороне: «Задняя, вариант 2 — «Скоба»»
+                    seen[side] = seen.get(side, 0) + 1
+                    name = var["name"].partition(",")[0].strip()
+                    side = (f"{side}, вариант {seen[side]}" if side else f"Вариант {n}") + f" — «{name}»"
+                lines += ["", f"   {side}" + (f" ({per})" if per else "") + ":"]
+            elif per:
+                lines.append(f"   {per[:1].upper() + per[1:]}.")
+            lines += ["   " + r for r in rows]
+            if more:
+                lines.append(f"   Есть ещё {more} {plural(more, 'вариант', 'варианта', 'вариантов')} — подберём под бюджет.")
     lines.append("")
     lines.append("Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем." if found
                  else "Уточним по позициям и напишем.")

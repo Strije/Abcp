@@ -270,7 +270,7 @@ def test_rear_hub_is_an_assembly():
     assert sum(1 for a in o["analogs"] if a["number"] == "713679190") == 1
     tags = {t for a in o["analogs"] for t in a["tags"]}
     assert {"дешевле всего", "быстрее всего", "частая замена", "гарантия магазина"} <= tags
-    assert "на машину нужно 2 шт." in r["text"] and "9 020 ₽" in r["text"]
+    assert "на машину нужно 2 шт." in r["text"].lower() and "9 020 ₽" in r["text"]
     assert "Ford Focus CB8, 2012 г., 1.6 л 123 л.с." in r["text"]
     # Аналоги — по сроку: сначала что привезём быстрее
     assert [a["days"] for a in o["analogs"]] == sorted(a["days"] for a in o["analogs"])
@@ -278,7 +278,7 @@ def test_rear_hub_is_an_assembly():
 
 def test_hub_without_side_asks_front_or_rear():
     p = run("X9FKXXEEBKCB57566 подшипник ступицы")["positions"][0]
-    assert p["status"] == "choose" and "передние или задние" in p["question"].lower()
+    assert p["status"] == "choose" and p["question"] == "Нужен передний или задний?"
     assert {v["oem"] for v in p["variants"]} >= {"2215574", "2101656"}
 
 
@@ -305,12 +305,12 @@ def test_group_members_beat_words():
     r = run("X9FKXXEEBKCB57566 колодки передние, масляный фильтр, воздушный, салонник")
     got = {p["query"]: [v["oem"] for v in p["variants"]] for p in r["positions"]}
     assert got["масляный фильтр"] == ["1883037"]
-    assert got["воздушный"] == ["1848220"]
+    assert got["воздушный фильтр"] == ["1848220"]   # существительное — у соседа «масляный фильтр»
     assert got["салонник"] == ["1709013"]
     pads = next(p for p in r["positions"] if p["query"] == "колодки передние")
     assert pads["status"] == "found" and "1900071" not in [v["oem"] for v in pads["variants"]]
     assert [v["alt"] for v in pads["variants"]] == [False, True]   # Motorcraft — тот же оригинал
-    assert "Тот же оригинал в версии Motorcraft: 1809256" in r["text"]
+    assert "1809256" not in r["text"]   # артикулы клиенту — только если включить в настройках
 
 
 def test_side_only_piece_repeats_detail():
@@ -433,6 +433,12 @@ def test_podbor_endpoint_hides_purchase_price():
         assert "priceIn" not in r.text and "123456" not in r.text and "distributorId" not in r.text
         assert c.get("/podbor").status_code == 200 and "Подбор по VIN" in c.get("/podbor").text
         assert c.post("/v1/podbor", json={"text": "x"}).status_code == 422
+        # Настройки ответа клиенту: артикулы включаются, пересборка — без нового подбора
+        res = r.json()
+        assert "2101656" not in res["text"]
+        t = c.post("/v1/podbor/text", json={"result": res, "numbers": True, "analogs": 1})
+        assert t.status_code == 200 and "Ford 2101656 (оригинал)" in t.json()["text"]
+        assert c.post("/v1/podbor/text", json={"result": {"status": "ok"}}).status_code == 422
     off = create_app(replace(s, laximo_user=""), Abcp(s, transport=httpx.MockTransport(abcp)))
     with TestClient(off) as c:
         c.auth = auth
@@ -442,3 +448,46 @@ def test_podbor_endpoint_hides_purchase_price():
     with TestClient(closed) as c:
         c.auth = auth
         assert c.get("/podbor").status_code == 404 and c.post("/v1/podbor", json={"text": "x" * 20}).status_code == 404
+
+
+def test_client_text_sides_and_numbers():
+    """Ответ клиенту: «Нужен передний или задний?», блоки по сторонам, «• Фирма — наименование — цена, срок»;
+    артикулы — только с настройкой."""
+    from app.podbor.engine import draft
+    r = run("X9FKXXEEBKCB57566 подшипник ступицы")
+    text = draft(r)
+    assert "Нужен передний или задний?" in text
+    # Спереди у Focus в группе и подшипник, и его ремкомплект — два варианта с названиями; сзади один
+    assert "   Передний, вариант 1 — «Подшипник ступицы колеса» (на машину нужно 2 шт., цены за штуку):" in text
+    assert "   Задний (на машину нужно 2 шт., цены за штуку):" in text
+    assert "• Ford (оригинал) — Ступица колеса — 9 020 ₽" in text   # «Focus 2011-> задний» поставщика — ни о чём
+    assert "• Ford (оригинал) — " in text and "2101656" not in text and "2215574" not in text
+    with_numbers = draft(r, numbers=True, analogs=1)
+    assert "• Ford 2101656 (оригинал)" in with_numbers
+    assert T.ask_axis("стойка стабилизатора") == "Нужна передняя или задняя?"
+    assert T.ask_axis("колодки") == "Нужны передние или задние?"
+    assert T.side_label("крыло", "front", "left") == "Переднее левое"
+
+
+def test_nice_name_cleans_supplier_text():
+    from app.podbor.engine import nice_name
+    assert nice_name("ПОДШИПНИК СТУПИЦЫ ПЕРЕДНЕЙ FAG 713679190", "FAG", "713679190") == "Подшипник ступицы передней"
+    assert len(nice_name("Очень " * 30)) <= 61
+
+
+def test_small_parts_are_not_analogs():
+    from app.podbor.offers import not_the_part
+    assert not_the_part("Ремкомплект передних тормозных колодок alfa romeo", "Комплект торм. колодок суппорта")
+    assert not not_the_part("Колодки тормозные дисковые к-т", "Комплект торм. колодок суппорта")
+    assert not not_the_part("Датчик положения коленвала", "Датчик положения коленвала")
+
+
+def test_shared_noun_and_politeness():
+    from app.podbor.engine import share_noun
+    stop = frozenset()
+    assert share_noun(["2 впускных", "2 выпускных клапана"], stop) == ["2 впускных клапана", "2 выпускных клапана"]
+    assert share_noun(["масляный фильтр", "воздушный", "салонник"], stop)[1] == "воздушный фильтр"
+    assert T.side_label("ГБЦ", "", "left") == "Левая"
+    # «можно узнать цену и сроки» — не позиция
+    r = run("X9FKXXEEBKCB57566 Здравствуйте можно узнать цену и сроки, масляный фильтр")
+    assert [p["query"] for p in r["positions"]] == ["масляный фильтр"]

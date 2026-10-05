@@ -50,6 +50,13 @@
   @media (prefers-reduced-motion: reduce) { .scheme .hit::after { animation: none; opacity: .8; } }
   .scheme-note { font-size: 13px; margin-top: 4px; }
   .cheaper { font-size: 12px; color: var(--muted); }
+  .ocr { display: flex; gap: 12px; align-items: center; margin: -8px 0 16px; font-size: 14px; }
+  .ocr img { max-height: 90px; max-width: 140px; border-radius: 6px; border: 1px solid var(--line); }
+  .ocr .vin { font-family: ui-monospace, Consolas, monospace; font-weight: 700; font-size: 16px; }
+  textarea.drop { outline: 2px dashed var(--accent); }
+  .opt { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 14px; }
+  .opt select { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line);
+                background: var(--card); color: var(--text); }
   pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font: inherit; }
   .err { color: var(--bad); }
 </style>
@@ -63,8 +70,11 @@ VIN/FRAME: X9FKXXEEBKCB57566
 Запрос состоит из следующих позиций: подшипник задней ступицы, масляный фильтр"></textarea>
   <div class="row">
     <button class="main" id="go">Подобрать</button>
+    <button id="photo-btn" title="Фото СТС, ПТС или таблички с VIN — можно вставить в поле через Ctrl+V или перетащить">📷 VIN с фото</button>
+    <input type="file" id="photo" accept="image/*" hidden>
     <span class="muted" id="state">Ctrl+Enter — подобрать</span>
   </div>
+  <div id="ocr" class="ocr" hidden></div>
   <div id="out"></div>
 </main>
 <script>
@@ -81,6 +91,20 @@ let last = null;
 
 try { $("#text").value = localStorage.getItem("podbor_text") || ""; } catch (e) {}
 
+// Настройки ответа клиенту — запоминаются в этом браузере
+const opts = {numbers: false, analogs: 3};
+try { Object.assign(opts, JSON.parse(localStorage.getItem("podbor_opts") || "{}")); } catch (e) {}
+function saveOpts() { try { localStorage.setItem("podbor_opts", JSON.stringify(opts)); } catch (e) {} }
+
+async function redraft() {
+  if (!last || !last.vehicle) return;
+  const r = await fetch("/v1/podbor/text", {method: "POST", headers: {"Content-Type": "application/json"},
+                                            body: JSON.stringify({result: last, ...opts})});
+  if (r.ok) { last.text = (await r.json()).text; $("#draft").textContent = last.text; }
+}
+
+function setOpt(key, value) { opts[key] = value; saveOpts(); redraft(); }
+
 async function go(vehicle) {
   const text = $("#text").value.trim();
   if (text.length < 3) return;
@@ -88,7 +112,7 @@ async function go(vehicle) {
   $("#go").disabled = true; $("#state").textContent = "Ищем в каталоге и у поставщиков…";
   try {
     const r = await fetch("/v1/podbor", {method: "POST", headers: {"Content-Type": "application/json"},
-                                         body: JSON.stringify({text, vehicle: vehicle ?? null})});
+                                         body: JSON.stringify({text, vehicle: vehicle ?? null, ...opts})});
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || ("Ошибка " + r.status));
     last = data; render(data);
@@ -139,7 +163,12 @@ function render(d) {
     ${p.note ? `<div>${esc(p.note)}</div>` : ""}
     ${p.variants.map((v, vi) => variant(v, pi, vi)).join("")}
   </div>`));
-  out.push(`<div class="row"><b>Черновик ответа клиенту</b><button onclick="copyDraft(this)">Скопировать</button></div><pre id="draft">${esc(d.text)}</pre>`);
+  out.push(`<div class="row"><b>Черновик ответа клиенту</b><button onclick="copyDraft(this)">Скопировать</button>
+    <label class="opt"><input type="checkbox" ${opts.numbers ? "checked" : ""} onchange="setOpt('numbers', this.checked)"> артикулы</label>
+    <label class="opt">аналогов на деталь
+      <select onchange="setOpt('analogs', +this.value)">${[0, 1, 2, 3, 5].map(n =>
+        `<option value="${n}" ${n === opts.analogs ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+    <pre id="draft">${esc(d.text)}</pre>`);
   $("#out").innerHTML = out.join("");
 }
 
@@ -176,6 +205,79 @@ async function scheme(pi, vi, btn) {
 function copyDraft(btn) {
   navigator.clipboard.writeText($("#draft").textContent).then(() => { btn.textContent = "Скопировано"; });
 }
+
+// ---------- VIN с фото (СТС, ПТС, табличка) ----------
+// Распознаём в браузере менеджера: фото документа никуда не уходит — ни на наш сервер, ни в чужие сервисы.
+// Библиотеку (Tesseract) и английскую модель грузим только при первом фото, дальше браузер берёт их из кэша.
+const VIN_OK = /^[A-HJ-NPR-Z0-9]{17}$/;
+let ocrLib = null;
+
+function loadOcr() {
+  ocrLib = ocrLib || new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    s.onload = () => ok(window.Tesseract); s.onerror = () => { ocrLib = null; fail(new Error("не загрузилась библиотека распознавания")); };
+    document.head.appendChild(s);
+  });
+  return ocrLib;
+}
+
+function vinsIn(text) {
+  // В СТС VIN стоит дважды (VIN и кузов) — берём тот, что встретился чаще. O/I/Q в VIN не бывает: это 0/1/0
+  const seen = {};
+  const up = text.toUpperCase().replace(/[^A-Z0-9\n ]/g, " ");
+  const tokens = up.split(/\s+/).filter(Boolean);
+  const cands = [...tokens];
+  for (let i = 0; i + 1 < tokens.length; i++) cands.push(tokens[i] + tokens[i + 1]);   // VIN, разорванный пробелом
+  for (const t of cands) {
+    if (t.length < 17 || t.length > 18) continue;
+    for (const s of new Set([t.slice(0, 17), t.slice(-17)])) {
+      const v = s.replace(/O/g, "0").replace(/I/g, "1").replace(/Q/g, "0");
+      if (VIN_OK.test(v) && /\d/.test(v) && /[A-Z]/.test(v)) seen[v] = (seen[v] || 0) + 1;
+    }
+  }
+  // Запасные варианты — только встреченные дважды: русский текст, прочитанный латиницей, даёт мусор вроде «TCT0CYAAPCTBEHHB1»
+  const all = Object.entries(seen).sort((a, b) => b[1] - a[1]);
+  return all.filter(([, n], i) => i === 0 || n >= 2).map(x => x[0]);
+}
+
+async function readVin(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const box = $("#ocr"), url = URL.createObjectURL(file);
+  box.hidden = false;
+  box.innerHTML = `<img src="${url}" alt=""><span>Распознаём VIN на фото… (первый раз — дольше: загружается модель)</span>`;
+  try {
+    const T = await loadOcr();
+    const {data} = await T.recognize(file, "eng", {tessedit_char_whitelist: "ABCDEFGHJKLMNPRSTUVWXYZ0123456789IOQ "});
+    const vins = vinsIn(data.text);
+    if (!vins.length) {
+      box.innerHTML = `<img src="${url}" alt=""><span class="warn">VIN на фото не нашли — впишите его вручную (17 знаков).</span>`;
+      return;
+    }
+    const vin = vins[0];
+    const t = $("#text");
+    if (!t.value.toUpperCase().includes(vin)) t.value = `VIN: ${vin}\n` + t.value.replace(/^VIN:\s*\S+\n/i, "");
+    box.innerHTML = `<img src="${url}" alt=""><span>VIN с фото: <span class="vin">${esc(vin)}</span> — сверьте с фото.
+      ${vins.length > 1 ? `<br><span class="muted">Ещё похоже на VIN: ${vins.slice(1, 3).map(esc).join(", ")}</span>` : ""}</span>`;
+    t.focus();
+  } catch (e) {
+    box.innerHTML = `<img src="${url}" alt=""><span class="err">Не получилось распознать: ${esc(e.message || e)}. Впишите VIN вручную.</span>`;
+  }
+}
+
+$("#photo-btn").addEventListener("click", () => $("#photo").click());
+$("#photo").addEventListener("change", e => readVin(e.target.files[0]));
+$("#text").addEventListener("paste", e => {
+  const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith("image/"));
+  if (f) { e.preventDefault(); readVin(f); }
+});
+$("#text").addEventListener("dragover", e => { e.preventDefault(); e.target.classList.add("drop"); });
+$("#text").addEventListener("dragleave", e => e.target.classList.remove("drop"));
+$("#text").addEventListener("drop", e => {
+  e.target.classList.remove("drop");
+  const f = [...(e.dataTransfer?.files || [])].find(x => x.type.startsWith("image/"));
+  if (f) { e.preventDefault(); readVin(f); }
+});
 
 $("#go").addEventListener("click", () => go());
 $("#text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) go(); });
