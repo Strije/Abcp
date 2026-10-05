@@ -10,3 +10,4 @@ app/podbor/unsloth_compiled_cache/
 app/podbor/engine_bak.py
 outputs/
 zapgpt_lora_model/
+app/podbor/scenarios_local.json

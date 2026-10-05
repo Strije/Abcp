@@ -350,6 +350,22 @@ class Engine:
                                          return_exceptions=True)
             pool += [d for x in lists if isinstance(x, list) for d in x]
             cands = self._candidates(tree, q, want, groups, pool, members)
+        head_miss = ""
+        if cands:
+            # «Тормозные барабаны» у Nissan: отдельной группы нет, а «барабанные» в названии группы колодок
+            # совпало с «барабаны». Главного слова клиента нет ни в одном найденном названии — ищем его
+            # по всем узлам этих групп и берём, если нашлось
+            head = T.head(tree.known(q) or q)
+            has = lambda name: any(T.same(head, s) for s in T.stems(name, self.stop))  # noqa: E731
+            if head and head not in T.ADJ and not any(has(c.d.name) for c in cands):
+                lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
+                                             return_exceptions=True)
+                full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)]
+                better = self._candidates(tree, q, want, groups, full, set()) if full else []
+                if better:
+                    cands = better
+                else:
+                    head_miss = next((w for w in T.words(query) if T.same(T.stem(w), head)), head)
         fallback_note = ""
         if not cands:
             # «Комплект ГРМ» у мотора с цепью: в группе ремня пусто — смотрим группы цепи (правило fallback)
@@ -368,7 +384,14 @@ class Engine:
         if not cands:
             return pos
 
-        kept = await self._check_sides(v, cands, want)
+        kept = await self._check_sides(v, cands, want)   # заодно цены и описания поставщиков у всех
+        # «ШРУС наружный», а в группе только внутренний: поставщики почти все пишут «внутренний»
+        fit, other = attr_check(cands, query)
+        if not fit:
+            pos["note"] = (f"В каталоге в этой группе нашёлся только {other} вариант — "
+                           f"нужный уточним по каталогу и напишем.")
+            return pos
+        kept = [c for c in kept if c in fit]
         if not kept:
             pos["note"] = "По описаниям поставщиков найденные номера относятся к другой стороне."
             return pos
@@ -390,6 +413,9 @@ class Engine:
                 pos["asked"] = True
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
         pos["note"] = fallback_note or self._note(q, query, main, tree)
+        if head_miss and not pos["note"]:   # своё пояснение важнее: «подшипник» → «ступица в сборе»
+            pos["note"] = (f"«{head_miss[:1].upper() + head_miss[1:]}» уточним по каталогу отдельно, "
+                           f"ниже — «{ru_name(main.d.name)}».")
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
             self.catalog.learn(main.d.group_id, main.d.name)
         return pos
@@ -450,6 +476,7 @@ class Engine:
             tier = [c for c in cands.values() if c.score >= 0.85 * top]
         if any(c.d.match for c in tier):
             tier = [c for c in tier if c.d.match]
+        tier = drop_accessories(tier, q)
         return sorted(tier, key=lambda c: -c.score)[:MAX_VARIANTS]
 
     def _foreign(self, tree: TreeIndex, name: list[str], q: list[str], chosen: set[int], near: list[str]) -> bool:
@@ -541,6 +568,64 @@ class Engine:
         if not words:
             return ""
         return f"Отдельно «{' '.join(dict.fromkeys(words))}» в каталоге не нашли — для этой машины там «{c.d.name}»."
+
+
+# Противоположные признаки, которые поставщики пишут в описании: клиент просит один — номер про другой
+_ATTRS = [(re.compile(r"наружн|внешн", re.I), re.compile(r"внутр", re.I), "наружный", "внутренний"),
+          (re.compile(r"верхн", re.I), re.compile(r"нижн", re.I), "верхний", "нижний"),
+          (re.compile(r"впуск", re.I), re.compile(r"выпуск", re.I), "впускной", "выпускной")]
+
+
+def attr_check(cands: list["Candidate"], query: str) -> tuple[list["Candidate"], str]:
+    """Убираем номера, про которые поставщики почти единогласно пишут обратный признак
+    (3+ артикула и вчетверо больше, как со стороной). Возвращаем ещё, какой признак нашёлся вместо нужного."""
+    found = ""
+    for a, b, a_name, b_name in _ATTRS:
+        for want, other, other_name in ((a, b, b_name), (b, a, a_name)):
+            if not want.search(query) or other.search(query):
+                continue
+            keep = []
+            for c in cands:
+                seen: dict[tuple, str] = {}
+                for r in c.rows or []:
+                    k = (str(r.get("brand") or "").upper(), _key(r.get("numberFix") or r.get("number")))
+                    seen.setdefault(k, str(r.get("description") or ""))
+                yes = sum(1 for d in seen.values() if want.search(d) and not other.search(d))
+                no = sum(1 for d in seen.values() if other.search(d) and not want.search(d))
+                if no >= 3 and no >= 4 * yes:
+                    found = other_name
+                else:
+                    keep.append(c)
+            cands = keep
+    return cands, found
+
+
+_PARKING = [T.stem(w) for w in ("стояночного", "стояночный", "ручного", "ручник")]
+_EXCLUSIVE = [(T.stem("ремень"), T.stem("цепи")), (T.stem("цепь"), T.stem("ремня"))]
+# Мелочь при детали в каталоге. Ремкомплекта нет: «ремкомплект подшипника» у Ford — сам подшипник с крепежом
+_SMALL = [T.stem(w) for w in ("пружина", "направляющая", "прокладка", "уплотнительная", "уплотнение", "болт", "гайка", "шайба",
+                               "скоба", "клипса", "фиксатор", "заглушка", "кольцо", "стопорное", "датчик", "пыльник",
+                               "сальник", "втулка", "кронштейн", "крышка")]
+
+
+def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
+    """«Колодки передние» у Toyota: в группе и колодки стояночного тормоза, и их пружины. Если клиент
+    не писал про ручник — стояночные убираем; мелочь («Натяжная пружина…», «Направляющая цепи»,
+    «Уплотнительная прокладка натяжителя») — если клиент спрашивал саму деталь, а не её. Только когда
+    после этого что-то остаётся: у Ford воздушный фильтр зовётся «Фильтрующий элемент»."""
+    def first_two(c: "Candidate") -> list[str]:
+        return T.stems(c.d.name)[:2]
+
+    for a, b in _EXCLUSIVE:
+        if any(T.same(x, a) for x in q) and not any(T.same(x, b) for x in q):
+            only = [c for c in tier if not any(T.same(s, b) for s in T.stems(c.d.name))]
+            tier = only or tier
+    wants_parking = any(T.same(a, b) for a in q for b in _PARKING)
+    wants_small = any(T.same(a, b) for a in q for b in _SMALL)
+    keep = [c for c in tier
+            if (wants_parking or not any(T.same(a, b) for a in T.stems(c.d.name) for b in _PARKING))
+            and (wants_small or not any(T.same(a, b) for a in first_two(c) for b in _SMALL))]
+    return keep or tier
 
 
 def by_suppliers(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> dict[tuple, list["Candidate"]]:
@@ -772,6 +857,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         if p["status"] == "not_found":
             if "не деталь каталога" in p["note"]:
                 lines.append("   Это не из каталога автомобиля — подберём по названию и напишем.")
+            elif p["note"].startswith("В каталоге в этой группе нашёлся только"):
+                lines.append("   " + p["note"])   # «нашёлся только внутренний вариант — нужный уточним»
             else:
                 lines.append("   В каталоге для вашей машины сразу не нашли — уточним и напишем.")
             continue

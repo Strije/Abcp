@@ -77,5 +77,31 @@
     {"say": "KPTA0B1SSBP036638 фильтр салона", "expect": {"status": "no_quick_groups"}}]},
 
   {"name": "SsangYong: российский VIN — просим корейский", "turns": [
-    {"say": "SsangYong Korando Z8UTA0B1SDP000123 колодки", "expect": {"text": ["начинается на букву K"]}}]}
+    {"say": "SsangYong Korando Z8UTA0B1SDP000123 колодки", "expect": {"text": ["начинается на букву K"]}}]},
+
+  {"name": "Ford Focus III: подшипник задней ступицы — ступица в сборе", "turns": [
+    {"say": "X9FKXXEEBKCB57566 подшипник задней ступицы", "expect": {"status": "ok", "axis": "rear", "found": ["ступица"],
+                                                                   "text": ["ступиц"]}}]},
+  {"name": "Ford Focus III: колодки передние, термостат, катушка", "turns": [
+    {"say": "X9FKXXEEBKCB57566 колодки передние, термостат, катушка зажигания",
+     "expect": {"positions": 3, "found": ["колод", "термостат", "катушка"]}}]},
+  {"name": "Ford Focus III: ремень ГРМ — без цепи", "turns": [
+    {"say": "X9FKXXEEBKCB57566 ремень ГРМ", "expect": {"found": ["ремень"], "absent": ["цепи"]}}]},
+  {"name": "Ford Focus III: разговор — салонник, а воздушный, давайте первый", "turns": [
+    {"say": "X9FKXXEEBKCB57566 салонник", "expect": {"positions": 1}},
+    {"say": "а воздушный?", "expect": {"status": "ok", "positions": 1}},
+    {"say": "давайте первый", "expect": {"status": "order", "picks": 1}}]},
+  {"name": "VW Polo: комплект ГРМ — ремень, а не ШРУС", "turns": [
+    {"say": "XW8ZZZCKZMG026007 комплект ГРМ", "expect": {"absent": ["шрус", "замк", "личин"]}}]},
+  {"name": "VW Polo: колодки задние, помпа, датчик абс задний правый", "turns": [
+    {"say": "XW8ZZZCKZMG026007 колодки задние, помпа, датчик абс задний правый",
+     "expect": {"positions": 3, "found": ["колод", "насос", "датчик"]}}]},
+  {"name": "Toyota Camry: колодки передние — без стояночных и пружин", "turns": [
+    {"say": "XW7BF4FK30S064389 колодки передние", "expect": {"found": ["колод"], "absent": ["стояноч", "пружин"],
+                                                            "axis": "front"}}]},
+  {"name": "Toyota Camry: цепь ГРМ — сама цепь", "turns": [
+    {"say": "XW7BF4FK30S064389 цепь грм", "expect": {"found": ["цепь"], "absent": ["прокладк", "направляющ"]}}]},
+  {"name": "Toyota Camry: подшипник ступицы — спросить сторону, потом «задний»", "turns": [
+    {"say": "XW7BF4FK30S064389 подшипник ступицы", "expect": {"question": true}},
+    {"say": "задний", "expect": {"status": "ok", "axis": "rear"}}]}
 ]

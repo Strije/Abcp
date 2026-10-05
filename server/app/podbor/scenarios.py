@@ -1,6 +1,6 @@
 """Сценарии подбора: заявки и разговоры с ожидаемым ответом — проверка покрытия после каждой правки правил.
 
-    python -m app.podbor.scenarios                         # все сценарии из data/podbor_scenarios.json
+    python -m app.podbor.scenarios                         # data/podbor_scenarios.json и scenarios_local.json
     python -m app.podbor.scenarios -k колодки              # только те, где в названии есть «колодки»
     python -m app.podbor.scenarios -v                      # с текстом ответа клиенту на каждом шаге
 
@@ -27,6 +27,8 @@ from .engine import Engine, draft
 from .sources import Remote
 
 FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_scenarios.json"
+# Сценарии на настоящих заявках клиентов (их VIN) — только локально, в git не кладём: репозиторий публичный
+LOCAL = Path(__file__).resolve().parent / "scenarios_local.json"
 
 
 def check(res: dict, exp: dict) -> list[str]:
@@ -97,13 +99,13 @@ async def run(scenarios: list[dict], engine: Engine, verbose: bool) -> tuple[int
 
 async def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Проверка покрытия: сценарии заявок и разговоров")
-    ap.add_argument("file", nargs="?", default=str(FILE))
+    ap.add_argument("file", nargs="*", default=[str(FILE)] + ([str(LOCAL)] if LOCAL.exists() else []))
     ap.add_argument("-k", default="", help="только сценарии с этим словом в названии")
     ap.add_argument("-v", action="store_true", help="печатать ответ клиенту на каждом шаге")
     ap.add_argument("--remote", default="https://109.73.199.217")
     ap.add_argument("--cache", default=".podbor-cache")
     args = ap.parse_args(argv)
-    scenarios = [s for s in json.loads(Path(args.file).read_text(encoding="utf-8"))
+    scenarios = [s for f in args.file for s in json.loads(Path(f).read_text(encoding="utf-8"))
                  if args.k.lower() in s["name"].lower()]
     src = Remote(args.remote)
     try:
