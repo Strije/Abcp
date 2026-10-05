@@ -41,6 +41,7 @@ class Candidate:
     rows: list[dict] | None = None
     vote: tuple[str, int, int] = ("", 0, 0)
     warning: str = ""
+    foreign: bool = False        # по названию это деталь другой группы («Ремень грм» в «Ремне приводном» у Ford)
 
     @property
     def kind(self) -> tuple[str, str, str]:
@@ -57,10 +58,12 @@ class Engine:
         self.pr_axis = {code: axis for axis, codes in rules.get("pr_axis", {}).items() for code in codes}
         self.notes = [{k: [T.stem(w) for w in n[k]] for k in ("query", "detail", "lacks")} | {"text": n["text"]}
                       for n in rules.get("notes", [])]
+        self.not_catalog = [st for st in (T.stems(w, self.stop) for w in rules.get("not_catalog", {}).get("words", [])) if st]
         self.src = src
         self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []))
         self.warranty = {AB.get().key(b) for b in (warranty or set())}
         self._offers: dict[tuple[str, str], tuple[float, str, list[dict]]] = {}
+        self._own: dict[tuple[int, tuple[str, ...]], tuple | None] = {}
 
     # ---------- заявка целиком ----------
 
@@ -156,10 +159,19 @@ class Engine:
             i += 1
         return re.sub(r"\s+", " ", re.sub(r"\s*,\s*(,\s*)+", ", ", "".join(ws[i:]))).strip(" ,.") or query.strip()
 
+    def outside(self, q: list[str]) -> bool:
+        """Инструмент, химия, аксессуары: главное слово запроса — из списка «не каталог»
+        («очиститель тормозов», «камера заднего вида»), а не просто встречается в нём."""
+        h = T.head(q)
+        return any(all(any(T.same(w, s) for s in q) for w in nc) and T.same(h, T.head(nc)) for nc in self.not_catalog)
+
     async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side) -> dict:
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
                                "groups": [], "variants": [], "question": "", "note": ""}
         q = T.stems(query, self.stop)
+        if self.outside(q):
+            pos["note"] = "Это не деталь каталога автомобиля — подберём по названию."
+            return pos
         ranked = tree.rank(q, want)
         if not ranked or ranked[0][1] < 0.3:
             return pos
@@ -203,6 +215,8 @@ class Engine:
         names = {id(d): T.stems(d.name, self.stop) for d in pool}
         known = tree.known(q)
         extra = [s for s in q if s not in known and any(T.same(s, t) for st in names.values() for t in st)]
+        chosen = {g.id for g, _ in groups}
+        near = [t for g, _ in groups for p, _ in g.phrases for t in p]
         cands: dict[str, Candidate] = {}
         for d in pool:
             if d.match is False:
@@ -216,6 +230,7 @@ class Engine:
                 # (у Ford воздушный фильтр — «Фильтрующий элемент», трос ручника — тоже в «колодках ручника»)
                 prec, rec = tree.score(known + extra, names[id(d)])
                 score = gscore.get(d.group_id, 0) + 0.5 * prec
+                foreign = self._foreign(tree, names[id(d)], known, chosen, near)
             else:
                 # Не из состава группы — только по словам; слова группы помогают («ступичн» ~ «ступица»)
                 qd = list(dict.fromkeys(known + extra + gwords.get(d.group_id, [])))
@@ -226,9 +241,12 @@ class Engine:
             score += 0.05 if d.match else 0
             k = _key(d.oem)
             if k not in cands or score > cands[k].score:
-                cands[k] = Candidate(d, score, prec, member, ds, "каталог" if ds.axis else "")
+                cands[k] = Candidate(d, score, prec, member, ds, "каталог" if ds.axis else "",
+                                     foreign=member and foreign)
         if not cands:
             return []
+        if any(c.member and not c.foreign for c in cands.values()):
+            cands = {k: c for k, c in cands.items() if not c.foreign}
         mem = [c for c in cands.values() if c.member]
         if mem:
             top = max(c.score for c in mem)
@@ -247,6 +265,22 @@ class Engine:
         if any(c.d.match for c in tier):
             tier = [c for c in tier if c.d.match]
         return sorted(tier, key=lambda c: -c.score)[:MAX_VARIANTS]
+
+    def _foreign(self, tree: TreeIndex, name: list[str], q: list[str], chosen: set[int], near: list[str]) -> bool:
+        """Название детали целиком — название другой группы, и в той есть слово, которого нет ни в запросе,
+        ни в выбранных группах: «Ремень грм» при запросе «ремень генератора». Задняя «Ступица колеса»
+        в «Подшипнике ступичном» не чужая: «колеса» есть в разделе «Ступица колеса, составляющие»."""
+        if not name:
+            return False
+        key = (id(tree), tuple(name))
+        if key not in self._own:
+            r = tree.rank(name, T.Side())
+            self._own[key] = r[0] if r and r[0][1] >= 1.0 else None
+        hit = self._own[key]
+        if not hit or hit[0].id in chosen:
+            return False
+        words = hit[0].phrases[0][0]
+        return any(not any(T.same(w, t) for t in q + near) for w in words)
 
     async def _check_sides(self, v: Vehicle, cands: list[Candidate], want: T.Side) -> list[Candidate]:
         """Цены и описания поставщиков: заодно проверяем сторону там, где каталог её не написал."""

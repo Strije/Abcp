@@ -101,13 +101,39 @@ def split_pieces(chunk: str) -> list[str]:
     return [p.strip() for p in re.split(r",|\+|\s+и\s+|/", chunk) if p.strip()]
 
 
+# Прилагательное: окончание прилагательного и основа на -н/-ск/-ов/-ев/-ющ… («топливный» → «топливн»).
+# «помпой» (тоже на -ой) сюда не попадёт: основа «помп». Нужно, чтобы найти главное слово:
+# в «топливный фильтр» это «фильтр», а не первое слово.
+# «-ей» — только у причастий («охлаждающей»): «ремней», «шестерней», «вкладышей» — существительные.
+_ADJ_END = re.compile(r"(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ую|юю|ым|им|ых|их|ыми|ими)$|(?:ющ|ащ|ящ|ущ)ей$")
+_ADJ_STEM = re.compile(r"(?:н|ск|цк|ов|ев|ющ|ящ|ащ|ущ)$")
+ADJ: set[str] = set()
+
+
+def norm(word: str) -> str:
+    return word.lower().replace("ё", "е").replace("ë", "е").replace("ъ", "ь")
+
+
 @lru_cache(maxsize=20000)
 def stem(word: str) -> str:
-    return _stemmer.stemWord(word.lower().replace("ё", "е"))
+    w = norm(word)
+    s = _stemmer.stemWord(w)
+    if _ADJ_END.search(w) and _ADJ_STEM.search(s) and len(s) >= 4:
+        ADJ.add(s)
+    return s
+
+
+def head(q: list[str]) -> str | None:
+    """Главное слово фразы: первое не прилагательное («топливный фильтр» → «фильтр»)."""
+    return next((s for s in q if s not in ADJ), q[0] if q else None)
+
+
+# «Рем комплект», «рем. комплект» → «ремкомплект»
+_REMKOMPLEKT = re.compile(r"\bрем\.?\s*(?=комплект)", re.I)
 
 
 def words(text: str) -> list[str]:
-    return [w.lower().replace("ё", "е") for w in _WORD.findall(text or "")]
+    return [norm(w) for w in _WORD.findall(text or "")]
 
 
 _ABBR = re.compile(r"([a-zа-яё0-9]+)(\.(?=\s*[a-zа-яё]))?", re.I)
@@ -118,8 +144,8 @@ def stems(text: str, stop: frozenset[str] = frozenset()) -> list[str]:
     Сокращение с точкой посреди фразы («Комплект торм. колодок», «Повор.кулак») помечаем точкой:
     оно совпадает с любым словом, которое так начинается."""
     out = []
-    for m in _ABBR.finditer(text or ""):
-        w = m.group(1).lower().replace("ё", "е")
+    for m in _ABBR.finditer(_REMKOMPLEKT.sub("рем", text or "")):
+        w = norm(m.group(1))
         if len(w) < 3 or any(ch.isdigit() for ch in w) or side_of_word(w):
             continue
         s = stem(w)
@@ -138,6 +164,8 @@ def same(a: str, b: str) -> bool:
     («ступиц» ~ «ступичн», «колодк» ~ «колодок», но «крыш» ≠ «крышк»)."""
     if a == b:
         return True
+    if fleeting(a, b) or fleeting(b, a):
+        return True
     if a.endswith(".") or b.endswith("."):
         abbr, full = (a, b) if a.endswith(".") else (b, a)
         core = abbr[:-1]
@@ -147,7 +175,13 @@ def same(a: str, b: str) -> bool:
         if x != y:
             break
         n += 1
-    return n >= 5 and n >= min(len(a), len(b)) - 1
+    # Разница в длине — не больше двух букв: «стекл» ≠ «стеклоочистител», «датчик» ≠ «датчикabs» (склейка)
+    return n >= 5 and n >= min(len(a), len(b)) - 1 and abs(len(a) - len(b)) <= 2
+
+
+def fleeting(a: str, b: str) -> bool:
+    """Беглая гласная: «ремен» (ремень) ~ «ремн» (ремня), «бачок» ~ «бачк», «замок» ~ «замк»."""
+    return len(a) >= 5 and a[-2] in "ео" and a[:-2] + a[-1] == b
 
 
 def near(a: str, b: str) -> bool:

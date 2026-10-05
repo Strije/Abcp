@@ -193,6 +193,67 @@ def test_same_stems_and_abbreviations():
     assert T.same("торм.", "тормозн") and not T.same("торм.", "трос")
 
 
+def test_fleeting_vowel_and_length_limit():
+    assert T.same(T.stem("ремень"), T.stem("ремня")) and T.same(T.stem("бачок"), T.stem("бачка"))
+    # Начало слова совпадает, но это другое слово: «стекло» ≠ «стеклоочиститель»
+    assert not T.same(T.stem("стекло"), T.stem("стеклоочиститель"))
+    assert T.stem("стеклоподъемник") == T.stem("стеклоподьемник")
+
+
+def test_head_word_skips_adjectives():
+    assert T.head(T.stems("топливный фильтр")) == T.stem("фильтр")
+    assert T.head(T.stems("датчик положения распредвала")) == T.stem("датчик")
+    assert T.stems("Рем. комплект суппорта")[0] == "ремкомплект"
+
+
+def _index(synonyms=()):
+    from app.podbor.catalog import TreeIndex
+    tree = node(0, "Легковые", link=False, children=[
+        node(1, "Двигатель", link=False, children=[
+            node(4, "Фильтр топливный"), node(6, "Насос топливный"), node(11, "Ремень приводной"),
+            node(12, "Ремень ГРМ"), node(101, "Электроника двигателя, датчики"), node(142, "Датчик давления масла")]),
+        node(310, "Система охлаждения", link=False, children=[node(313, "Выключатель, датчик")]),
+        node(56, "Система нагнетания воздуха", "Компрессор,Турбина"),
+        node(780, "Кондиционер", link=False, children=[node(768, "Компрессор")]),
+        node(620, "Освещение", link=False, children=[node(623, "Фары передние"), node(650, "Фонарь задний")]),
+        node(13401, "Ремкомплект насоса ГУР"), node(71, "Комплект ремня ГРМ")])
+    return TreeIndex(tree, frozenset(), None, list(synonyms))
+
+
+def _top(ix, text):
+    r = ix.rank(T.stems(text), T.side(text))
+    return r[0][0].id if r else None
+
+
+def test_rank_section_glued_words_and_head():
+    ix = _index([{"words": ["ремень генератора"], "groups": [193, 11]},
+                 {"words": ["датчик коленвала", "датчик положения распредвала"], "groups": [101]}])
+    assert _top(ix, "Компрессор кондиционера") == 768        # раздел «Кондиционер» уточняет группу
+    assert _top(ix, "датчик температуры системы охлаждения") == 313
+    assert _top(ix, "MANN-FILTER ТОПЛИВНЫЙФИЛЬТР") == 4      # склейка и главное слово «фильтр»
+    assert _top(ix, "BMW ДАТЧИККОЛЕНВАЛА") == 101
+    assert _top(ix, "ремень генератора") == 11                # 193 у машины нет — следующая группа
+    assert _top(ix, "натяжитель ремня генератора") != 12      # «ремня» ~ «ремень»
+
+
+def test_synonym_side_and_whole_phrase():
+    ix = _index([{"words": ["фара задняя", "стоп сигнал"], "groups": [650]},
+                 {"words": ["ремкомплект грм"], "groups": [71]},
+                 {"words": ["подушка кпп"], "groups": [142]}])
+    assert _top(ix, "фара левая") == 623
+    assert _top(ix, "фара задняя правая") == 650
+    assert _top(ix, "ремкомплект ГРМ") == 71
+    # Часть синонима без его главного слова не считается: «кпп» — не «подушка кпп»
+    assert _top(ix, "кпп") is None
+    assert _top(ix, "подушка") == 142
+
+
+def test_not_catalog_position():
+    p = run("X9FKXXEEBKCB57566 очиститель тормозов 1 баллончик")["positions"][0]
+    assert p["status"] == "not_found" and "не деталь каталога" in p["note"]
+    assert not p["groups"]
+
+
 # ---------- подбор ----------
 
 def test_rear_hub_is_an_assembly():

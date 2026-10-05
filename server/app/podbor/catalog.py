@@ -168,10 +168,15 @@ class TreeIndex:
     """Группы, в которые можно зайти (link), с основами названий и синонимов и весом слов (IDF):
     редкое «ступиц» значит больше, чем частое «колес»."""
 
+    PATH_W = 0.9
+    WHOLE_REC = 0.5   # синоним: доля веса фразы, которая должна совпасть, и обязательно его главное слово
+
     def __init__(self, tree: Any, stop: frozenset[str], learned: dict[str, list[str]] | None = None,
                  synonyms: list[dict] | None = None):
         self.stop = stop
         self.groups: dict[int, Group] = {}
+        self.need: dict[tuple[int, tuple[str, ...]], str] = {}   # синоним только для одной стороны
+        self.whole: set[tuple[int, tuple[str, ...]]] = set()      # синоним считается только целиком
         roots = tree if isinstance(tree, list) else [tree]
         for r in roots:
             if isinstance(r, dict):
@@ -180,8 +185,20 @@ class TreeIndex:
         # (шаровая у Focus — часть рычага) — слово уходит в следующую, которая есть.
         for syn in synonyms or []:
             gid = next((int(g) for g in syn.get("groups", []) if int(g) in self.groups), None)
-            if gid is not None:
-                self.groups[gid].phrases += [(st, 1.0) for st in (T.stems(w, stop) for w in syn["words"]) if st]
+            if gid is None:
+                continue
+            for w in syn["words"]:
+                st = T.stems(w, stop)
+                if not st:
+                    continue
+                self.groups[gid].phrases.append((st, 1.0))
+                # Синоним — точная фраза: «ремкомплект грм» не должен ловить любой «ремкомплект»,
+                # «резинка дворника» — любую «резинку». Названия Laximo совпадают и частично.
+                self.whole.add((gid, tuple(st)))
+                # Слова стороны из основ выпадают: «фара задняя» без этого стала бы просто «фарой»
+                axis = T.side(w).axis
+                if axis:
+                    self.need[(gid, tuple(st))] = axis
         for gid, names in (learned or {}).items():
             g = self.groups.get(int(gid))
             if g:
@@ -195,6 +212,7 @@ class TreeIndex:
         self.max_idf = max(self.idf.values(), default=1.0)
         self.vocab = set(self.idf)
         self._fix: dict[str, str] = {}
+        self._split: dict[str, list[str]] = {}
 
     def fix(self, s: str) -> str:
         """Опечатка в одну букву → слово каталога («масленн» → «маслян», «шруз» → «шрус»)."""
@@ -211,6 +229,13 @@ class TreeIndex:
         if gid is not None and node.get("link") and name and gid not in self.groups:
             texts = [name] + [s.strip() for s in str(node.get("synonyms") or "").split(",") if s.strip()]
             phrases = [(st, 1.0) for st in (T.stems(t, self.stop) for t in texts) if st]
+            if phrases and path:
+                # Название раздела уточняет группу: «Компрессор» в «Кондиционере», «Выключатель, датчик»
+                # в «Системе охлаждения». Вес ниже: раздел — контекст, а не название детали.
+                own = phrases[0][0]
+                extra = [s for s in T.stems(path[-1], self.stop) if not any(T.same(s, t) for t in own)]
+                if extra:
+                    phrases.append((own + extra, self.PATH_W))
             if phrases:
                 self.groups[gid] = Group(gid, name, " › ".join(path), phrases, T.side(name))
         for ch in node.get("children") or []:
@@ -220,9 +245,33 @@ class TreeIndex:
     def weight(self, s: str) -> float:
         return self.idf.get(s) or next((v for k, v in self.idf.items() if T.same(s, k)), self.max_idf)
 
+    def _in_vocab(self, s: str) -> bool:
+        return any(T.same(s, v) for v in self.vocab)
+
+    def split(self, s: str) -> list[str]:
+        """Склеенные слова из прайсов: «датчикколенвала» → «датчик» + «коленва», «датчикabs» → «датчик» + «abs»,
+        «стойкастабилизаторапереднего» → «стойк» + «стабилизатор» (сторона дальше не нужна)."""
+        if s not in self._split:
+            self._split[s] = [s]
+            if not s.endswith(".") and len(s) >= 8 and not self._in_vocab(s):
+                for i in range(5, len(s) - 2):
+                    a = T.stem(s[:i])
+                    if not self._in_vocab(a):
+                        continue
+                    b = T.stem(s[i:])
+                    if self._in_vocab(b) or T.side_of_word(s[i:]):
+                        self._split[s] = [a] + ([b] if self._in_vocab(b) else [])
+                        break
+                    rest = self.split(s[i:])
+                    if rest != [s[i:]]:
+                        self._split[s] = [a] + rest
+                        break
+        return self._split[s]
+
     def known(self, q: list[str]) -> list[str]:
         """Слова запроса, которые есть в каталоге (опечатки исправлены). «форд», «фокус», «3» сюда не попадут."""
-        return [s for s in dict.fromkeys(self.fix(x) for x in q) if any(T.same(s, v) for v in self.vocab)]
+        parts = [p for x in q for p in self.split(x)]
+        return [s for s in dict.fromkeys(self.fix(x) for x in parts) if self._in_vocab(s)]
 
     def score(self, q: list[str], p: list[str]) -> tuple[float, float]:
         """(сколько запроса покрыто фразой, сколько фразы покрыто запросом) — с весами слов."""
@@ -236,16 +285,23 @@ class TreeIndex:
 
     def rank(self, q: list[str], want: T.Side) -> list[tuple[Group, float]]:
         q = self.known(q)
-        head = q[0] if len(q) > 1 else None   # главное слово: «ремень генератора», «датчик положения распредвала»
+        # Главное слово: «ремень генератора», «датчик положения распредвала», «топливный фильтр» → «фильтр»
+        head = T.head(q) if len(q) > 1 else None
         out = []
         for g in self.groups.values():
             best = 0.0
             for p, w in g.phrases:
+                need = self.need.get((g.id, tuple(p))) if self.need else None
+                if need and want.axis != need:
+                    continue
                 prec, rec = self.score(q, p)
+                if rec < 0.999 and (g.id, tuple(p)) in self.whole and (
+                        rec < self.WHOLE_REC or not any(T.same(T.head(p), s) for s in q)):
+                    continue
                 if prec and rec:
                     f = w * 2 * prec * rec / (prec + rec)
                     if head and any(T.same(head, t) for t in p):
-                        f += 0.1 if T.same(head, p[0]) else 0.0
+                        f += 0.1 if T.same(head, T.head(p)) else 0.0
                     elif head:
                         f *= 0.7   # главного слова нет — «ремень генератора» не «Генератор»
                     best = max(best, f)
