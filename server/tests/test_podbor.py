@@ -491,3 +491,11 @@ def test_shared_noun_and_politeness():
     # «можно узнать цену и сроки» — не позиция
     r = run("X9FKXXEEBKCB57566 Здравствуйте можно узнать цену и сроки, масляный фильтр")
     assert [p["query"] for p in r["positions"]] == ["масляный фильтр"]
+
+
+def test_original_with_leading_zero_and_english_names():
+    from app.podbor.engine import base_name, ru_name
+    o = curate([offer("CHRYSLER", "04892562AA", 900), offer("DAYCO", "6PK1", 500)], "4892 562AA", "CHRYSLER", set())
+    assert o["original"] and o["original"]["price"] == 900
+    assert ru_name(base_name("BELT, ALTERNATOR AND A/C COMPRESSOR")) == "Ремень генератора и кондиционера"
+    assert ru_name(base_name("BELT, POWER STEERING")) == "Ремень ГУР"

@@ -16,7 +16,7 @@ from .. import brands as AB
 from ..abcp import _key
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
-from .offers import axis_vote, brand_candidates, curate, oem_brand_for
+from .offers import axis_vote, brand_candidates, curate, lr_vote, oem_brand_for
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
 OFFERS_TTL = 600
@@ -47,7 +47,44 @@ class Candidate:
     def kind(self) -> tuple[str, str, str]:
         """Одна и та же деталь под разными номерами: у Ford рядом с оригиналом стоит его же
         версия Motorcraft («…, Не для гарантийного ремонта автомобиля, Motorcraft»)."""
-        return self.side.axis, self.side.lr, self.d.name.split(",")[0].strip().lower()
+        return self.side.axis, self.side.lr, base_name(self.d.name).lower()
+
+
+def base_name(name: str) -> str:
+    """Название детали без хвоста после запятой («…, Motorcraft», «…, Не включает водяной насос»).
+    Английские каталоги (Chrysler) пишут «BELT, POWER STEERING» — там после запятой сама суть, не режем."""
+    if re.fullmatch(r"[A-Z0-9 ,./&()'+-]+", name or ""):
+        return name.strip()
+    return (name or "").split(",")[0].strip()
+
+
+# Английские названия каталога для клиента: «BELT, ALTERNATOR AND A/C COMPRESSOR» → «Ремень генератора и кондиционера».
+# Только частые слова; чего нет в словаре — остаётся как есть.
+_EN_HEAD = {"BELT": "Ремень", "COVER": "Крышка", "TENSIONER": "Натяжитель", "PULLEY": "Шкив", "FILTER": "Фильтр",
+            "PAD": "Колодки", "PADS": "Колодки", "ROTOR": "Диск", "BEARING": "Подшипник", "HUB": "Ступица",
+            "PUMP": "Насос", "SENSOR": "Датчик", "GASKET": "Прокладка", "SEAL": "Сальник", "STRUT": "Стойка",
+            "SHOCK": "Амортизатор", "LINK": "Тяга", "ARM": "Рычаг", "BULB": "Лампа", "LAMP": "Фонарь",
+            "HEADLAMP": "Фара", "MIRROR": "Зеркало", "RADIATOR": "Радиатор", "THERMOSTAT": "Термостат",
+            "BRAKE": "Тормоз", "CALIPER": "Суппорт", "SPARK": "Свеча", "PLUG": "Свеча", "COIL": "Катушка",
+            "BOOT": "Пыльник", "BUSHING": "Втулка", "MOUNT": "Опора", "CHAIN": "Цепь", "IDLER": "Ролик обводной"}
+_EN_OF = {"A/C COMPRESSOR": "кондиционера", "TIMING BELT": "ГРМ", "TIMING CHAIN": "цепи ГРМ", "ALTERNATOR": "генератора", "A/C": "кондиционера", "COMPRESSOR": "компрессора", "POWER STEERING": "ГУР",
+          "WATER PUMP": "помпы", "TIMING": "ГРМ", "FAN": "вентилятора", "SERPENTINE": "поликлиновой",
+          "ACCESSORY DRIVE": "навесного оборудования", "OIL": "масляный", "AIR": "воздушный", "FUEL": "топливный",
+          "CABIN": "салонный", "FRONT": "передний", "REAR": "задний", "LEFT": "левый", "RIGHT": "правый",
+          "AND": "и", "ENGINE": "двигателя", "WHEEL": "колеса", "STABILIZER": "стабилизатора", "SWAY BAR": "стабилизатора"}
+
+
+def ru_name(name: str) -> str:
+    if not re.fullmatch(r"[A-Z0-9 ,./&()'+-]+", name or ""):
+        return name
+    parts = [p.strip() for p in name.split(",") if p.strip()]
+    head = _EN_HEAD.get(parts[0])
+    if not head:
+        return name
+    rest = " ".join(parts[1:])
+    for phrase in sorted(_EN_OF, key=len, reverse=True):   # сначала длинные: «POWER STEERING» раньше «POWER»
+        rest = re.sub(rf"(?<![A-Z]){re.escape(phrase)}(?![A-Z])", _EN_OF[phrase], rest)
+    return re.sub(r"\s+", " ", f"{head} {rest}").strip()
 
 
 class Engine:
@@ -59,6 +96,9 @@ class Engine:
         self.notes = [{k: [T.stem(w) for w in n[k]] for k in ("query", "detail", "lacks")} | {"text": n["text"]}
                       for n in rules.get("notes", [])]
         self.not_catalog = [st for st in (T.stems(w, self.stop) for w in rules.get("not_catalog", {}).get("words", [])) if st]
+        # Многозначные слова: «ГБЦ» — головка целиком или прокладка? Спросить, если в позиции нет уточнения
+        self.ask = [{"query": [T.stem(w) for w in a["query"]], "unless": [T.stem(w) for w in a.get("unless", [])],
+                     "text": a["text"]} for a in rules.get("ask", [])]
         self.src = src
         self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []))
         self.warranty = {AB.get().key(b) for b in (warranty or set())}
@@ -159,10 +199,15 @@ class Engine:
         ws = re.split(r"(\s+|,)", query)
         i = 0
         # Пропускаем стоп-слова и связки: «Здравствуйте, можно узнать цену и сроки, масляный фильтр» → «масляный фильтр»
-        while i < len(ws) and (not ws[i].strip(" ,.!?") or ws[i].strip(" ,.!?").lower() in self.stop
-                               or ws[i].strip(" ,.!?").lower() in ("и", "а", "по", "на", "в", "к", "с")):
+        skip = lambda w: (not w.strip(" ,.!?") or w.strip(" ,.!?").lower() in self.stop  # noqa: E731
+                          or w.strip(" ,.!?").lower() in ("и", "а", "по", "на", "в", "к", "с"))
+        while i < len(ws) and skip(ws[i]):
             i += 1
-        return re.sub(r"\s+", " ", re.sub(r"\s*,\s*(,\s*)+", ", ", "".join(ws[i:]))).strip(" ,.") or query.strip()
+        # И с конца: «…стоимость обводного ремня ....Спасибо.» → «обводного ремня»
+        j = len(ws)
+        while j > i and (skip(ws[j - 1]) or all(skip(x) for x in re.split(r"[.!?]+", ws[j - 1]) if x)):
+            j -= 1
+        return re.sub(r"\s+", " ", re.sub(r"\s*,\s*(,\s*)+", ", ", "".join(ws[i:j]))).strip(" ,.!?") or query.strip()
 
     def outside(self, q: list[str]) -> bool:
         """Инструмент, химия, аксессуары: главное слово запроса — из списка «не каталог»
@@ -207,6 +252,11 @@ class Engine:
         pos["variants"] = [self._variant(c, v, alt=i > 0) for cs in kinds.values()
                            for i, c in enumerate(sorted(cs, key=lambda c: (not (c.rows and _has_original(c, v)), -c.score)))]
         pos["status"], pos["question"] = verdict(list(kinds), want, query)
+        for a in self.ask:
+            if all(any(T.same(w, s) for s in q) for w in a["query"]) \
+                    and not any(T.same(w, s) for w in a["unless"] for s in q):
+                pos["status"] = "choose"
+                pos["question"] = (pos["question"] + " " if pos["question"] else "") + a["text"]
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
         pos["note"] = self._note(q, query, main, tree)
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
@@ -304,6 +354,9 @@ class Engine:
             elif axis and c.side.axis and axis != c.side.axis:
                 c.warning = (f"Каталог: {T.AXIS_RU[c.side.axis]}, а поставщики чаще пишут "
                              f"{T.AXIS_RU[axis]} ({f} против {r}) — проверьте")
+            if not c.side.lr and c.rows and (lr := lr_vote(c.rows)):
+                c.side = T.Side(c.side.axis, lr)
+                c.side_source = c.side_source or "поставщики"
             if not want.conflicts(c.side):
                 kept.append(c)
         return kept
@@ -471,7 +524,11 @@ def nice_name(desc: str, brand: str = "", number: str = "") -> str:
 CLIENT_TAGS = {"дешевле всего": "самый дешёвый", "частая замена": "часто берут", "гарантия магазина": "гарантия магазина"}
 
 
-def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "") -> str:
+_VAGUE = {"", "деталь", "автодеталь", "запчасть", "автозапчасть", "запасная часть", "товар", "изделие", "part",
+          "деталь автомобиля", "аналог", "оригинал"}
+
+
+def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "", fallback: str = "") -> str:
     """«• Kroner — Ступица задняя с подшипником — 3 930 ₽, 1 день · гарантия магазина».
     Артикул — только если менеджер включил его в настройках: клиенту он обычно не нужен."""
     brand = nice_brand(o["brand"])
@@ -479,6 +536,8 @@ def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "") -> str:
     if who:
         head += f" ({who})"
     title = name or nice_name(o.get("description", ""), o["brand"], o["number"])
+    if not name and title.lower().strip(" .…") in _VAGUE:
+        title = fallback   # «Деталь», «Автодеталь» — ни о чём: берём название из каталога
     line = f"• {head}" + (f" — {title}" if title else "") + f" — {money(o['price'])}, {when(o['days'])}"
     if o.get("cheaper"):
         line += f" (или {money(o['cheaper']['price'])} за {when(o['cheaper']['days'])})"
@@ -490,7 +549,7 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int) -> tuple[li
     """Строки одного варианта: оригинал, тот же оригинал под другим номером, аналоги по сроку."""
     out = []
     o = var["offers"]
-    catalog_name = var["name"].partition(",")[0].strip()
+    catalog_name = ru_name(base_name(var["name"]))
     if o and o["original"]:
         # Номер — из каталога: поставщики пишут его как попало («1 712 024»). Название — поставщика, если оно
         # про ту же деталь («Колодки тормозные передние»), иначе каталожное: «Focus 2011-> задний» ни о чём
@@ -510,7 +569,7 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int) -> tuple[li
     more = 0
     if o and o["analogs"]:
         shown = o["analogs"][:analogs]
-        out += [_offer_line(a, numbers) for a in shown]
+        out += [_offer_line(a, numbers, fallback=catalog_name) for a in shown]
         more = o["stats"]["articles"] - 1 - len(shown)
     return out, max(more, 0)
 
@@ -572,7 +631,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 if not side or labels.count(side) > 1:
                     # Несколько вариантов на одной стороне: «Задняя, вариант 2 — «Скоба»»
                     seen[side] = seen.get(side, 0) + 1
-                    name = var["name"].partition(",")[0].strip()
+                    name = ru_name(base_name(var["name"]))
                     side = (f"{side}, вариант {seen[side]}" if side else f"Вариант {n}") + f" — «{name}»"
                 lines += ["", f"   {side}" + (f" ({per})" if per else "") + ":"]
             elif per:

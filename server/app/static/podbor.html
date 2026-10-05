@@ -52,6 +52,8 @@
   .cheaper { font-size: 12px; color: var(--muted); }
   .ocr { display: flex; gap: 12px; align-items: center; margin: -8px 0 16px; font-size: 14px; }
   .ocr img { max-height: 90px; max-width: 140px; border-radius: 6px; border: 1px solid var(--line); }
+  .ok-text { color: var(--ok); }
+  .alt-vin { font-family: ui-monospace, Consolas, monospace; padding: 2px 8px; margin: 2px; font-size: 13px; }
   .ocr .vin { font-family: ui-monospace, Consolas, monospace; font-weight: 700; font-size: 16px; }
   textarea.drop { outline: 2px dashed var(--accent); }
   .opt { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 14px; }
@@ -241,6 +243,30 @@ function vinsIn(text) {
   return all.filter(([, n], i) => i === 0 || n >= 2).map(x => x[0]);
 }
 
+// Контрольная цифра (9-й знак). Обязательна у машин для Северной Америки (VIN на 1–5): по ней видно,
+// «1C3ALB6R…» или «1C3AL56R…» — на фото B и 5, 8 и B, S и 5 похожи. У других рынков её может не быть.
+const VIN_VAL = Object.fromEntries([..."ABCDEFGHJKLMNPRSTUVWXYZ"].map((c, i) =>
+  [c, [1,2,3,4,5,6,7,8,1,2,3,4,5,7,9,2,3,4,5,6,7,8,9][i]]));
+const VIN_W = [8,7,6,5,4,3,2,10,0,9,8,7,6,5,4,3,2];
+const LOOKS_LIKE = {B: "85S", 8: "B5S", 5: "SB8", S: "5B8", Z: "2", 2: "Z", G: "6", 6: "G", D: "0", 0: "D", A: "4", 4: "A", T: "7", 7: "T", U: "V", V: "U"};
+
+function vinCheckOk(v) {
+  const s = [...v].reduce((a, c, i) => a + (/\d/.test(c) ? +c : VIN_VAL[c]) * VIN_W[i], 0) % 11;
+  return v[8] === (s === 10 ? "X" : String(s));
+}
+
+function vinByCheck(v) {
+  if (vinCheckOk(v)) return {vin: v, check: "ok"};
+  if (!/^[1-5]/.test(v)) return {vin: v, check: ""};
+  const alts = new Set();
+  for (let i = 0; i < 17; i++)
+    for (const c of LOOKS_LIKE[v[i]] || "") {
+      const w = v.slice(0, i) + c + v.slice(i + 1);
+      if (VIN_OK.test(w) && vinCheckOk(w)) alts.add(w);
+    }
+  return alts.size === 1 ? {vin: [...alts][0], check: "fixed", was: v} : {vin: v, check: "bad", alts: [...alts].slice(0, 4)};
+}
+
 async function readVin(file) {
   if (!file || !file.type.startsWith("image/")) return;
   const box = $("#ocr"), url = URL.createObjectURL(file);
@@ -254,16 +280,30 @@ async function readVin(file) {
       box.innerHTML = `<img src="${url}" alt=""><span class="warn">VIN на фото не нашли — впишите его вручную (17 знаков).</span>`;
       return;
     }
-    const vin = vins[0];
+    const {vin, check, was, alts} = vinByCheck(vins[0]);
     const t = $("#text");
     if (!t.value.toUpperCase().includes(vin)) t.value = `VIN: ${vin}\n` + t.value.replace(/^VIN:\s*\S+\n/i, "");
-    box.innerHTML = `<img src="${url}" alt=""><span>VIN с фото: <span class="vin">${esc(vin)}</span> — сверьте с фото.
+    const note = check === "ok" ? `<span class="ok-text">✓ контрольная цифра сходится</span>`
+      : check === "fixed" ? `<span class="warn">исправили по контрольной цифре (прочитали ${esc(was)})</span>`
+      : check === "bad" ? `<span class="warn">контрольная цифра не сходится — проверьте знаки внимательно${alts && alts.length
+          ? `. С контрольной цифрой сходятся: ${alts.map(a => `<button class="alt-vin" data-vin="${esc(a)}">${esc(a)}</button>`).join(" ")}` : ""}</span>`
+      : "сверьте с фото";
+    box.innerHTML = `<img src="${url}" alt=""><span>VIN с фото: <span class="vin">${esc(vin)}</span> — ${note}.
       ${vins.length > 1 ? `<br><span class="muted">Ещё похоже на VIN: ${vins.slice(1, 3).map(esc).join(", ")}</span>` : ""}</span>`;
     t.focus();
   } catch (e) {
     box.innerHTML = `<img src="${url}" alt=""><span class="err">Не получилось распознать: ${esc(e.message || e)}. Впишите VIN вручную.</span>`;
   }
 }
+
+// Нажатие на вариант VIN — подставить его в заявку вместо прочитанного
+$("#ocr").addEventListener("click", e => {
+  const b = e.target.closest(".alt-vin");
+  if (!b) return;
+  const t = $("#text");
+  t.value = `VIN: ${b.dataset.vin}\n` + t.value.replace(/^VIN:\s*\S+\n/i, "");
+  b.parentElement.querySelectorAll(".alt-vin").forEach(x => x.disabled = x !== b);
+});
 
 $("#photo-btn").addEventListener("click", () => $("#photo").click());
 $("#photo").addEventListener("change", e => readVin(e.target.files[0]));

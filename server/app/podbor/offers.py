@@ -95,6 +95,25 @@ def axis_vote(rows: list[dict]) -> tuple[str, int, int]:
     return "", front, rear
 
 
+def lr_vote(rows: list[dict]) -> str:
+    """Лево/право по описаниям поставщиков — тем же правилом, что и перед/зад. «прав/лев» не считается:
+    это деталь на обе стороны. Нужно, когда каталог назвал сторону только у одной из пары
+    («Левая головка блока» и просто «Головка блока цилиндров» у V6 Toyota)."""
+    seen: dict[tuple, str] = {}
+    for r in rows:
+        k = (bkey(r.get("brand")), _key(r.get("numberFix") or r.get("number")))
+        d = str(r.get("description") or "")
+        if d and k not in seen:
+            seen[k] = d
+    left = sum(1 for d in seen.values() if T.LEFT.search(d) and not T.RIGHT.search(d))
+    right = sum(1 for d in seen.values() if T.RIGHT.search(d) and not T.LEFT.search(d))
+    if left >= 2 and left >= 4 * right:
+        return "left"
+    if right >= 2 and right >= 4 * left:
+        return "right"
+    return ""
+
+
 def days(hours: Any) -> int:
     h = _num(hours)
     return 0 if h <= 0 else math.ceil(h / 24)
@@ -146,7 +165,7 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
     clean = [r for r in rows if _num(r.get("price")) > 0 and str(r.get("isUsed") or "0") in ("0", "", "False", "false")]
     if name:
         clean = [r for r in clean if not not_the_part(str(r.get("description") or ""), name)
-                 or _key(r.get("numberFix") or r.get("number")) == _key(oem)]
+                 or _key(r.get("numberFix") or r.get("number")).lstrip("0") == _key(oem).lstrip("0")]
     fast: dict[tuple, dict] = {}
     cheap: dict[tuple, dict] = {}
     count: dict[tuple, int] = {}
@@ -157,8 +176,9 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
             fast[k] = r
         if k not in cheap or _cost(r) < _cost(cheap[k]):
             cheap[k] = r
-    okeys, onum = original_keys(car_brand), _key(oem)
-    is_orig = lambda k: k[0] in okeys and k[1] == onum  # noqa: E731
+    # Ведущий ноль: Laximo пишет «4892 562AA», поставщики — «04892562AA» (Chrysler/Mopar)
+    okeys, onum = original_keys(car_brand), _key(oem).lstrip("0")
+    is_orig = lambda k: k[0] in okeys and k[1].lstrip("0") == onum  # noqa: E731
     ok = next((k for k in fast if is_orig(k)), None)
     original = _offer(fast[ok], ["оригинал"], count[ok], cheap[ok]) if ok else None
 
