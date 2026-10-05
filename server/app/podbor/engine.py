@@ -184,6 +184,8 @@ class Engine:
             return self._done(res, "no_quick_groups" if e.code == "E_NOTSUPPORTED" else "catalog_error", t0, mem)
         positions = mem.get("positions") or []
         plan = D.plan(text, mem, self.stop, tree, analogs, self.clean)
+        if plan["kind"] != "chat" and plan.get("handoff"):
+            res["handoff"] = plan["handoff"]   # на это менеджер отвечает сам — бот сделал свою часть
         if plan["kind"] in ("pick", "pick_unclear", "answer"):
             r = plan["reply"]
             res["reply"] = await self._reply(r, positions, v)
@@ -846,6 +848,18 @@ def reply_text(r: dict, numbers: bool = False) -> str:
                       _offer_line(a["offer"], numbers, who=a["who"])]
         elif t == "brand":
             lines += [f"{title} — есть:", _offer_line(a["offer"], numbers, who=a["who"])]
+        elif t in ("stock", "fastest", "more", "quality"):
+            head = {"stock": f"{title} — в наличии:",
+                    "fastest": f"{title}: в наличии нет, быстрее всего привезём:",
+                    "more": f"{title} — ещё варианты:",
+                    "quality": f"{title} — хорошие отзывы владельцев:"}[t]
+            if lines and lines[-1] == "" and head in lines:
+                lines.pop()   # та же позиция и тот же вопрос — строки подряд под одним заголовком
+            else:
+                lines.append(head)
+            lines.append(_offer_line(a["offer"], numbers, who=a["who"]))
+        elif t == "none_more":
+            lines.append(f"{title}: подберём ещё варианты — подскажите бюджет или фирму, которую рассматриваете.")
         elif t == "no_brand":
             lines.append(f"{title}: фирмы {a.get('word', '')} у поставщиков сейчас нет.")
         elif t.startswith("none_"):

@@ -621,3 +621,20 @@ def test_brand_reviews_need_whole_category():
     r = R.find("Stellox", ["свечи зажигания", "Свеча зажигания"])
     assert r is None or r["category"] != "свеча накаливания"
     R._table.cache_clear()
+
+
+def test_dialog_memory_answers_and_handoff():
+    e = Engine(Fake(), None, set())
+    first = run("XW7BF4FK30S064389 колодки задние", e)
+    mem = first["memory"]
+    stock = run("в наличии есть?", e, memory=mem)   # у всех 4 дня — в наличии нет, говорим самый быстрый
+    assert stock["status"] == "answer" and "в наличии нет, быстрее всего" in stock["text"]
+    more = run("а какие еще есть?", e, memory=mem)  # показали три аналога из четырёх — четвёртый
+    assert more["status"] == "answer" and "ещё варианты" in more["text"] and "703 ₽" in more["text"]
+    both = run("Давайте первый. Куда перевести деньги?", e, memory=mem)
+    assert both["status"] == "order" and both["handoff"] == ["Куда перевести деньги?"]
+    # Статус и визит — не новая деталь, даже если названа деталь
+    assert run("Подскажите, датчик не пришёл ещё?", e, memory=mem)["status"] == "chat"
+    assert run("Хорошо, давайте этот вариант", e, memory=mem)["status"] == "order"
+    new = run("А расходомер воздуха?", e, memory=mem)
+    assert new["status"] in ("ok", "chat")   # в маленьком тестовом дереве его может не быть — главное, не заказ

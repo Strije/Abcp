@@ -190,6 +190,8 @@ def refers(piece: str, p: dict, stop: frozenset[str]) -> bool:
     if not st:
         return False
     names = T.stems(p["query"], stop) + [s for v in p.get("variants", []) for s in T.stems(v["name"], stop)]
+    # И описания поставщиков: каталог зовёт «Амортизатор», поставщик — «Стойка газовая» — клиент пишет как поставщик
+    names += [s for x in all_offers(p)[:8] for s in T.stems(str(x["offer"].get("description") or "")[:60], stop)]
     return any(T.same(a, b) for a in st for b in names)
 
 
@@ -288,6 +290,26 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     if k not in found:
                         ask_brand += [{"position": positions.index(p), "brand": k, "word": w}
                                       for p in scope]
+            elif STOCK.search(piece):
+                touched = True
+                for p in scope:
+                    vis = shown(p, analogs)
+                    here = [x for x in vis if x["offer"]["days"] <= 0][:3]
+                    if here:
+                        answers += [("stock", p, x) for x in here]
+                    elif vis:
+                        answers.append(("fastest", p, min(vis, key=lambda x: (x["offer"]["days"], x["offer"]["price"]))))
+            elif MORE.search(piece):
+                touched = True
+                for p in scope:
+                    seen = {(x["offer"]["brand"], x["offer"]["number"]) for x in shown(p, analogs)}
+                    extra = [x for x in all_offers(p) if (x["offer"]["brand"], x["offer"]["number"]) not in seen][:3]
+                    answers += [("more", p, x) for x in extra] or [("more", p, None)]
+            elif QUALITY.search(piece):
+                rated = [(p, x) for p in scope for x in shown(p, analogs) if (x["offer"].get("reviews") or {}).get("client")]
+                if rated:   # без отзывов о качестве судить нечем — это менеджеру
+                    touched = True
+                    answers += [("quality", p, x) for p, x in rated]
             continue
         if CHEAPER.search(piece) and not uniq and not ACCEPT.search(piece):
             touched = True   # «дорого», «дороговато» — покажем самый недорогой
@@ -367,16 +389,36 @@ OPPOSITE = [("верхн", "нижн"), ("передн", "задн"), ("лев",
             ("внешн", "внутрен"), ("продольн", "поперечн")]
 
 
-# Вопрос про уже предложенную деталь: «В сборе она?», «Это же комплект на 4 цилиндра?», «он с абс?»
-ABOUT_OFFER = re.compile(r"(?:\b(?:это|он|она|оно|они|эти|этот|эта|такой|такая)\b.*\?|\?.*\b(?:это|он|она|оно|они)\b)",
-                         re.I | re.S)
+# Вопрос про уже предложенную деталь: «В сборе она?», «Это с колбой вместе или сам насос», «там 2 сайлента?»
+ABOUT_OFFER = re.compile(r"\b(?:это|он|она|оно|они|эти|этот|эта|такой|такая)\b.*\?|\?.*\b(?:это|он|она|оно|они)\b"
+                         r"|\bили\s+(?:нет|сам|сама|само|отдельно|без|с|со)\b|\bвместе\s+или\b|\bтам\b[^?]*\?|\bза\s+одно\b"
+                         r"|\bчем\s+(?:хуже|лучше|отлича)|\bразниц|\bкачеств|\bправильно\b", re.I | re.S)
+# Статус заказа, визит, оплата: «не пришёл датчик?», «подъеду завтра», «адрес магазина» — это менеджеру
+STATUS = re.compile(r"\bприш[её]л|\bпришл[аи]\b|приехал|доехал|приедет|подъед|оплач|заберу|забрать|\bадрес|маршрут|"
+                    r"прицени|не\s+понадоб|на\s+когда|до\s+какого\s+часа|во\s+сколько|отпишу|забира|переводом|"
+                    r"\bв\s+корзину", re.I)
+# Согласие на показанное: «давайте этот вариант», «беру все кроме болтов» — выбор, а не новая деталь
+ACCEPT_THIS = re.compile(r"\b(?:давайте|давай|беру|возьму|берём|берем|заказываю|заказываем|закаж\w*|заказыва\w*)\b.*"
+                         r"\b(?:этот|эту|это|его|е[её]|их|все|вс[её]|вариант|тоже)\b"
+                         r"|\bкроме\b.*\b(?:закаж\w*|заказыва\w*|беру|давайте|оформ\w*)", re.I | re.S)
+# Что менеджер должен ответить сам, даже если остальное в сообщении бот понял
+HANDOFF = re.compile(STATUS.pattern + r"|оплат|\bкарт[уы]\b|\bqr\b|\bчек\b|доставк|отправ|скидк|фото|ссылк|возврат|"
+                     r"работаете|когда|перев[оеё]д|перевест|\bсбер|\bбанк", re.I)
+# Вопросы по показанным предложениям, на которые память отвечает сама
+STOCK = re.compile(r"наличи|на\s+сегодня|сегодня\s+(?:есть|будет|можно|забрать)|сейчас\s+есть", re.I)
+MORE = re.compile(r"\b(?:какие|что)\s+(?:ещ[её]|еще)\s+(?:есть|бывают|можно)|други[ех]\s+(?:вариант|фирм|производ)|"
+                  r"ещ[её]\s+вариант|\bаналог\w*\s+есть|\bесть\s+аналог", re.I)
+QUALITY = re.compile(r"качеств|хорош\w*\s*\?|надёжн|надежн|\bнорм\w*\s*\?|как\s+(?:ходят|ходит|служ)", re.I)
 _ADJ_WORD = re.compile(r"(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ую|юю|ым|им|ых|их|ыми|ими)$")
 _NOUN_LIKE = re.compile(r"(?:ние|тие|ье|ьё)$")
 
 
 # Общие слова: «детали приедут», «машина у мастера», «кулак» в «Кулакова» — не новая деталь
 GENERIC = {T.stem(w) for w in ("деталь", "детали", "запчасть", "запчасти", "машина", "авто", "автомобиль", "механик",
-                                "мастер", "вопрос", "товар", "заказ", "кулаков", "цена", "фирма", "производитель")}
+                                "мастер", "вопрос", "товар", "заказ", "кулаков", "цена", "фирма", "производитель",
+                                # Свойства предложенной детали: «Комплект?», «А в сборе весь есть?», «диаметр какой?»
+                                "комплект", "сборе", "сбор", "диаметр", "размер", "толщина", "длина", "ширина", "вид",
+                                "формат", "качество", "штука", "пара", "перевод", "корзину")}
 
 
 def adj_word(w: str) -> bool:
@@ -476,14 +518,18 @@ def plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
     # Точно из словаря каталога (длинные — и с опечаткой): «Кулакова 18/3» — адрес, «трени» — не «тренога»
     noun = next((s for w in surface if not adj_word(w) and (s := T.stem(w)) not in GENERIC
                  and (s in tree.vocab or (len(s) >= 6 and tree.fix(s) in known))), None)
-    new_part = bool(noun) and not names_old
+    new_part = bool(noun) and not names_old and not ACCEPT_THIS.search(text) and not STATUS.search(text)
     out: dict[str, Any] = {"kind": "chat", "reply": None, "jobs": [], "replaced": []}
     if DEFER.search(text):
         return out
     manager = bool(MANAGER.search(text))
+    # Что в сообщении ответить менеджеру самому: «Заказывайте. Куда перевести?» — бот оформит, оплату — менеджер
+    out["handoff"] = [s.strip() for s in re.split(r"(?<=[.?!])\s+|\n+", text) if s.strip() and HANDOFF.search(s)]
 
     r = offer_reply(text, mem, stop, analogs)
     if r and (r.get("picks") or r.get("answers") or r.get("ask_brand") or not new_part):
+        if r.get("answers") and all(k == "stock" or k == "fastest" for k, _, _ in r["answers"]):
+            out["handoff"] = [s for s in out["handoff"] if not STOCK.search(s)]   # про наличие бот ответил сам
         kind = "answer" if r["kind"] == "answer" else "pick" if r.get("picks") else "pick_unclear"
         return out | {"kind": kind, "reply": r}
 

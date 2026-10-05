@@ -258,6 +258,7 @@ function botMessage(t, ti) {
       `<button onclick="pickVehicle(${ti},${i})">${esc(v.summary)}</button>`).join("")}</div>` : "";
   const more = d.positions.length || d.warnings.length;
   return `<div class="msg bot">
+    ${d.handoff && d.handoff.length ? `<div class="warn" style="margin-bottom:6px">Ответьте сами: ${d.handoff.map(h => "«" + esc(h) + "»").join(", ")}</div>` : ""}
     ${BOT_NOTE[d.status] && (d.status !== "order" || (d.reply && d.reply.picks.length))
       ? `<div class="muted" style="margin-bottom:6px">${esc(BOT_NOTE[d.status])}</div>` : ""}
     ${d.text ? `<pre id="draft-${ti}">${esc(d.text)}</pre>` : ""}

@@ -244,18 +244,21 @@ def followups(path: str, out: str | None = None):
         asked = [ENGINE.clean(p) for m in ms[:i] if m["role"] == "client"
                  for ch in T.parse(m["text"]).chunks for p in [ch] if INDEX.known(T.stems(p, STOP))]
         cases.append((nxt, offer_memory(ms[i]["text"], asked)))
-    counts = collections.Counter()
+    counts, handoff = collections.Counter(), collections.Counter()
     per = collections.defaultdict(list)
     for text, mem in cases:
-        kind = plan(text, mem, STOP, INDEX, 3, ENGINE.clean)["kind"] if mem["positions"] else "chat"
+        pl = plan(text, mem, STOP, INDEX, 3, ENGINE.clean) if mem["positions"] else {"kind": "chat"}
+        kind = pl["kind"]
         counts[kind] += 1
+        handoff[kind] += kind != "chat" and bool(pl.get("handoff"))
         per[kind].append(text)
     print(f"Диалогов с ответом-ценой и ответом клиента: {len(cases)}")
     for k, c in counts.most_common():
-        print(f"  {KINDS[k]:<38} {c:5}  {c * 100 / len(cases):5.1f}%")
+        part = f"  (из них {handoff[k]} — и вопрос менеджеру)" if handoff[k] else ""
+        print(f"  {KINDS[k]:<38} {c:5}  {c * 100 / len(cases):5.1f}%{part}")
     if out:
-        random.seed(7)
-        Path(out).write_text(json.dumps({k: random.sample(v, min(60, len(v))) for k, v in per.items()},
+        random.seed(int(__import__("os").environ.get("SEED", "7")))
+        Path(out).write_text(json.dumps({k: random.sample(v, min(120, len(v))) for k, v in per.items()},
                                         ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"Примеры по видам: {out}")
 
