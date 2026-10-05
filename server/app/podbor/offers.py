@@ -214,4 +214,7 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
         "analogs": [_offer(fast[k], tags.get(k, []), count[k], cheap[k]) for k in chosen],
         "stats": {"offers": len(clean), "articles": len(fast),
                   "price_min": min(prices) if prices else 0, "price_max": max(prices) if prices else 0},
+        # Все номера-кроссы оригинала: по ним видно, что оригинал определён верно, даже если менеджер
+        # ответил аналогом не из показанных пяти (и для поиска по номеру, который назвал клиент)
+        "numbers": sorted({k[1] for k in fast}),
     }

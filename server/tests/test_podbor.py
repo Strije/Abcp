@@ -353,8 +353,24 @@ def test_tree_and_vehicle_cached():
     assert [c[0] for c in fake.calls].count("listQuickGroup") == 1
     assert (folder / "trees" / "FORD202201.json").exists()
     fake2 = Fake()
-    run("X9FKXXEEBKCB57566 масляный фильтр", Engine(fake2, folder))   # новый процесс — дерево с диска
-    assert "listQuickGroup" not in [c[0] for c in fake2.calls]
+    run("X9FKXXEEBKCB57566 масляный фильтр", Engine(fake2, folder))   # новый процесс — всё с диска
+    # Ни машины, ни дерева, ни состава группы у Laximo больше не спрашиваем; цены — всегда свежие
+    assert [c for c in fake2.calls if c[0] != "offers"] == []
+    assert list((folder / "details" / "FORD202201").glob("*/2.json.gz"))
+
+    class Down(Fake):
+        async def laximo(self, method, params):
+            raise RuntimeError("Laximo не отвечает")
+
+    # Laximo лежит, а данные на диске устарели — всё равно отвечаем по сохранённому
+    import app.podbor.catalog as C
+    old = (C.TREE_TTL, C.VEHICLE_TTL, C.DETAILS_TTL)
+    C.TREE_TTL = C.VEHICLE_TTL = C.DETAILS_TTL = -1
+    try:
+        r = run("X9FKXXEEBKCB57566 масляный фильтр", Engine(Down(), folder))
+    finally:
+        C.TREE_TTL, C.VEHICLE_TTL, C.DETAILS_TTL = old
+    assert r["status"] == "ok" and r["positions"][0]["variants"][0]["oem"] == "1883037"
 
 
 def test_full_units_only_as_fallback():

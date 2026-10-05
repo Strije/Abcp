@@ -5,6 +5,8 @@
 к Laximo. Машину по VIN и списки деталей держим в памяти несколько часов: менеджер часто
 спрашивает по той же машине ещё раз.
 """
+import gzip
+import hashlib
 import json
 import math
 import re
@@ -15,9 +17,12 @@ from typing import Any, Awaitable, Callable
 
 from . import text as T
 
-TREE_TTL = 7 * 24 * 3600
-VEHICLE_TTL = 6 * 3600
-DETAILS_TTL = 6 * 3600
+# Всё, что пришло из Laximo, копится на диске навсегда — это и кэш, и материал для обучения
+# (название группы → как детали называются у разных марок). Сроки — когда переспросить Laximo;
+# если он не ответил, берём сохранённое, каким бы старым оно ни было.
+TREE_TTL = 30 * 24 * 3600
+VEHICLE_TTL = 90 * 24 * 3600
+DETAILS_TTL = 30 * 24 * 3600
 
 
 class LaximoError(Exception):
@@ -343,6 +348,10 @@ class TreeIndex:
 Call = Callable[[str, dict], Awaitable[Any]]
 
 
+def _safe(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", s)
+
+
 class Catalog:
     def __init__(self, call: Call, folder: Path | None, stop: frozenset[str], synonyms: list[dict] | None = None):
         self.synonyms = synonyms or []
@@ -372,8 +381,33 @@ class Catalog:
             return
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        tmp.write_bytes(gzip.compress(raw) if name.endswith(".gz") else raw)
         tmp.replace(p)
+
+    def _load_any(self, name: str) -> Any:
+        p = self._path(name)
+        try:
+            if not p or not p.exists():
+                return None
+            raw = p.read_bytes()
+            return json.loads(gzip.decompress(raw) if name.endswith(".gz") else raw)
+        except (OSError, ValueError, EOFError):
+            return None
+
+    async def _cached(self, name: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> Any:
+        """Ответ Laximo с диска, если свежий; иначе спросить и сохранить. Laximo не ответил — старый с диска."""
+        saved = self._load_any(name) if self.folder else None
+        if saved and time.time() - float(saved.get("saved", 0)) < ttl:
+            return saved["data"]
+        try:
+            data = check_error(await fetch())
+        except Exception:
+            if saved:
+                return saved["data"]
+            raise
+        self._save(name, {"saved": time.time(), "data": data})
+        return data
 
     # --- машина ---
     async def vehicles(self, ident: str = "", plate: str = "") -> list[Vehicle]:
@@ -382,10 +416,13 @@ class Catalog:
         if hit and time.time() - hit[0] < VEHICLE_TTL:
             return hit[1]
         if ident:
-            data = await self.call("findVehicle", {"identString": ident})
+            data = await self._cached(f"vehicles/{_safe(ident)}.json", VEHICLE_TTL,
+                                      lambda: self.call("findVehicle", {"identString": ident}))
         else:
-            data = await self.call("findVehicleByPlateNumber", {"countryCode": "ru", "plateNumber": plate})
-        found = parse_vehicles(check_error(data))
+            data = await self._cached(f"vehicles/plate_{_safe(plate)}.json", VEHICLE_TTL,
+                                      lambda: self.call("findVehicleByPlateNumber",
+                                                        {"countryCode": "ru", "plateNumber": plate}))
+        found = parse_vehicles(data)
         self._vehicles[key] = (time.time(), found)
         return found
 
@@ -420,7 +457,9 @@ class Catalog:
         hit = self._details.get(key)
         if hit and time.time() - hit[0] < DETAILS_TTL:
             return hit[1]
-        data = check_error(await self.call("listQuickDetail", {
+        car = hashlib.sha1(f"{v.vehicle_id}|{v.ssd}".encode()).hexdigest()[:16]
+        name = f"details/{_safe(v.catalog)}/{car}/{group_id}{'-all' if full else ''}.json.gz"
+        data = await self._cached(name, DETAILS_TTL, lambda: self.call("listQuickDetail", {
             "catalog": v.catalog, "ssd": v.ssd, "vehicleId": v.vehicle_id,
             "quickGroupId": str(group_id), "all": "true" if full else "false"}))
         found = parse_details(data, group_id)
