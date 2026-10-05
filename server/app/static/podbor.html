@@ -50,6 +50,9 @@
   @media (prefers-reduced-motion: reduce) { .scheme .hit::after { animation: none; opacity: .8; } }
   .scheme-note { font-size: 13px; margin-top: 4px; }
   .cheaper { font-size: 12px; color: var(--muted); }
+  a.chip.rv { text-decoration: none; color: var(--text); }
+  a.chip.rv.good { background: rgba(43, 138, 62, .15); }
+  a.chip.rv.bad { background: rgba(201, 42, 42, .15); }
   .ocr { display: flex; gap: 12px; align-items: center; margin: -8px 0 16px; font-size: 14px; }
   .ocr img { max-height: 90px; max-width: 140px; border-radius: 6px; border: 1px solid var(--line); }
   .ok-text { color: var(--ok); }
@@ -122,6 +125,16 @@ const money = x => Math.round(x).toLocaleString("ru-RU") + " ₽";
 const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one
   : (n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14)) ? few : many;
 const when = d => d <= 0 ? "в наличии" : d + " " + plural(d, "день", "дня", "дней");
+// Отзывы владельцев о фирме по этому виду детали: менеджеру — всё, включая жалобы; клиенту уходит только хорошее
+const reviews = o => {
+  const r = o.reviews;
+  if (!r) return "";
+  const n = r.good + r.bad + r.mixed;
+  const text = n ? `отзывы: ${r.good} хор. / ${r.bad} плох.${r.mixed ? ` / ${r.mixed} по-разному` : ""}` : `отзывов ${r.total}, без оценки`;
+  const tip = [r.category, r.summary, r.site_rating ? `рейтинг на сайте ${r.site_rating}` : ""].filter(Boolean).join(" · ");
+  const cls = n >= 3 && r.good / n >= 0.7 ? "rv good" : n >= 3 && r.bad / n >= 0.5 ? "rv bad" : "rv";
+  return `<a class="chip ${cls}" title="${esc(tip)}" ${r.source ? `href="${esc(r.source)}" target="_blank" rel="noopener"` : ""}>${esc(text)}</a>`;
+};
 const cheaper = o => o.cheaper ? `<div class="cheaper">или ${money(o.cheaper.price)} за ${when(o.cheaper.days)}</div>` : "";
 const SIDE = {front: "передн.", rear: "задн.", left: "лев.", right: "прав."};
 const STATUS = {found: "найдено", choose: "уточнить", not_found: "не найдено"};
@@ -194,10 +207,10 @@ function resetChat() {
 function offersTable(o) {
   if (!o) return `<p class="muted">Цен нет — уточнит менеджер.</p>`;
   const rows = [];
-  if (o.original) rows.push(`<tr><td><b>${esc(o.original.brand)} ${esc(o.original.number)}</b> <span class="chip">оригинал</span></td>
+  if (o.original) rows.push(`<tr><td><b>${esc(o.original.brand)} ${esc(o.original.number)}</b> <span class="chip">оригинал</span>${reviews(o.original)}</td>
      <td class="num">${when(o.original.days)}</td><td class="num">${money(o.original.price)}${cheaper(o.original)}</td></tr>`);
   for (const a of o.analogs) rows.push(`<tr><td>${esc(a.brand)} ${esc(a.number)}<br><span class="muted">${esc(a.description)}</span>
-     ${a.tags.map(t => `<span class="chip">${esc(t)}</span>`).join("")}${a.confirm >= 2 ? `<span class="chip">★${a.confirm}</span>` : ""}</td>
+     ${a.tags.map(t => `<span class="chip">${esc(t)}</span>`).join("")}${a.confirm >= 2 ? `<span class="chip">★${a.confirm}</span>` : ""}${reviews(a)}</td>
      <td class="num">${when(a.days)}</td><td class="num">${money(a.price)}${cheaper(a)}</td></tr>`);
   const s = o.stats;
   return `<table><tr><th>Аналоги — сначала что привезём быстрее</th><th class="num">Срок</th><th class="num">Цена</th></tr>${rows.join("")}</table>

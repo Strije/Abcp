@@ -598,3 +598,18 @@ def test_dialog_answer_to_question_replaces_position():
     # Новый VIN посреди разговора — новая машина, старые позиции забыты
     fresh = run("XW7BF4FK30S064389 колодки задние", e, memory=ans["memory"])
     assert fresh["memory"]["ident"] == "XW7BF4FK30S064389" and len(fresh["memory"]["positions"]) == 1
+
+
+def test_brand_reviews_client_sees_only_good():
+    from app.podbor import reviews as R
+    from app.podbor.engine import _offer_line
+    R._table.cache_clear()
+    good = R.find("LYNXauto", ["свечи зажигания"])
+    assert good and good["category"] == "свеча зажигания" and R.public(good)["client"]
+    weak = R.find("Zekkert", ["шаровая опора нижняя"])   # 1 хороший из 3 — клиенту не показываем
+    assert weak and not R.public(weak)["client"]
+    assert R.find("Aisin", ["помпа"])["category"] == "насос водяной"   # «помпа» = «насос водяной»
+    o = {"brand": "LYNXauto", "number": "SP1", "description": "Свеча зажигания", "price": 400, "days": 1, "tags": []}
+    assert "хорошие отзывы владельцев" in _offer_line(dict(o, reviews=R.public(good)), False)
+    assert "отзывы" not in _offer_line(dict(o, reviews=R.public(weak)), False)
+    R._table.cache_clear()

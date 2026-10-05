@@ -15,6 +15,7 @@ from typing import Any
 from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
+from . import reviews as R
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
 from .offers import _offer, axis_vote, brand_candidates, curate, days, lr_vote, oem_brand_for
@@ -375,6 +376,9 @@ class Engine:
         kinds = by_suppliers(kinds, tree.known(q))
         pos["variants"] = [self._variant(c, v, alt=i > 0) for cs in kinds.values()
                            for i, c in enumerate(sorted(cs, key=lambda c: (not (c.rows and _has_original(c, v)), -c.score)))]
+        # Отзывы владельцев о фирмах по этому виду детали — по словам клиента и названиям групп
+        for var in pos["variants"]:
+            R.annotate(var, [query] + [g.name for g, _ in groups])
         pos["status"], pos["question"] = verdict(list(kinds), want, query)
         for a in self.ask:
             if all(any(T.same(w, s) for s in q) for w in a["query"]) \
@@ -682,6 +686,10 @@ def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "", fallback:
     if o.get("cheaper"):
         line += f" (или {money(o['cheaper']['price'])} за {when(o['cheaper']['days'])})"
     tags = [CLIENT_TAGS[t] for t in o.get("tags", []) if t in CLIENT_TAGS]
+    rv = o.get("reviews") or {}
+    if rv.get("client"):   # только хорошее и только при 3+ отзывах — см. reviews.py
+        n = rv["good"] + rv["bad"] + rv["mixed"]
+        tags.append(f"хорошие отзывы владельцев ({rv['good']} из {n})")
     return line + (f" · {', '.join(tags)}" if tags else "")
 
 
@@ -831,6 +839,7 @@ def reply_text(r: dict, numbers: bool = False) -> str:
             lines.append(f"{title}: оригинала у поставщиков сейчас нет — только аналоги.")
         elif t == "best":
             why = {"гарантия магазина": "на него гарантия магазина",
+                   "отзывы": "у него хорошие отзывы владельцев",
                    "частая замена": "его чаще всего берут",
                    "оригинал": "это оригинал"}.get(a.get("why", ""), "")
             lines += [f"{title} — советуем этот вариант" + (f": {why}." if why else "."),
