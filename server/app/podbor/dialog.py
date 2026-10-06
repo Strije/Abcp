@@ -230,15 +230,21 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
     last_turn = max(p.get("turn", 0) for p in positions)
     recent = [p for p in positions if p.get("turn", 0) == last_turn]
     pieces = _pieces(text) or [text]
-    for piece in pieces:
+    chooses = lambda pc: bool(_numbers(pc) or brand_words(pc) or _ordinal(pc) or ORIGINAL.search(pc))  # noqa: E731
+    for i, piece in enumerate(pieces):
         scope = [p for p in positions if refers(piece, p, stop)]
+        # «Тяги» — про «Рулевую тягу», а не про «Наконечник рулевой тяги»: где слово клиента — главное
+        heads = [p for p in scope if any(T.same(w, T.head(T.stems(p["query"], stop)) or "") for w in T.stems(piece, stop))]
+        scope = heads or scope
         named = bool(scope)
+        # «Тяги и наконечники давайте зекерт» — фирма из следующей части относится и к этой
+        said = piece if chooses(piece) else next((pc for pc in pieces[i + 1:] if chooses(pc)), piece)
         # Деталь не названа — речь о последнем ответе: «давайте первый» после «а задние?» — про задние
         scope = scope or recent
         side = T.side(piece)
-        nums, brands, n_ord = _numbers(piece), brand_words(piece), _ordinal(piece)
-        orig = bool(ORIGINAL.search(piece)) and not NOT_ORIGINAL.search(piece)
-        orig_pick = orig and bool(ACCEPT.search(piece))   # «оригинал давайте», а не «оригинал есть» и не «оригинал дорого»
+        nums, brands, n_ord = _numbers(said), brand_words(said), _ordinal(said)
+        orig = bool(ORIGINAL.search(said)) and not NOT_ORIGINAL.search(said)
+        orig_pick = orig and bool(ACCEPT.search(said))   # «оригинал давайте», а не «оригинал есть» и не «оригинал дорого»
 
         def match(where: list[dict]) -> list[tuple]:
             out = []
