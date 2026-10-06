@@ -324,8 +324,8 @@ class Engine:
     def outside(self, q: list[str]) -> bool:
         """Инструмент, химия, аксессуары: главное слово запроса — из списка «не каталог»
         («очиститель тормозов», «камера заднего вида»), а не просто встречается в нём."""
-        h = T.head(q)
-        return any(all(any(T.same(w, s) for s in q) for w in nc) and T.same(h, T.head(nc)) for nc in self.not_catalog)
+        return any(all(any(T.same(w, s) for s in q) for w in nc) and T.same(_main(q), _main(nc))
+                   for nc in self.not_catalog)
 
     async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side) -> dict:
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
@@ -420,7 +420,7 @@ class Engine:
                 pos["asked"] = True
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
         pos["note"] = fallback_note or self._note(q, query, main, tree)
-        if head_miss and not pos["note"]:   # своё пояснение важнее: «подшипник» → «ступица в сборе»
+        if head_miss and not pos["note"] and re.search(r"[а-яё]", main.d.name, re.I):   # «BOOT KIT…» — не пропуск   # своё пояснение важнее: «подшипник» → «ступица в сборе»
             pos["note"] = (f"«{head_miss[:1].upper() + head_miss[1:]}» уточним по каталогу отдельно, "
                            f"ниже — «{ru_name(main.d.name)}».")
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
@@ -557,6 +557,7 @@ class Engine:
             "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
                        "image": image_url(d.image) if d.image else "", "code": d.code_on_image},
             "offers": curate(c.rows, d.oem, v.brand, self.warranty, name=d.name) if c.rows else None,
+            "facts": desc_facts(c.rows or []),
         }
 
     def _note(self, q: list[str], query: str, c: Candidate, tree: TreeIndex) -> str:
@@ -583,6 +584,21 @@ _ATTRS = [(re.compile(r"наружн|внешн", re.I), re.compile(r"внутр
           (re.compile(r"впуск", re.I), re.compile(r"выпуск", re.I), "впускной", "выпускной")]
 
 
+def desc_facts(rows: list[dict]) -> list[str]:
+    """Признаки детали по всем описаниям поставщиков: «наружный», «передний». Для ответа на
+    «это внутренний или наружный?» — берём только явное: есть «за» и почти нет «против»."""
+    descs = {str(r.get("description") or "").strip().lower() for r in rows} - {""}
+    out = []
+    for a, b, a_name, b_name in _ATTRS + [(T.FRONT, T.REAR, "передний", "задний")]:
+        ya = sum(1 for d in descs if a.search(d) and not b.search(d))
+        yb = sum(1 for d in descs if b.search(d) and not a.search(d))
+        if ya and ya >= 3 * yb:
+            out.append(a_name)
+        elif yb and yb >= 3 * ya:
+            out.append(b_name)
+    return out
+
+
 def attr_check(cands: list["Candidate"], query: str) -> tuple[list["Candidate"], str]:
     """Убираем номера, про которые поставщики почти единогласно пишут обратный признак
     (3+ артикула и вчетверо больше, как со стороной). Возвращаем ещё, какой признак нашёлся вместо нужного."""
@@ -593,13 +609,13 @@ def attr_check(cands: list["Candidate"], query: str) -> tuple[list["Candidate"],
                 continue
             keep = []
             for c in cands:
-                seen: dict[tuple, str] = {}
-                for r in c.rows or []:
-                    k = (str(r.get("brand") or "").upper(), _key(r.get("numberFix") or r.get("number")))
-                    seen.setdefault(k, str(r.get("description") or ""))
-                yes = sum(1 for d in seen.values() if want.search(d) and not other.search(d))
-                no = sum(1 for d in seen.values() if other.search(d) and not want.search(d))
-                if no >= 3 and no >= 4 * yes:
+                # Все разные описания, не одно на артикул: у пыльника GM оригинал — один номер, и только
+                # один поставщик из нескольких пишет «пыльник шруса внешнего»
+                descs = {str(r.get("description") or "").strip().lower() for r in c.rows or []} - {""}
+                yes = sum(1 for d in descs if want.search(d) and not other.search(d))
+                no = sum(1 for d in descs if other.search(d) and not want.search(d))
+                # Много описаний — нужен явный перевес; мало (только оригинал) — хватит одного явного и ни одного «за»
+                if (no >= 3 and no >= 4 * yes) or (no >= 1 and yes == 0 and len(descs) <= 4):
                     found = other_name
                 else:
                     keep.append(c)
@@ -607,6 +623,14 @@ def attr_check(cands: list["Candidate"], query: str) -> tuple[list["Candidate"],
     return cands, found
 
 
+_BUNDLE = {T.stem(w) for w in ("набор", "комплект", "ящик", "кейс")}
+
+
+def _main(q: list[str]) -> str | None:
+    """Главное слово; у «набора отвёрток», «комплекта бит» — то, что в наборе."""
+    h = T.head(q)
+    nouns = [s for s in q if s not in T.ADJ and s != h]
+    return nouns[0] if h in _BUNDLE and nouns else h
 _PARKING = [T.stem(w) for w in ("стояночного", "стояночный", "ручного", "ручник")]
 # Общие слова: «комплект ГРМ» — не повод писать «Комплект уточним отдельно»
 _GENERIC_HEADS = {T.stem(w) for w in ("комплект", "набор", "ремкомплект", "к-т", "деталь", "запчасть")}
@@ -794,7 +818,8 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
     out = []
     o = var["offers"]
     catalog_name = ru_name(base_name(var["name"]))
-    if catalog_name.lower().strip(" .…") in _VAGUE:   # у VAG бывает и просто «Деталь»
+    if catalog_name.lower().strip(" .…") in _VAGUE or not re.search(r"[а-яё]", catalog_name, re.I):
+        # у VAG бывает и просто «Деталь», у GM — «BOOT KIT,FRT WHL DRV SHF CV JT»: тогда слова клиента
         catalog_name = query[:1].upper() + query[1:]
     if o and o["original"]:
         # Номер — из каталога: поставщики пишут его как попало («1 712 024»). Название — поставщика, если оно
@@ -912,7 +937,12 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     lines.append("")
     lines.append("Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем." if found
                  else "Уточним по позициям и напишем.")
+    lines.append(ANYTHING_ELSE)
     return "\n".join(lines).strip("\n")
+
+
+# Клиент часто пишет одну деталь, а нужно несколько: спросить, всё ли (менеджеры спрашивают так же)
+ANYTHING_ELSE = "Что-то ещё нужно по этой машине?"
 
 
 def _title(x: dict) -> str:
@@ -954,6 +984,12 @@ def reply_text(r: dict, numbers: bool = False) -> str:
             else:
                 lines.append(head)
             lines.append(_offer_line(a["offer"], numbers, who=a["who"]))
+        elif t == "spec":
+            name = a["query"][:1].upper() + a["query"][1:]   # без стороны в заголовке: она в самом ответе
+            lines.append(f"{name}: {a.get('why', '')}")
+        elif t == "none_no_analogs":
+            lines.append(f"{title}: аналогов у поставщиков по этому номеру сейчас нет — только оригинал. "
+                         f"Поищем другие фирмы и напишем.")
         elif t == "none_more":
             lines.append(f"{title}: подберём ещё варианты — подскажите бюджет или фирму, которую рассматриваете.")
         elif t == "no_brand":
@@ -978,6 +1014,7 @@ def reply_text(r: dict, numbers: bool = False) -> str:
             if not x.get("qty") and k and int(k.group(0)) > 1:
                 lines.append(f"   Цена за штуку, на машину нужно {int(k.group(0))} — сколько штук оформить?")
         lines.append(f"Итого: {money(total)}. " + ("Всё в наличии." if longest <= 0 else f"Срок — {when(longest)}."))
+        lines.append(ANYTHING_ELSE)
     for q in r.get("unclear", []):
         lines.append(f"По позиции «{q}» напишите, какой вариант оформить — фирму или цену.")
     if r.get("kind") == "order" and not picks and not r.get("unclear"):

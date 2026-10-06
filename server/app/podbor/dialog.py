@@ -86,7 +86,8 @@ def _slim(p: dict) -> dict:
     return {"query": p["query"], "side": p.get("side") or {}, "status": p["status"], "question": p.get("question", ""),
             "asked": bool(p.get("asked")),
             "variants": [{"name": v["name"], "oem": v["oem"], "brand": v["brand"], "axis": v["axis"], "lr": v["lr"],
-                          "amount": v.get("amount", ""), "alt": v.get("alt", False), "offers": _slim_offers(v.get("offers"))}
+                          "amount": v.get("amount", ""), "alt": v.get("alt", False), "offers": _slim_offers(v.get("offers")),
+                          "facts": v.get("facts", [])}
                          for v in p.get("variants", [])]}
 
 
@@ -235,7 +236,9 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
         scope = scope or recent
         side = T.side(piece)
         nums, brands, n_ord = _numbers(piece), brand_words(piece), _ordinal(piece)
-        orig = bool(ORIGINAL.search(piece))
+        orig = bool(ORIGINAL.search(piece)) and not NOT_ORIGINAL.search(piece)
+        orig_pick = orig and bool(ACCEPT.search(piece))   # «оригинал давайте», а не «оригинал есть» и не «оригинал дорого»
+
         def match(where: list[dict]) -> list[tuple]:
             out = []
             for p in where:
@@ -251,7 +254,7 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                         out.append((p, x, True))
                     elif brands and any(k == _bk(o["brand"]) for _, k in brands):
                         out.append((p, x, False))
-                    elif orig and x["who"] == "оригинал" and not brands and not nums:
+                    elif orig_pick and x["who"] == "оригинал" and not brands and not nums:
                         out.append((p, x, False))
             return out
 
@@ -267,6 +270,15 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     hits.append((p, vis[idx], False))
         # Один артикул у разных предложений позиции встречается один раз; цена могла совпасть у двух позиций
         uniq = list({(id(p), x["offer"]["brand"], x["offer"]["number"]): (p, x, c) for p, x, c in hits}.values())
+        if question and SPEC.search(piece) and SPEC_ASK.search(piece) and not NEED.search(piece):
+            touched = True
+            for p in scope:
+                spec = _spec(p, analogs)
+                if spec:
+                    answers.append(("spec", p, spec))
+            if ONLY_ORIGINAL.search(piece) or orig:
+                answers += [_analogs_answer(p, analogs) for p in scope]
+            continue
         if question:
             if CHEAPER.search(piece):
                 touched = True
@@ -276,6 +288,9 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                 touched = True
                 for p in scope:
                     answers.append(("best", p, _best(p)))
+            elif ONLY_ORIGINAL.search(piece) and not orig:
+                touched = True   # «аналоги есть?», «только оригинал?»
+                answers += [_analogs_answer(p, analogs) for p in scope]
             elif orig:
                 touched = True
                 for p in scope:
@@ -304,17 +319,18 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                 for p in scope:
                     seen = {(x["offer"]["brand"], x["offer"]["number"]) for x in shown(p, analogs)}
                     extra = [x for x in all_offers(p) if (x["offer"]["brand"], x["offer"]["number"]) not in seen][:3]
-                    answers += [("more", p, x) for x in extra] or [("more", p, None)]
+                    answers += [("more", p, x) for x in extra] or [_analogs_answer(p, analogs)]
             elif QUALITY.search(piece):
                 rated = [(p, x) for p in scope for x in shown(p, analogs) if (x["offer"].get("reviews") or {}).get("client")]
                 if rated:   # без отзывов о качестве судить нечем — это менеджеру
                     touched = True
                     answers += [("quality", p, x) for p, x in rated]
             continue
-        if CHEAPER.search(piece) and not uniq and not ACCEPT.search(piece):
-            touched = True   # «дорого», «дороговато» — покажем самый недорогой
+        if (CHEAPER.search(piece) or NOT_ORIGINAL.search(piece)) and not uniq and not ACCEPT.search(piece):
+            touched = True   # «дорого», «любую другую фирму» — самый недорогой, а если аналогов нет — так и скажем
             for p in scope:
-                answers.append(("cheapest", p, _cheapest(p)))
+                has = any(x["who"] == "" for x in all_offers(p))
+                answers.append(("cheapest", p, _cheapest(p)) if has else _analogs_answer(p, analogs))
             continue
         if uniq:
             touched = True
@@ -341,6 +357,60 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
     if answers or ask_brand:
         return {"kind": "answer", "answers": answers, "ask_brand": ask_brand, "picks": picks}
     return {"kind": "order", "picks": picks, "unclear": list(dict.fromkeys(p["query"] for p in unclear))}
+
+
+def _analogs_answer(p: dict, analogs: int) -> tuple:
+    """«Аналоги есть?» Есть — покажем; нет — честно: только оригинал, поищем другие фирмы (это менеджеру)."""
+    extra = [x for x in all_offers(p) if x["who"] == ""]
+    if extra:
+        return ("more", p, extra[0])
+    return ("no_analogs", p, None)
+
+
+def _spec(p: dict, analogs: int) -> dict | None:
+    """«Это внутренний или наружный? левый или правый?» — по каталогу (сторона) и по описаниям поставщиков
+    (наружный/внутренний, верхний/нижний). Чего нет в данных — так и говорим, не угадываем."""
+    vis = shown(p, analogs)
+    if not vis:
+        return None
+    x = vis[0]
+    descs = [str(y["offer"].get("description") or "") for y in all_offers(p)]
+    # Признаки, посчитанные при подборе по всем описаниям поставщиков (в памяти — по одному на предложение)
+    facts = list(dict.fromkeys(f for v in p.get("variants", []) for f in v.get("facts", [])))
+    for a, b, a_name, b_name in _DESC_ATTRS:
+        if a_name in facts or b_name in facts:
+            continue
+        ya = sum(1 for d in descs if a.search(d) and not b.search(d))
+        yb = sum(1 for d in descs if b.search(d) and not a.search(d))
+        if ya and ya >= 2 * yb:
+            facts.append(a_name)
+        elif yb and yb >= 2 * ya:
+            facts.append(b_name)
+    axes = {v["axis"] for v in p.get("variants", [])}
+    if "передний" not in facts and "задний" not in facts and len(axes - {""}) == 1:
+        facts.append({"front": "передний", "rear": "задний"}[next(iter(axes - {""}))])
+    lrs = {v["lr"] for v in p.get("variants", []) if not v.get("alt")} - {""}
+    if len(lrs) == 2:
+        side = "левый и правый — разные номера, оба есть"
+    elif len(lrs) == 1:
+        side = {"left": "левый", "right": "правый"}[next(iter(lrs))]
+    else:
+        side = "левый или правый — в каталоге не различается"
+    text = (", ".join(facts) + "; " if facts else "") + side
+    return dict(x, why=text[:1].upper() + text[1:] + ".")
+
+
+def spec_need(text: str, target: dict) -> list[tuple[str, "T.Side"]]:
+    """«Нужны внутренние левый и правый и наружные» → поиски: «пыльник шруса внутренний», «… наружный»."""
+    if not NEED.search(text):
+        return []
+    attrs = [name for rx, name in _ATTR_WORDS if rx.search(text)]
+    if not attrs:
+        return []
+    base = strip_side(target["query"])
+    for rx, _ in _ATTR_WORDS:
+        base = " ".join(w for w in base.split() if not rx.search(w))
+    return [(f"{base} {a}", T.Side()) for a in attrs]
 
 
 def _pick(p: dict, x: dict, cheaper: bool, qty: int) -> dict:
@@ -402,8 +472,23 @@ ACCEPT_THIS = re.compile(r"\b(?:давайте|давай|беру|возьму|
                          r"\b(?:этот|эту|это|его|е[её]|их|все|вс[её]|вариант|тоже)\b"
                          r"|\bкроме\b.*\b(?:закаж\w*|заказыва\w*|беру|давайте|оформ\w*)", re.I | re.S)
 # Что менеджер должен ответить сам, даже если остальное в сообщении бот понял
-HANDOFF = re.compile(STATUS.pattern + r"|оплат|\bкарт[уы]\b|\bqr\b|\bчек\b|доставк|отправ|скидк|фото|ссылк|возврат|"
+HANDOFF = re.compile(STATUS.pattern + r"|друг\w*\s+фирм|\bаналог|оплат|\bкарт[уы]\b|\bqr\b|\bчек\b|доставк|отправ|скидк|фото|ссылк|возврат|"
                      r"работаете|когда|перев[оеё]д|перевест|\bсбер|\bбанк", re.I)
+# «Оригинал» как отказ, а не выбор: «оригинал — это дорого», «любую другую фирму», «не оригинал»
+NOT_ORIGINAL = re.compile(r"дорог|друг\w*\s+фирм|люб\w*\s+(?:друг|фирм)|\bне\s+ориг|кроме\s+ориг|подешевле", re.I)
+# Вопрос о свойствах показанной детали: «это внутренний или наружный? левый или правый?»
+SPEC = re.compile(r"внутрен|наружн|внешн|\bлев\w*|\bправ\w*|передн|задн|верхн|нижн", re.I)
+# …именно вопрос о показанном («это внутренний или наружный?»), а не просьба («а задние?»)
+SPEC_ASK = re.compile(r"\b(?:это|он|она|оно|они|или|какой|какая|какие)\b", re.I)
+ONLY_ORIGINAL = re.compile(r"только\s+ориг|аналог", re.I)
+# «Нужны внутренние и наружные» — новый поиск по признаку, а не вопрос
+NEED = re.compile(r"\bнуж\w*|\bнадо\b|\bтребу\w*", re.I)
+_ATTR_WORDS = [(re.compile(r"внутр", re.I), "внутренний"), (re.compile(r"наружн|внешн", re.I), "наружный"),
+               (re.compile(r"верхн", re.I), "верхний"), (re.compile(r"нижн", re.I), "нижний")]
+_DESC_ATTRS = [(re.compile(r"наружн|внешн", re.I), re.compile(r"внутр", re.I), "наружный", "внутренний"),
+               (re.compile(r"верхн", re.I), re.compile(r"нижн", re.I), "верхний", "нижний"),
+               (T.FRONT, T.REAR, "передний", "задний")]
+
 # Вопросы по показанным предложениям, на которые память отвечает сама
 STOCK = re.compile(r"наличи|на\s+сегодня|сегодня\s+(?:есть|будет|можно|забрать)|сейчас\s+есть", re.I)
 MORE = re.compile(r"\b(?:какие|что)\s+(?:ещ[её]|еще)\s+(?:есть|бывают|можно)|други[ех]\s+(?:вариант|фирм|производ)|"
@@ -525,6 +610,14 @@ def plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
     manager = bool(MANAGER.search(text))
     # Что в сообщении ответить менеджеру самому: «Заказывайте. Куда перевести?» — бот оформит, оплату — менеджер
     out["handoff"] = [s.strip() for s in re.split(r"(?<=[.?!])\s+|\n+", text) if s.strip() and HANDOFF.search(s)]
+
+    if positions and names_old or (positions and not new_part):
+        target_i = next((i for i, p in enumerate(positions) if refers(text, p, stop)), len(positions) - 1)
+        jobs = spec_need(text, positions[target_i])
+        if jobs:
+            # Остальное в сообщении («любую другую фирму, оригинал дорого») — менеджеру
+            return out | {"kind": "attr", "jobs": jobs, "replaced": [],
+                          "handoff": out["handoff"] or ([text.strip()] if NOT_ORIGINAL.search(text) else [])}
 
     r = offer_reply(text, mem, stop, analogs)
     if r and (r.get("picks") or r.get("answers") or r.get("ask_brand") or not new_part):
