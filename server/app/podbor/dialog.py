@@ -30,7 +30,8 @@ BOTH = re.compile(r"\b(?:обе|оба|обои|обоих|те\s+и\s+те|и\s
 # Отсрочка и отказ: «подумаю», «закажу попозже», «не актуально» — это не выбор, отвечает менеджер
 DEFER = re.compile(r"подума|подумать|попозже|позже|потом\s+(?:закаж|напиш|отпиш)|отпиш[уе]с|перезвон|наберу|сообщу|"
                    r"не\s+надо|не\s+нужн|не\s+заказыв|отмен|не\s*актуал|передумал|в\s+другом\s+месте|нашл[иа]?\b|нашёл|нашел|"
-                   r"определимся|согласую|пока\s+не|пока\s+ни|думает|думаю|отбой|решу|дам\s+ответ", re.I)
+                   r"определимся|согласую|пока\s+не|пока\s+ни|думает|думаю|отбой|решу|дам\s+ответ|"
+                   r"\b(?:уже\s+)?(?:купил|взял|нашёл|нашел)\b(?!\s+бы)", re.I)
 # Вопросы, на которые память подбора не отвечает: наличие, цена за штуку, сроки, оплата, адрес, фото
 MANAGER = re.compile(r"наличи|за\s+(?:штуку|шт|пару|1|одну|один|комплект)\b|правильно|верно|когда|во\s+сколько|сколько\s+ехать|"
                      r"адрес|оплат|карт[уы]|чек|qr|ссылк|фото|скидк|возврат|доставк|отправ|забрать|заберу|работаете|"
@@ -601,6 +602,13 @@ def _sure(out: dict, text: str) -> bool:
     ответ на вопрос бота; короткая новая деталь; «подумаю». Не уверены: согласие без варианта, длинное
     или многострочное сообщение с новой деталью, «не про подбор» без явной отсрочки."""
     kind = out["kind"]
+    # Длинное или в несколько строк — правилам не доверяем: «Это не тот / Тогда давайте вкладыши шатунные»
+    # они принимали за выбор, «если нужен будет, закажу» — тоже (замер на переписке 2024: 24% ошибок)
+    if len(text.strip()) > 50 or "\n" in text.strip():
+        return kind == "chat" and bool(DEFER.search(text)) and len(text) <= 120
+    # Вопрос — не выбор и не новая деталь: «От Соренто по креплениям подходит?», «А установка сколько стоит?»
+    if "?" in text and kind in ("pick", "pick_unclear", "new"):
+        return False
     if kind == "pick":
         return bool((out.get("reply") or {}).get("picks"))
     if kind in ("answer", "side", "attr", "reply"):
@@ -612,7 +620,7 @@ def _sure(out: dict, text: str) -> bool:
     return False
 
 
-def from_llm(d: dict, mem: dict, analogs: int = 3) -> dict:
+def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
     """Ответ модели о следующем сообщении → те же действия, что у правил: выбор, ответы, поиск, менеджеру,
     уточняющий вопрос клиенту. Ссылки модели на П/В проверяем: несуществующие пропускаем."""
     positions = mem.get("positions") or []
@@ -622,12 +630,18 @@ def from_llm(d: dict, mem: dict, analogs: int = 3) -> dict:
     def pos(i):
         return positions[i - 1] if i and 0 < i <= len(positions) else None
 
-    picks, answers, ask_brand, jobs = [], [], [], []
+    picks, answers, ask_brand, jobs, unclear = [], [], [], [], []
+    # Модель любит читать «2 штуки», «ну да», «одну нам надо» как выбор первого варианта. Выбор принимаем, только
+    # если клиент назвал вариант (цену, фирму, номер, «оригинал») или вариант один — иначе спрашиваем какой
+    named = bool(_numbers(text) or brand_words(text) or _ordinal(text) or ORIGINAL.search(text)) if text else True
     for x in d.get("picks", []):
         p = pos(x["p"])
         vis = shown(p, analogs) if p else []
         if p and 0 < x["v"] <= len(vis):
-            picks.append(_pick(p, vis[x["v"] - 1], False, x.get("qty") or 0))
+            if named or len(vis) == 1:
+                picks.append(_pick(p, vis[x["v"] - 1], False, x.get("qty") or _qty(text)))
+            else:
+                unclear.append(p["query"])
     for a in d.get("asks", []):
         for p in ([pos(a["p"])] if pos(a.get("p")) else recent):
             about = a["about"]
@@ -670,11 +684,12 @@ def from_llm(d: dict, mem: dict, analogs: int = 3) -> dict:
         jobs.append((side_query(base, side) if side.axis or side.lr else base, side))
     for n in d.get("new_parts", []):
         jobs.append((n["part"], T.Side(n.get("axis") or "", n["lr"] if n.get("lr") in ("left", "right") else "")))
-    clarify = d.get("clarify", "") if (d.get("unsure") or not (picks or answers or ask_brand or jobs)) else ""
+    clarify = d.get("clarify", "") if (d.get("unsure") or not (picks or answers or ask_brand or jobs or unclear)) else ""
     reply = None
-    if picks or answers or ask_brand or clarify:
-        reply = {"kind": "order" if picks and not answers and not ask_brand else "answer",
-                 "picks": picks, "answers": answers, "ask_brand": ask_brand, "unclear": [], "clarify": clarify}
+    if picks or answers or ask_brand or clarify or unclear:
+        reply = {"kind": "order" if (picks or unclear) and not answers and not ask_brand else "answer",
+                 "picks": picks, "answers": answers, "ask_brand": ask_brand, "unclear": list(dict.fromkeys(unclear)),
+                 "clarify": clarify}
     return {"kind": "llm", "reply": reply, "jobs": jobs, "replaced": [], "handoff": d.get("manager", []),
             "sure": not d.get("unsure")}
 

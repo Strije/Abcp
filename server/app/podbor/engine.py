@@ -214,7 +214,7 @@ class Engine:
             parsed = await U.understand_reply(self.llm, text, mem, analogs)
             if parsed is not None:
                 res["understood"] = {"by": "llm", "rules": plan["kind"], **parsed}
-                hp = D.from_llm(parsed, mem, analogs)
+                hp = D.from_llm(parsed, mem, analogs, text)
                 if hp["reply"] or hp["jobs"] or hp["handoff"]:
                     plan = hp
         if plan["kind"] == "llm":

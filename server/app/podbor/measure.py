@@ -602,7 +602,11 @@ def followups_llm(path: str, out: str, n: str = "150", url: str = "https://109.7
             except Exception as e:
                 print(f"  {j}: ошибка {e}")
             if llm:
-                k = ("уточнить" if llm["unsure"] or (llm["clarify"] and not llm["picks"]) else
+                from .dialog import from_llm
+                fl = from_llm(llm, mem, 3, text)
+                llm["final_picks"] = len((fl.get("reply") or {}).get("picks", []))
+                llm["final_unclear"] = (fl.get("reply") or {}).get("unclear", [])
+                k = ("уточнить" if llm["unsure"] or (llm["clarify"] and not llm["picks"]) or llm["final_unclear"] else
                      "выбор" if llm["picks"] else "вопрос" if llm["asks"] else
                      "новая/уточнение" if llm["new_parts"] or llm["refine"] else
                      "менеджеру" if llm["manager"] else "пусто")
