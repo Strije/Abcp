@@ -41,6 +41,10 @@ class Settings:
     state_dir: str = "/var/lib/avtodrug-api"
     # Пароль страницы подбора /podbor (вход браузера, имя любое). Пусто — подбор выключен
     podbor_password: str = ""
+    # Языковая модель (агент Timeweb, OpenAI-совместимый): разбирает сообщение клиента в список позиций.
+    # Номера и цены — только из Laximo и ABCP. Пусто — разбор правилами
+    llm_url: str = ""
+    llm_key: str = ""
 
 
 def load() -> Settings:
@@ -65,6 +69,8 @@ def load() -> Settings:
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
         state_dir=os.environ.get("STATE_DIR", "/var/lib/avtodrug-api"),
         podbor_password=os.environ.get("PODBOR_PASSWORD", "").strip(),
+        llm_url=os.environ.get("LLM_URL", "").strip().rstrip("/"),
+        llm_key=os.environ.get("LLM_API_KEY", "").strip(),
         bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
         bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
         bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),

@@ -16,6 +16,7 @@ from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
 from . import reviews as R
+from . import understand as U
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
 from .offers import _offer, axis_vote, brand_candidates, curate, days, lr_vote, oem_brand_for
@@ -89,8 +90,10 @@ def ru_name(name: str) -> str:
 
 
 class Engine:
-    def __init__(self, src, folder: Path | None, warranty: set[str] | None = None, rules: dict | None = None):
+    def __init__(self, src, folder: Path | None, warranty: set[str] | None = None, rules: dict | None = None,
+                 llm: Any = None):
         rules = rules or load_rules()
+        self.llm = llm   # языковая модель для разбора сумбурных сообщений; None — только правила
         stop = {w.lower() for w in rules.get("stop", [])}
         self.stop = frozenset(stop | {T.stem(w) for w in stop})
         self.pr_axis = {code: axis for axis, codes in rules.get("pr_axis", {}).items() for code in codes}
@@ -114,7 +117,8 @@ class Engine:
 
     # ---------- заявка целиком ----------
 
-    async def run(self, text: str, vehicle: int | None = None, memory: dict | None = None, analogs: int = 3) -> dict:
+    async def run(self, text: str, vehicle: int | None = None, memory: dict | None = None, analogs: int = 3,
+                  llm: bool | None = None) -> dict:
         """Заявка. С памятью прошлого ответа и без VIN в тексте — следующая реплика того же разговора."""
         t0 = time.time()
         req = T.parse(text)
@@ -146,10 +150,27 @@ class Engine:
                 return self._done(res, "no_quick_groups", t0)
             res["warnings"].append(f"Каталог групп недоступен ({e.code})")
             return self._done(res, "catalog_error", t0)
-        items = self.split(req.chunks, tree)
+        meta: list[dict] = []
+        parsed = None
+        if llm is not False and (llm or needs_llm(req.chunks)):
+            # Сумбурное сообщение («Задок: … Передок: … Тяги+ наконечники …») — разбирает модель, ищем мы
+            parsed = await U.understand(self.llm, "\n".join(req.chunks))
+        if parsed and parsed["positions"]:
+            got = U.items(parsed)
+            items, meta = [(q, s) for q, s, _ in got], [m for _, _, m in got]
+            res["understood"] = {"by": "llm", **parsed}
+            res["handoff"] = parsed["questions"] + [f"не из каталога: {x}" for x in parsed["not_parts"]]
+        else:
+            items = self.split(req.chunks, tree)
+            if parsed is not None or (llm is not False and self.llm and getattr(self.llm, "enabled", False)
+                                      and needs_llm(req.chunks)):
+                res["understood"] = {"by": "rules"}
         if not items:
             return self._done(res, "no_positions", t0)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in items[:MAX_POSITIONS])))
+        for p, m in zip(res["positions"], meta):
+            # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
+            p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
         if len(items) > MAX_POSITIONS:
             res["warnings"].append(f"Разобраны первые {MAX_POSITIONS} позиций из {len(items)}")
         return self._done(res, "ok", t0)
@@ -661,6 +682,13 @@ def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]
     return keep or tier
 
 
+def needs_llm(chunks: list[str]) -> bool:
+    """Когда звать модель: несколько строк, заголовки «Задок:», «+», «либо», длинный текст. Короткое
+    «колодки передние» правила разбирают быстрее и не хуже."""
+    body = "\n".join(chunks)
+    return (len(chunks) >= 3 or len(body) > 120 or bool(re.search(r":\s*$|:\s|\+|\bлибо\b|\(", body, re.M)))
+
+
 def by_suppliers(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> dict[tuple, list["Candidate"]]:
     """В группе несколько разных деталей (у VAG в «Электронике двигателя» — «Датчик импульсов», детонации,
     давления), а клиент назвал какую: «датчик коленвала». Оставляем те, у которых поставщики в описаниях
@@ -896,6 +924,11 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             else:
                 lines.append("   В каталоге для вашей машины сразу не нашли — уточним и напишем.")
             continue
+        llm = p.get("llm") or {}
+        if llm.get("note", "").startswith("вместо «"):
+            lines.append(f"   Вариант {llm['note']}.")
+        if llm.get("uncertain"):
+            lines.append("   Под вопросом — подберём, если понадобится.")
         if p["question"]:
             lines.append("   " + p["question"].replace(
                 "В каталоге несколько вариантов — уточните по примечанию или по номеру позиции на схеме.",

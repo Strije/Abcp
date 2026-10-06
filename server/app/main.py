@@ -49,6 +49,7 @@ from . import access, bitrix, podbor, push, releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
+from .llm import LLM
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("avtodrug")
@@ -102,6 +103,7 @@ class PodborIn(BaseModel):
     numbers: bool = False                                   # артикулы в ответе клиенту
     analogs: int = Field(default=3, ge=0, le=5)             # сколько аналогов на деталь в ответе клиенту
     memory: dict | None = None                              # память прошлого ответа: следующая реплика без VIN
+    llm: bool | None = None                                 # разбор моделью: None — сама решает, False — только правила
 
 
 class PodborTextIn(BaseModel):
@@ -152,8 +154,9 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["bx"] = bitrix.Bitrix(state["abcp"].http, bitrix.BitrixState(folder), s.bitrix_client_id,
                                     s.bitrix_client_secret, s.public_url)
         state["chat"] = bitrix.ChatStore(folder)
+        state["llm"] = LLM(s)
         state["podbor"] = podbor.Engine(podbor.Direct(state["laximo"], state["abcp"], s.guest_profile_id),
-                                        folder / "podbor", warranty_brands())
+                                        folder / "podbor", warranty_brands(), llm=state["llm"])
         app.state.bx = state["bx"]
         tasks = []
         if state["pusher"].enabled and s.order_watch_interval > 0:
@@ -434,7 +437,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if not podbor_limit.allow("pb:" + client_ip(request)):
             raise HTTPException(429, "Слишком много запросов, подождите минуту")
         try:
-            res = await state["podbor"].run(body.text, body.vehicle, body.memory, body.analogs)
+            res = await state["podbor"].run(body.text, body.vehicle, body.memory, body.analogs, body.llm)
         except (httpx.HTTPError, AbcpError):
             raise HTTPException(502, "Каталог или поставщики не ответили, попробуйте ещё раз")
         res["text"] = podbor.draft(res, body.numbers, body.analogs)
@@ -449,8 +452,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
 
     @app.get("/v1/podbor/laximo-usage", dependencies=[Depends(podbor_auth)])
     async def laximo_usage():
-        """Сколько запросов ушло в Laximo: сегодня, за месяц, по методам и дням."""
-        return state["laximo"].usage.report()
+        """Сколько запросов ушло в Laximo: сегодня, за месяц, по методам и дням; и в языковую модель."""
+        return state["laximo"].usage.report() | {"llm": state["llm"].report()}
 
     @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():
