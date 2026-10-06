@@ -151,7 +151,7 @@ _SMALL = {T.stem(w) for w in ("ремкомплект", "пыльник", "да�
 
 def not_the_part(description: str, name: str) -> bool:
     """«Ремкомплект передних тормозных колодок» при детали «Колодки тормозные» — не аналог."""
-    st = T.stems(description)
+    st = T.stems(T.expand(description))   # «С/блок задний переднего рычага» — сайлентблок, не рычаг
     h = T.head(st) if st else None
     if not h or not any(T.same(h, s) for s in _SMALL):
         return False

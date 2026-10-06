@@ -385,6 +385,9 @@ class Engine:
         ranked = tree.rank(q, want)
         if not ranked or ranked[0][1] < 0.3:
             return pos
+        if kind == "fluid" and not any(T.same(T.head(T.stems(ranked[0][0].name, self.stop)) or "", T.stem(w))
+                                       for w in _KIND_WORDS["fluid"]):
+            return pos   # «масло моторное» привело в «Датчик давления масла» — это не масло: подберём по допуску
         best = ranked[0][1]
         groups = [(g, s) for g, s in ranked[:3] if s >= max(0.3, best - 0.2)]
         pos["groups"] = [{"id": g.id, "name": g.name, "path": g.path, "score": round(s, 2)} for g, s in groups]

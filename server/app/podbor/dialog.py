@@ -604,8 +604,10 @@ def _sure(out: dict, text: str) -> bool:
     kind = out["kind"]
     # Длинное или в несколько строк — правилам не доверяем: «Это не тот / Тогда давайте вкладыши шатунные»
     # они принимали за выбор, «если нужен будет, закажу» — тоже (замер на переписке 2024: 24% ошибок)
+    # «Тяги давайте зекерт, остальное подумаю. Куда платить?» — отсрочка рядом с выбором: решает модель
+    picked = bool(ACCEPT.search(text) or brand_words(text) or _numbers(text))
     if len(text.strip()) > 50 or "\n" in text.strip():
-        return kind == "chat" and bool(DEFER.search(text)) and len(text) <= 120
+        return kind == "chat" and bool(DEFER.search(text)) and len(text) <= 120 and not picked
     # Вопрос — не выбор и не новая деталь: «От Соренто по креплениям подходит?», «А установка сколько стоит?»
     if "?" in text and kind in ("pick", "pick_unclear", "new"):
         return False
@@ -614,9 +616,10 @@ def _sure(out: dict, text: str) -> bool:
     if kind in ("answer", "side", "attr", "reply"):
         return True
     if kind == "new":
-        return len(text) <= 80 and "\n" not in text.strip()
+        # «масло моторное и аккумулятор» — несколько вещей в одной строке правила склеивают
+        return "\n" not in text.strip() and not re.search(r",|\sи\s|\+", text)
     if kind == "chat":
-        return bool(DEFER.search(text))
+        return bool(DEFER.search(text)) and not picked
     return False
 
 

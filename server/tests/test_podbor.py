@@ -659,3 +659,29 @@ def test_laximo_usage_counted_and_kept():
     rep = Laximo(s, transport=ok).usage.report()   # новый процесс — счёт с диска
     assert rep["today"] == 3 and rep["month"] == 3
     assert rep["month_by_method"] == {"findVehicle": 1, "listQuickGroup": 2}
+
+
+def test_kinds_and_rules_confidence():
+    from app.podbor.engine import kind_of
+    from app.podbor.dialog import _sure, from_llm
+    from app.podbor.offers import not_the_part
+    assert kind_of(T.stems("масло моторное 5w30")) == "fluid" and kind_of(T.stems("масляный фильтр")) == "part"
+    assert kind_of(T.stems("аккумулятор")) == "battery" and kind_of(T.stems("резина зимняя")) == "tire"
+    assert kind_of(T.stems("резинка двери")) == "part"
+    # Правилам — только короткое и ясное; отсрочка рядом с выбором, вопрос, несколько вещей — модели
+    assert _sure({"kind": "pick", "reply": {"picks": [1]}}, "за 1410 закажите")
+    assert not _sure({"kind": "pick", "reply": {"picks": [1]}}, "От Соренто по креплениям подходит?")
+    assert not _sure({"kind": "chat"}, "Тяги давайте зекерт, остальное подумаю")
+    assert _sure({"kind": "chat"}, "Подумаю")
+    assert not _sure({"kind": "new"}, "А масло моторное и аккумулятор посмотрите")
+    assert not_the_part("С/блок задний перед. рычага Toyota Camry", "Рычаг передней подвески")
+    # «2 штуки», когда вариантов несколько, — не выбор первого, а вопрос какой
+    mem = {"positions": [{"query": "колодки", "turn": 1, "variants": [{"name": "Колодки", "oem": "1", "brand": "TOYOTA",
+           "axis": "", "lr": "", "alt": False, "offers": {"original": {"brand": "TOYOTA", "number": "1", "price": 9000,
+           "days": 5, "tags": []}, "analogs": [{"brand": "Zekkert", "number": "Z", "price": 1500, "days": 1, "tags": []}],
+           "stats": {}}}]}]}
+    d = {"picks": [{"p": 1, "v": 1, "qty": 2}], "asks": [], "refine": [], "new_parts": [], "manager": [], "clarify": "",
+         "unsure": False}
+    r = from_llm(d, mem, 3, "2 штуки")["reply"]
+    assert not r["picks"] and r["unclear"] == ["колодки"]
+    assert from_llm(d, mem, 3, "давайте за 9000")["reply"]["picks"]
