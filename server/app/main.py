@@ -105,6 +105,15 @@ class PodborIn(BaseModel):
     analogs: int = Field(default=3, ge=0, le=5)             # сколько аналогов на деталь в ответе клиенту
     memory: dict | None = None                              # память прошлого ответа: следующая реплика без VIN
     llm: bool | None = None                                 # разбор моделью: None — сама решает, False — только правила
+    dialog: str | None = Field(default=None, max_length=40)  # какой это разговор — для журнала разбора
+    turn: int | None = Field(default=None, ge=0, le=1000)
+
+
+class PodborFeedback(BaseModel):
+    dialog: str = Field(min_length=1, max_length=40)
+    turn: int = Field(ge=0, le=1000)
+    good: bool | None = None
+    comment: str = Field(default="", max_length=1000)
 
 
 class PodborTextOnly(BaseModel):
@@ -163,6 +172,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["llm"] = LLM(s)
         state["podbor"] = podbor.Engine(podbor.Direct(state["laximo"], state["abcp"], s.guest_profile_id),
                                         folder / "podbor", warranty_brands(), llm=state["llm"])
+        state["journal"] = podbor.journal.Journal(folder / "podbor" / "journal")
         app.state.bx = state["bx"]
         tasks = []
         if state["pusher"].enabled and s.order_watch_interval > 0:
@@ -448,7 +458,16 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         except (httpx.HTTPError, AbcpError):
             raise HTTPException(502, "Каталог или поставщики не ответили, попробуйте ещё раз")
         res["text"] = podbor.draft(res, body.numbers, body.analogs)
+        if state.get("journal"):
+            state["journal"].turn(body.dialog or "", body.turn or 0, body.text, res)
         return res
+
+    @app.post("/v1/podbor/feedback", dependencies=[Depends(podbor_auth)])
+    async def podbor_feedback(body: PodborFeedback):
+        """«Помог / не помог» под ответом робота — в журнал, рядом с самим ответом."""
+        if state.get("journal"):
+            state["journal"].feedback(body.dialog, body.turn, body.good, body.comment)
+        return {"ok": True}
 
     @app.post("/v1/podbor/text", dependencies=[Depends(podbor_auth)])
     async def podbor_text(body: PodborTextIn):

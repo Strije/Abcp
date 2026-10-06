@@ -9,9 +9,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
 
-from ..main import PodborIn, PodborTextIn
+from ..main import PodborFeedback, PodborIn, PodborTextIn
 from .cli import warranty_brands
 from .engine import Engine, draft
+from .journal import Journal
 from .sources import Remote
 
 REMOTE = os.environ.get("PODBOR_REMOTE", "https://109.73.199.217")
@@ -21,6 +22,7 @@ app = FastAPI(docs_url=None, redoc_url=None)
 src = Remote(REMOTE)
 CACHE = Path(os.environ.get("PODBOR_CACHE") or Path(__file__).resolve().parents[2] / ".podbor-cache")  # server/.podbor-cache
 engine = Engine(src, CACHE, warranty_brands())
+journal = Journal(CACHE / "journal")   # как на сервере: реплики, ответы и оценки — в .podbor-cache/journal
 
 
 @app.get("/podbor")
@@ -32,7 +34,14 @@ async def page():
 async def podbor(body: PodborIn):
     res = await engine.run(body.text, body.vehicle, body.memory, body.analogs)
     res["text"] = draft(res, body.numbers, body.analogs)
+    journal.turn(body.dialog or "", body.turn or 0, body.text, res)
     return res
+
+
+@app.post("/v1/podbor/feedback")
+async def feedback(body: PodborFeedback):
+    journal.feedback(body.dialog, body.turn, body.good, body.comment)
+    return {"ok": True}
 
 
 @app.post("/v1/podbor/text")

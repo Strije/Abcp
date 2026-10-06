@@ -204,7 +204,13 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
             per_brand[k[0]] = k
     pool = list(per_brand.values())
     by_speed = sorted(pool, key=lambda k: _speed(fast[k]))
-    by_cost = sorted(pool, key=lambda k: _cost(cheap[k]))
+
+    def seen_cost(k: tuple) -> tuple[float, int]:
+        # «Самый дешёвый» — по цене, которую клиент увидит в строке: Sampiyon за 770 ₽ с невидимым
+        # предложением за 150 ₽ (отброшено как ошибка прайса) рядом с Caready за 240 ₽ — не самый дешёвый
+        o = _offer(fast[k], cheaper=cheap[k])
+        return (o["cheaper"]["price"], o["cheaper"]["days"]) if o["cheaper"] else (o["price"], o["days"])
+    by_cost = sorted(pool, key=seen_cost)
 
     tags: dict[tuple, list[str]] = {}
     if pool:

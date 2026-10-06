@@ -4,3 +4,4 @@ from .engine import Engine, draft, load_rules
 from .sources import Direct, Remote
 
 __all__ = ["Engine", "Direct", "Remote", "LaximoError", "draft", "load_rules"]
+from . import journal  # noqa: F401  (журнал разговоров для разбора)

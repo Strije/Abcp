@@ -683,10 +683,14 @@ class Engine:
         return c, note
 
     async def _price(self, v: Vehicle, c: Candidate):
-        try:
-            c.brand, c.rows = await self.offers(c.d.oem, v.brand)
-        except Exception:
-            c.brand, c.rows = "", None
+        c.brand, c.rows = "", None
+        for attempt in range(2):   # поставщики разово не ответили — иначе «цену и срок уточним» при живых ценах
+            try:
+                c.brand, c.rows = await self.offers(c.d.oem, v.brand)
+                break
+            except Exception:
+                if attempt:
+                    c.brand, c.rows = "", None
         if c.rows:
             c.vote = axis_vote(c.rows)
 
@@ -1166,8 +1170,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             else:
                 groups.append((var, []))
         # Сначала передние, потом задние; левые перед правыми — как читает клиент
-        order = {"front": 0, "": 1, "rear": 2}
-        groups.sort(key=lambda g: (order.get(g[0]["axis"], 1), {"left": 0, "": 1, "right": 2}.get(g[0]["lr"], 1)))
+        side_order = {"front": 0, "": 1, "rear": 2}   # не «order»: тот — порядок разделов, нужен следующим позициям
+        groups.sort(key=lambda g: (side_order.get(g[0]["axis"], 1), {"left": 0, "": 1, "right": 2}.get(g[0]["lr"], 1)))
         many = len(groups) > 1
         labels = [T.side_label(query, var["axis"], var["lr"]) for var, _ in groups]
         seen: dict[str, int] = {}
@@ -1272,7 +1276,10 @@ def reply_text(r: dict, numbers: bool = False) -> str:
             total += o["price"] * qty
             longest = max(longest, o["days"])
             k = re.match(r"\d+", x.get("amount") or "")
-            if not x.get("qty") and k and int(k.group(0)) > 1:
+            if x.get("kind") == "fluid" and not x.get("qty"):
+                # Масло в каталоге — канистра 1 л или 5 л: «оформить одну» — не замена масла
+                lines.append("   Сколько литров нужно? Если объём не знаете — подскажем.")
+            elif not x.get("qty") and k and int(k.group(0)) > 1:
                 lines.append(f"   Цена за штуку, на машину нужно {int(k.group(0))} — сколько штук оформить?")
         lines.append(f"Итого: {money(total)}. " + ("Всё в наличии." if longest <= 0 else f"Срок — {when(longest)}."))
         lines.append(ANYTHING_ELSE)

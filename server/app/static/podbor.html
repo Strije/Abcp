@@ -24,6 +24,7 @@
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0 18px; }
   button { font: inherit; border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; background: var(--chip); color: var(--text); }
   button.main { background: var(--accent); color: #fff; font-weight: 600; }
+  button.on { background: var(--accent); color: #fff; }
   button:disabled { opacity: .6; cursor: wait; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 12px 0; }
   .muted { color: var(--muted); }
@@ -143,10 +144,13 @@ const PLACEHOLDER_NEXT = "Следующее сообщение клиента: 
 const KEEP_TURNS = 12;   // столько шагов разговора храним в браузере
 
 // Разговор: шаги «сообщение клиента → ответ подбора» и память для следующего сообщения.
-// Сервер разговоров не хранит — память приходит в каждом ответе и уходит со следующим сообщением.
+// Память приходит в каждом ответе и уходит со следующим сообщением. Сервер пишет реплики и ответы
+// в журнал для разбора (без телефонов и почты) — по номеру разговора, он же у оценок «помог / не помог».
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";   // после перезагрузки — к концу разговора
-let chat = {memory: null, turns: []};
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+let chat = {memory: null, turns: [], dialog: newId(), step: 0};
 try { chat = Object.assign(chat, JSON.parse(localStorage.getItem("podbor_chat") || "{}")); } catch (e) {}
+if (!chat.dialog) chat.dialog = newId();
 function saveChat() {
   chat.turns = chat.turns.slice(-KEEP_TURNS);
   try { localStorage.setItem("podbor_chat", JSON.stringify(chat)); }
@@ -179,14 +183,15 @@ async function go(vehicle, again) {
   const t = $("#text");
   const text = again ?? t.value.trim();
   if (!text) return;
-  if (again === undefined) { t.value = ""; chat.turns.push({text, result: null}); }
+  if (again === undefined) { t.value = ""; chat.turns.push({text, result: null, step: (chat.step = (chat.step || 0) + 1)}); }
   const turn = chat.turns[chat.turns.length - 1];
   turn.result = null; turn.error = "";
   draw();
   $("#go").disabled = true; $("#state").textContent = "Ищем в каталоге и у поставщиков…";
   try {
     const r = await fetch("/v1/podbor", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({text, vehicle: vehicle ?? null, memory: chat.memory, ...opts})});
+      body: JSON.stringify({text, vehicle: vehicle ?? null, memory: chat.memory, dialog: chat.dialog,
+                            turn: turn.step || 0, ...opts})});
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || ("Ошибка " + r.status));
     turn.result = data;
@@ -200,7 +205,7 @@ async function go(vehicle, again) {
 }
 
 function resetChat() {
-  chat = {memory: null, turns: []}; saveChat(); draw();
+  chat = {memory: null, turns: [], dialog: newId(), step: 0}; saveChat(); draw();
   $("#ocr").hidden = true; $("#state").textContent = "Разговор очищен"; $("#text").focus();
 }
 
@@ -267,6 +272,10 @@ function botMessage(t, ti) {
       ${d.text ? `<button onclick="copyDraft(${ti},this)">Скопировать ответ</button>` : ""}
       ${more ? `<button onclick="toggle(${ti},this)">Подробности</button>` : ""}
       <span class="muted" style="align-self:center;font-size:13px">${d.seconds} с</span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button title="Ответ верный" class="${t.rated === true ? "on" : ""}" onclick="rate(${ti},true)">👍</button>
+        <button title="Ответ неверный — напишите, что не так" class="${t.rated === false ? "on" : ""}" onclick="rate(${ti},false)">👎</button>
+      </span>
     </div>
     <div class="details" id="details-${ti}" hidden></div>
   </div>`;
@@ -292,6 +301,23 @@ function toggle(ti, btn) {
   if (box.hidden && !box.innerHTML) box.innerHTML = details(chat.turns[ti].result, ti);
   box.hidden = !box.hidden;
   btn.textContent = box.hidden ? "Подробности" : "Скрыть подробности";
+}
+
+// Оценка ответа — в журнал сервера рядом с самим ответом: по ним разбираем, что чинить
+async function rate(ti, good) {
+  const t = chat.turns[ti];
+  let comment = "";
+  if (!good) {
+    comment = prompt("Что не так в ответе? (необязательно)") ?? null;
+    if (comment === null) return;
+  }
+  try {
+    const r = await fetch("/v1/podbor/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({dialog: chat.dialog, turn: t.step || 0, good, comment})});
+    if (!r.ok) throw new Error();
+    t.rated = good; saveChat(); draw();
+    $("#state").textContent = good ? "Спасибо, отметили" : "Записали — разберём";
+  } catch (e) { $("#state").textContent = "Оценка не отправилась, попробуйте ещё раз"; }
 }
 
 function retry(ti) { if (ti === chat.turns.length - 1) go(null, chat.turns[ti].text); }

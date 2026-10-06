@@ -10,7 +10,8 @@
 Остальное (фото, оплата, адрес, «когда забрать») — менеджеру.
 """
 import re
-from typing import Any
+from difflib import SequenceMatcher
+from typing import Any, Iterable
 
 from .. import brands as AB
 from . import text as T
@@ -51,6 +52,12 @@ FILLER = {T.stem(w) for w in (
     "гляньте", "глянуть", "посмотреть", "подберите", "подобрать", "интересует", "давайте", "давай", "плиз")}
 
 # Бренды кириллицей — как пишут в переписке
+BRAND_RU_MORE = {"масума": "MASUMA", "джикиу": "JIKIU", "жикиу": "JIKIU", "тацуми": "TATSUMI", "татсуми": "TATSUMI",
+                 "бендикс": "BENDIX", "текнорот": "TEKNOROT", "сасик": "SASIC", "валео": "VALEO", "аисин": "AISIN",
+                 "айсин": "AISIN", "лукас": "LUCAS", "текстар": "TEXTAR", "нипартс": "NIPPARTS", "кортеко": "CORTECO",
+                 "зентпартс": "ZENTPARTS", "фрей": "FREY", "юнио": "UNIO", "унио": "UNIO",
+                 "нордфил": "NORDFIL", "свернов": "SVERNOV", "мэйле": "MEYLE", "мейле": "MEYLE", "ниссенс": "NISSENS",
+                 "херт": "HERTH+BUSS JAKOPARTS", "блюпринт": "BLUE PRINT", "блю": "BLUE PRINT"}
 BRAND_RU = {"бош": "BOSCH", "хелла": "HELLA", "хела": "HELLA", "ман": "MANN", "манн": "MANN", "махле": "MAHLE",
             "мале": "MAHLE", "нгк": "NGK", "денсо": "DENSO", "лемфордер": "LEMFORDER", "лемфёрдер": "LEMFORDER",
             "сакс": "SACHS", "фебест": "FEBEST", "зеккерт": "ZEKKERT", "зекерт": "ZEKKERT",
@@ -66,6 +73,7 @@ BRAND_RU = {"бош": "BOSCH", "хелла": "HELLA", "хела": "HELLA", "ма
             "зимерман": "ZIMMERMANN", "кашияма": "KASHIYAMA", "нагамочи": "SB NAGAMOCHI", "нагомочи": "SB NAGAMOCHI",
             "мапко": "MAPCO", "депо": "DEPO", "тайк": "TYC", "абсел": "ABSEL", "квадро": "QUATTRO FRENI",
             "кватро": "QUATTRO FRENI", "кваттро": "QUATTRO FRENI", "сакура": "SAKURA", "мотюль": "MOTUL"}
+BRAND_RU.update(BRAND_RU_MORE)   # «масуму есть?» — частые фирмы прайсов
 _NOT_BRAND = {"ok", "ок", "abs", "vin", "вин", "грм", "гбц", "акпп", "мкпп", "шрус", "дпкв", "дпрв", "тнвд", "egr",
               "lh", "rh", "fr", "rr", "the", "for", "and", "set", "kit", "oem"}
 
@@ -85,7 +93,7 @@ def _slim_offers(o: dict | None) -> dict | None:
 
 def _slim(p: dict) -> dict:
     return {"query": p["query"], "side": p.get("side") or {}, "status": p["status"], "question": p.get("question", ""),
-            "asked": bool(p.get("asked")),
+            "asked": bool(p.get("asked")), "kind": p.get("kind", ""),
             "variants": [{"name": v["name"], "oem": v["oem"], "brand": v["brand"], "axis": v["axis"], "lr": v["lr"],
                           "amount": v.get("amount", ""), "alt": v.get("alt", False), "offers": _slim_offers(v.get("offers")),
                           "facts": v.get("facts", [])}
@@ -165,16 +173,48 @@ def _numbers(text: str) -> list[int]:
     return out
 
 
-def brand_words(text: str) -> list[tuple[str, str]]:
-    """Бренды в реплике: (как написал клиент, ключ бренда ABCP). Латиница — по справочнику ABCP, кириллица — по BRAND_RU."""
+_LAT = dict(zip("абвгдеёзийклмнопрстуфыэ", "abvgdeeziiklmnoprstufie")) | {
+    "ж": "zh", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ю": "yu", "я": "ya", "ь": "", "ъ": ""}
+
+
+def _sound(w: str) -> str:
+    """«бендикс» и «Bendix», «зеккерт» и «Zekkert» — к одному виду: латиница, x→ks, без двойных букв."""
+    w = "".join(_LAT.get(c, c) for c in w.lower())
+    w = w.replace("x", "ks").replace("w", "v").replace("ph", "f").replace("ck", "k").replace("c", "k").replace("y", "i")
+    w = w.replace("kh", "h").replace("j", "zh")
+    return re.sub(r"(.)\1+", r"\1", re.sub(r"[^a-z]", "", w))
+
+
+def _like_shown(w: str, seen: dict[str, str]) -> str | None:
+    """Кириллицей — фирма из показанных: «Бендикс давайте», «зеккертом». Окончания срезаем по одной букве."""
+    best, hit = 0.0, None
+    for cut in (0, 1, 2):
+        if len(w) - cut < 4:
+            break
+        x = _sound(w[:len(w) - cut])
+        for snd, brand in seen.items():
+            r = SequenceMatcher(None, x, snd).ratio()
+            if r > best:
+                best, hit = r, brand
+    return hit if best >= 0.85 else None
+
+
+def brand_words(text: str, seen: Iterable[str] = (), parts: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    """Бренды в реплике: (как написал клиент, ключ бренда ABCP). Латиница — по справочнику ABCP, кириллица — по BRAND_RU,
+    а ещё по созвучию с фирмами, которые клиенту показали (seen); слова из названий деталей (parts) — не фирмы."""
     full = AB.get()
     out = []
+    sounds = {_sound(b): b for b in seen if b and len(_sound(b)) >= 4}
     for w in re.findall(r"[A-Za-z][A-Za-z\-]{1,}|[а-яё]{3,}", text, re.I):
         lw = w.lower()
         if lw in _NOT_BRAND:
             continue
         if re.fullmatch(r"[а-яё]+", lw):
-            key = BRAND_RU.get(lw) or BRAND_RU.get(lw[:-1]) or BRAND_RU.get(lw[:-2] if len(lw) > 5 else "")
+            # «масуму», «бошем», «зеккерта»: окончание срезаем или меняем на «а»/«я»
+            forms = [lw, lw[:-1], lw[:-2] if len(lw) > 4 else "", lw[:-1] + "а", lw[:-1] + "я"]
+            key = next((BRAND_RU[f] for f in forms if f in BRAND_RU), None)
+            if not key and sounds and len(lw) >= 4 and T.stem(lw) not in FILLER and T.stem(lw) not in parts:
+                key = _like_shown(lw, sounds)
             if key:
                 out.append((w, AB.get().key(key)))
         elif len(lw) >= 2 and full.loaded and AB.norm(w) in full.alias:
@@ -186,12 +226,24 @@ def _bk(brand: Any) -> str:
     return AB.get().key(brand)
 
 
+def _seen(positions: list[dict]) -> tuple[set[str], frozenset[str]]:
+    """Фирмы, которые клиенту показали, и слова названий деталей — для brand_words."""
+    firms = {str(x["offer"].get("brand") or "") for p in positions for x in all_offers(p)}
+    words = frozenset(s for p in positions for s in T.stems(p["query"])
+                      + [t for v in p.get("variants", []) for t in T.stems(v["name"])])
+    return firms, words
+
+
 def refers(piece: str, p: dict, stop: frozenset[str]) -> bool:
     """Реплика про эту позицию: слово запроса или каталожного названия («свечи», «фильтр масляный»)."""
-    st = [s for s in T.stems(piece, stop) if s not in FILLER and s not in T.ADJ]
-    if not st:
-        return False
+    firms = {T.stem(w) for w, _ in brand_words(piece, *_seen([p]))}   # «А салонный зеккерт есть?» — «зеккерт» не деталь
+    every = [s for s in T.stems(piece, stop) if s not in FILLER and s not in firms]
+    st = [s for s in every if s not in T.ADJ]
     names = T.stems(p["query"], stop) + [s for v in p.get("variants", []) for s in T.stems(v["name"], stop)]
+    if not st:
+        # Одни прилагательные: «салонный», «воздушный» из трёх фильтров — по запросу и названию, без стороны
+        adj = [s for s in every if not T.side(s).axis and not T.side(s).lr]
+        return bool(adj) and any(T.same(a, b) for a in adj for b in names)
     # И описания поставщиков: каталог зовёт «Амортизатор», поставщик — «Стойка газовая» — клиент пишет как поставщик
     names += [s for x in all_offers(p)[:8] for s in T.stems(str(x["offer"].get("description") or "")[:60], stop)]
     return any(T.same(a, b) for a in st for b in names)
@@ -230,7 +282,8 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
     last_turn = max(p.get("turn", 0) for p in positions)
     recent = [p for p in positions if p.get("turn", 0) == last_turn]
     pieces = _pieces(text) or [text]
-    chooses = lambda pc: bool(_numbers(pc) or brand_words(pc) or _ordinal(pc) or ORIGINAL.search(pc))  # noqa: E731
+    seen = _seen(positions)
+    chooses = lambda pc: bool(_numbers(pc) or brand_words(pc, *seen) or _ordinal(pc) or ORIGINAL.search(pc))  # noqa: E731
     for i, piece in enumerate(pieces):
         scope = [p for p in positions if refers(piece, p, stop)]
         # «Тяги» — про «Рулевую тягу», а не про «Наконечник рулевой тяги»: где слово клиента — главное
@@ -242,7 +295,7 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
         # Деталь не названа — речь о последнем ответе: «давайте первый» после «а задние?» — про задние
         scope = scope or recent
         side = T.side(piece)
-        nums, brands, n_ord = _numbers(said), brand_words(said), _ordinal(said)
+        nums, brands, n_ord = _numbers(said), brand_words(said, *seen), _ordinal(said)
         orig = bool(ORIGINAL.search(said)) and not NOT_ORIGINAL.search(said)
         orig_pick = orig and bool(ACCEPT.search(said))   # «оригинал давайте», а не «оригинал есть» и не «оригинал дорого»
 
@@ -269,7 +322,18 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
         if not hits and not named and (nums or brands or side.axis or side.lr):
             # «беру передние за 9000» после ответа про задние — цена и сторона называют более раннюю позицию
             hits = match(positions)
+        if n_ord and not hits and len(scope) > 1 and re.search(r"вариант", piece, re.I):
+            # «Первый вариант» после ответа про фильтр и масло: «Вариант 1 / Вариант 2» был только у масла
+            multi = [p for p in scope if len([v for v in p.get("variants", []) if not v.get("alt")]) > 1]
+            scope = multi if len(multi) == 1 else scope
         for p in scope:
+            groups = [v for v in p.get("variants", []) if not v.get("alt")]
+            if n_ord and not hits and len(scope) == 1 and len(groups) > 1 and re.search(r"вариант", piece, re.I):
+                # «Первый вариант», когда в ответе «Вариант 1 — масло LongLife, Вариант 2 — …»: клиент выбрал
+                # вариант каталога, а не строку. Не оформляем оригинал за него — спрашиваем фирму
+                unclear.append(p)
+                touched = True
+                continue
             if n_ord and not hits and len(scope) == 1:
                 vis = [x for x in shown(p, analogs) if not side.conflicts(T.Side(x["var"]["axis"], x["var"]["lr"]))]
                 idx = n_ord - 1 if n_ord > 0 else len(vis) - 1
@@ -305,13 +369,14 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     answers.append(("original", p, x))
             elif brands:
                 touched = True
-                found = {_bk(x["offer"]["brand"]) for _, x, _ in uniq}
                 for p, x, _ in uniq:
                     answers.append(("brand", p, x))
+                # «Фирмы Зеккерт есть?» про три фильтра: у масляного и воздушного показан, про салонный — проверить
+                # по всем предложениям (сервер), а не молчать
                 for w, k in brands:
-                    if k not in found:
-                        ask_brand += [{"position": positions.index(p), "brand": k, "word": w}
-                                      for p in scope]
+                    found = {id(p) for p, x, _ in uniq if _bk(x["offer"]["brand"]) == k}
+                    ask_brand += [{"position": positions.index(p), "brand": k, "word": w}
+                                  for p in scope if id(p) not in found]
             elif STOCK.search(piece):
                 touched = True
                 for p in scope:
@@ -425,7 +490,7 @@ def _pick(p: dict, x: dict, cheaper: bool, qty: int) -> dict:
     if cheaper and o.get("cheaper"):
         o["price"], o["days"] = o["cheaper"]["price"], o["cheaper"]["days"]
     o["cheaper"] = None
-    return {"query": p["query"], "name": x["var"]["name"], "who": x["who"], "offer": o, "qty": qty,
+    return {"query": p["query"], "name": x["var"]["name"], "who": x["who"], "offer": o, "qty": qty, "kind": p.get("kind", ""),
             "axis": x["var"]["axis"], "lr": x["var"]["lr"], "amount": x["var"].get("amount", "")}
 
 
@@ -498,6 +563,7 @@ _DESC_ATTRS = [(re.compile(r"наружн|внешн", re.I), re.compile(r"вн�
 
 # Вопросы по показанным предложениям, на которые память отвечает сама
 STOCK = re.compile(r"наличи|на\s+сегодня|сегодня\s+(?:есть|будет|можно|забрать)|сейчас\s+есть", re.I)
+ALSO = re.compile(r"(?<![а-яё])(?:ещ[её]|тоже|также|плюс|вдобавок)(?![а-яё])", re.I)
 MORE = re.compile(r"\b(?:какие|что)\s+(?:ещ[её]|еще)\s+(?:есть|бывают|можно)|други[ех]\s+(?:вариант|фирм|производ)|"
                   r"ещ[её]\s+вариант|\bаналог\w*\s+есть|\bесть\s+аналог", re.I)
 QUALITY = re.compile(r"качеств|хорош\w*\s*\?|надёжн|надежн|\bнорм\w*\s*\?|как\s+(?:ходят|ходит|служ)", re.I)
@@ -718,6 +784,12 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
     # Точно из словаря каталога (длинные — и с опечаткой): «Кулакова 18/3» — адрес, «трени» — не «тренога»
     noun = next((s for w in surface if not adj_word(w) and (s := T.stem(w)) not in GENERIC
                  and (s in tree.vocab or (len(s) >= 6 and tree.fix(s) in known))), None)
+    # «Да фильтра ещё», «и свечи тоже» — ещё одна деталь, даже если слово есть в старой позиции
+    # («Масло с фильтрами»). «Какие ещё есть?», «ещё варианты» — не то: там нет детали или это MORE
+    also = bool(noun) and bool(ALSO.search(text)) and not MORE.search(text) and "?" not in text \
+        and not brand_words(text) and not _numbers(text)
+    if also:
+        names_old = False
     new_part = bool(noun) and not names_old and not ACCEPT_THIS.search(text) and not STATUS.search(text)
     out: dict[str, Any] = {"kind": "chat", "reply": None, "jobs": [], "replaced": []}
     if DEFER.search(text):
