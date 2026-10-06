@@ -44,6 +44,7 @@ class Candidate:
     vote: tuple[str, int, int] = ("", 0, 0)
     warning: str = ""
     foreign: bool = False        # по названию это деталь другой группы («Ремень грм» в «Ремне приводном» у Ford)
+    pair: bool = False           # «левый» и «правый» в каталоге под одним номером — одна деталь на обе стороны
 
     @property
     def kind(self) -> tuple[str, str, str]:
@@ -372,7 +373,7 @@ class Engine:
                    for nc in self.not_catalog)
 
     async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
-        q = T.stems(query, self.stop)
+        q = T.stems(T.expand(query), self.stop)
         kind = kind or kind_of(q)
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
                                "groups": [], "variants": [], "question": "", "note": "", "kind": kind}
@@ -417,12 +418,16 @@ class Engine:
             has = lambda name: any(T.same(a, s) for a in aliases for s in T.stems(name, self.stop))  # noqa: E731
             # Иначе — только при неполном совпадении с группой: «Стойки стабилизатора» у Toyota совпали точно,
             # а деталь в ней — «Шарнир переднего стабилизатора»; искать «стойку» по узлам — найти «Опору стойки»
-            if (best < 1.0 or lost) and head and head not in T.ADJ and head not in _GENERIC_HEADS \
+            # Сайлентблок — всегда: «сайлентблок задней цапфы» точно привёл в «Рычаги и тяги подвески»,
+            # а в составе группы — «Тяга распоры»; сам сайлентблок лежит в узлах группы
+            if (best < 1.0 or lost or head in _DEEP) and head and head not in T.ADJ and head not in _GENERIC_HEADS \
                     and not any(has(c.d.name) for c in cands):
                 lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                              return_exceptions=True)
-                full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)]
-                better = self._candidates(tree, q + aliases[1:2], want, groups, full, set()) if full else []
+                full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)
+                        and (head not in _PART_ALIASES or any(T.same(a, T.head(T.stems(T.expand(d.name), self.stop)) or "")
+                                                               for a in aliases))]
+                better = self._candidates(tree, q + aliases[1:2], want, groups, full, set(), loose=True) if full else []
                 if better:
                     cands = better
                 else:
@@ -459,9 +464,37 @@ class Engine:
                            f"нужный уточним по каталогу и напишем.")
             return pos
         kept = [c for c in kept if c in fit]
+        # VAG: «1K0498103 X» — обменная (восстановленная) деталь, сдаётся старая. Есть новая — обменную не показываем,
+        # иначе у Octavia «внутренний ШРУС» превращался в выбор между одним и тем же номером
+        bases = {_key(c.d.oem) for c in kept}
+        kept = [c for c in kept if not (_key(c.d.oem).endswith("X") and _key(c.d.oem)[:-1] in bases)] or kept
         if not kept:
             pos["note"] = "По описаниям поставщиков найденные номера относятся к другой стороне."
             return pos
+        host = _host(q) if any(T.same(T.head(q) or "", b) for b in _BUSH) else None
+        if host and not any(is_bushing(c.d.name) and any(T.same(h, s) for h in host[0]
+                                                           for s in T.stems(c.d.name, self.stop)) for c in kept):
+            # «Сайлентблоки переднего рычага» у Toyota: в каталоге только рычаг и «Фиксатор сайлентблока»,
+            # «сайлентблок задней цапфы» — только сама цапфа. Сайлентблоки — по кроссам их номера
+            # Только группы найденного: в «Рычаг стеклоочистителя» рядом с «Рычагом передним нижним» — тоже рычаги
+            mine = [g for g, _ in groups if g.id in {c.d.group_id for c in kept}] or [g for g, _ in groups]
+            lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g in mine), return_exceptions=True)
+            every = [d for d in pool if d.group_id in {g.id for g in mine}] \
+                + [d for x in lists if isinstance(x, list) for d in x]
+            own = self._bushings_in_unit(every, want, host)
+            if own:
+                kept = await self._check_sides(v, own, want)   # Ford: «Втулка» в узле «Задний кулак и рычаги»
+            else:
+                found = await self._bushings_by_host(v, every, want, host)
+                if found:
+                    c, note = found
+                    pos.update(status="found", question="", note=note, variants=[self._variant(c, v, alt=False)])
+                    pos["variants"][0]["via"] = c.d.oem
+                    R.annotate(pos["variants"][0], [query])
+                    return pos
+                if not any(any(T.same(h, s) for h in host[0] for s in T.stems(c.d.name, self.stop)) for c in kept):
+                    # «Сайлентблок задней цапфы» у Golf: нашлись только рычаги — это не то, что просили
+                    return pos
         kinds: dict[tuple, list[Candidate]] = {}
         for c in kept:
             kinds.setdefault(c.kind, []).append(c)
@@ -488,7 +521,9 @@ class Engine:
         return pos
 
     def _candidates(self, tree: TreeIndex, q: list[str], want: T.Side, groups, pool: list[Detail],
-                    members: set) -> list[Candidate]:
+                    members: set, loose: bool = False) -> list[Candidate]:
+        """loose — пул уже отобран по главному слову клиента (поиск по узлам): считаем только по словам клиента.
+        Слова группы там мешают: «Сайлентблок задней цапфы» в «Рычагах и тягах подвески» терял половину веса."""
         gscore = {g.id: s for g, s in groups}
         gwords = {g.id: T.stems(g.name, self.stop) for g, _ in groups}
         names = {id(d): T.stems(d.name, self.stop) for d in pool}
@@ -497,12 +532,14 @@ class Engine:
         chosen = {g.id for g, _ in groups}
         near = [t for g, _ in groups for p, _ in g.phrases for t in p]
         cands: dict[str, Candidate] = {}
+        lrs: dict[str, set[str]] = {}
         for d in pool:
             if d.match is False:
                 continue
             ds = T.side(d.context, self.pr_axis)
             if want.conflicts(ds):
                 continue
+            lrs.setdefault(_key(d.oem), set()).add(ds.lr)
             member = (d.group_id, _key(d.oem)) in members
             if member:
                 # Состав группы — главный признак; слова клиента в названии только упорядочивают
@@ -512,7 +549,7 @@ class Engine:
                 foreign = self._foreign(tree, names[id(d)], known, chosen, near)
             else:
                 # Не из состава группы — только по словам; слова группы помогают («ступичн» ~ «ступица»)
-                qd = list(dict.fromkeys(known + extra + gwords.get(d.group_id, [])))
+                qd = list(dict.fromkeys(known + extra + ([] if loose else gwords.get(d.group_id, []))))
                 prec, rec = tree.score(qd, names[id(d)])
                 if prec < 0.45:
                     continue
@@ -524,6 +561,11 @@ class Engine:
                                      foreign=member and foreign)
         if not cands:
             return []
+        for k, c in cands.items():
+            if {"left", "right"} <= lrs.get(k, set()):
+                # Наконечник Lexus RX: «Левый» и «Правый рулевой наконечник» — оба 45460-29435.
+                # Это одна деталь на обе стороны, а не «правый»: на машину нужно две
+                c.side, c.pair = T.Side(c.side.axis, ""), True
         if any(c.member and not c.foreign for c in cands.values()):
             cands = {k: c for k, c in cands.items() if not c.foreign}
         mem = [c for c in cands.values() if c.member]
@@ -579,12 +621,66 @@ class Engine:
             elif axis and c.side.axis and axis != c.side.axis:
                 c.warning = (f"Каталог: {T.AXIS_RU[c.side.axis]}, а поставщики чаще пишут "
                              f"{T.AXIS_RU[axis]} ({f} против {r}) — проверьте")
-            if not c.side.lr and c.rows and (lr := lr_vote(c.rows)):
+            if not c.side.lr and not c.pair and c.rows and (lr := lr_vote(c.rows)):
                 c.side = T.Side(c.side.axis, lr)
                 c.side_source = c.side_source or "поставщики"
             if not want.conflicts(c.side):
                 kept.append(c)
         return kept
+
+    def _bushings_in_unit(self, pool: list[Detail], want: T.Side, host: tuple[list[str], tuple]) -> list[Candidate]:
+        """Сайлентблок в узле цапфы или рычага, названный без хозяина: у Ford Focus — просто «Втулка» в узле
+        «Задний кулак и рычаги подвески». Берём, только если такой один (или пара левый/правый):
+        у Golf в узле «…Рычаг подвески Поворотный кулак» два разных «Сайлент-блока» — чей какой, не понять."""
+        own: dict[str, Detail] = {}
+        for d in pool:
+            if is_bushing(d.name) and any(T.same(h, s) for h in host[0] for s in T.stems(d.unit, self.stop)) \
+                    and not want.conflicts(T.side(d.context, self.pr_axis)):
+                own.setdefault(_key(d.oem), d)
+        sides = [T.side(d.context, self.pr_axis) for d in own.values()]
+        if not own or len(own) > 2 or (len(own) == 2 and {x.lr for x in sides} != {"left", "right"}):
+            return []
+        return [Candidate(d, 1.0, 1.0, True, x, "каталог" if x.axis else "") for d, x in zip(own.values(), sides)]
+
+    async def _bushings_by_host(self, v: Vehicle, pool: list[Detail], want: T.Side,
+                                host: tuple[list[str], str]) -> tuple[Candidate, str] | None:
+        """Сайлентблоки переднего рычага и задней цапфы Toyota отдельно не продаёт: в каталоге рычаг «в подсборе»
+        и цапфа. Неоригинальные (Masuma, Febest, CTR) поставщики привязывают к номеру рычага или цапфы —
+        берём из его кроссов только сайлентблоки. Одна деталь (или пара левая/правая), иначе не угадать, чья."""
+        words, what = host
+        arms: dict[str, Detail] = {}
+        for d in pool:
+            st = T.stems(d.name, self.stop)
+            if st and any(T.same(T.head(st) or "", h) for h in words) \
+                    and not want.conflicts(T.side(d.context, self.pr_axis)):
+                arms.setdefault(_key(d.oem), d)
+        sides = [T.side(d.context, self.pr_axis) for d in arms.values()]
+        if not arms or len(arms) > 2 or len({s.axis for s in sides}) > 1 \
+                or (len(arms) == 2 and {s.lr for s in sides} != {"left", "right"}):
+            return None
+        got = await asyncio.gather(*(self.offers(d.oem, v.brand) for d in arms.values()), return_exceptions=True)
+        rows, brand = [], ""
+        for x in got:
+            if isinstance(x, tuple):
+                brand = brand or x[0]
+                rows += [r for r in x[1] if is_bushing(str(r.get("description") or ""))]
+        # В цапфе Lexus RX два сайлентблока: плавающий и продольной тяги — кроссы цапфы дают оба.
+        # Если поставщики называют, чей сайлентблок («задней цапфы»), берём только такие
+        named = [r for r in rows if any(T.same(h, s) for h in words for s in T.stems(str(r.get("description") or "")))]
+        rows = named or rows
+        if not rows:
+            return None
+        arm = next(iter(arms.values()))
+        d = Detail(oem=arm.oem, name=f"Сайлентблок {what[1]}", note="", amount="", match=None, unit=arm.unit,
+                   unit_note=arm.unit_note, unit_id=arm.unit_id, unit_ssd=arm.unit_ssd, image=arm.image,
+                   code_on_image=arm.code_on_image, category=arm.category, group_id=arm.group_id)
+        c = Candidate(d, 1.0, 1.0, True, T.Side(sides[0].axis, ""), "каталог", brand=brand, rows=rows,
+                      vote=axis_vote(rows))
+        maker = nice_brand(oem_brand_for(v.brand))
+        note = (f"Отдельно {maker} эти сайлентблоки не продаёт — только {what[0]} в сборе. Ниже — сайлентблоки "
+                f"других фирм, которые подходят к вашей машине. Можно поменять и {what[0]} целиком — "
+                f"напишите «{what[2]}».")
+        return c, note
 
     async def _price(self, v: Vehicle, c: Candidate):
         try:
@@ -609,9 +705,13 @@ class Engine:
 
     def _variant(self, c: Candidate, v: Vehicle, alt: bool) -> dict:
         d = c.d
+        amount = d.amount
+        if c.pair:
+            k = re.match(r"\d+", amount or "")
+            amount = str(2 * (int(k.group(0)) if k else 1))
         return {
             "oem": d.oem, "brand": c.brand or oem_brand_for(v.brand), "name": d.name, "note": d.note,
-            "amount": d.amount, "unit": d.unit, "unit_note": d.unit_note, "match": d.match, "alt": alt,
+            "amount": amount, "pair": c.pair, "unit": d.unit, "unit_note": d.unit_note, "match": d.match, "alt": alt,
             "axis": c.side.axis, "lr": c.side.lr, "side_source": c.side_source,
             "vote": {"front": c.vote[1], "rear": c.vote[2]}, "warning": c.warning, "score": round(c.score, 2),
             "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
@@ -695,6 +795,29 @@ def _main(q: list[str]) -> str | None:
 _PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
                  T.stem("пыльник"): [T.stem("чехол"), "boot"],
                  T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
+_BUSH = [T.stem("сайлентблок"), T.stem("втулка"), "bush", T.stem("сайлент")]   # VW: «Сайлент-блок»
+
+
+# Деталь, в которую запрессован сайлентблок: слова, (что продаётся в сборе, чей сайлентблок, как попросить целиком)
+_HOSTS = [([T.stem("рычаг")], ("рычаг", "рычага", "рычаг")),
+          ([T.stem("цапфа"), T.stem("кулак")], ("цапфу", "цапфы", "цапфа задняя")),
+          ([T.stem("тяга")], ("тягу", "тяги", "тяга")),
+          ([T.stem("балка")], ("балку", "балки", "балка"))]
+
+
+def _host(q: list[str]) -> tuple[list[str], tuple[str, str, str]] | None:
+    return next((h for h in _HOSTS if any(T.same(w, s) for w in h[0] for s in q)), None)
+
+
+def is_bushing(name: str) -> bool:
+    """«Сайлентблок…», «С/блок…», «Втулка рычага» — сам сайлентблок; «Фиксатор сайлентблока» — нет."""
+    st = T.stems(T.expand(name))
+    return bool(st) and any(T.same(T.head(st) or "", b) for b in _BUSH)
+
+
+# Ищем в узлах группы, даже когда группа совпала точно: «Задний кулак (цапфа)» у Toyota лежит в узлах
+# «Рычагов и тяг подвески», в составе группы его нет
+_DEEP = set(_PART_ALIASES) | {T.stem("цапфа")}
 _PARKING = [T.stem(w) for w in ("стояночного", "стояночный", "ручного", "ручник")]
 # Общие слова: «комплект ГРМ» — не повод писать «Комплект уточним отдельно»
 _GENERIC_HEADS = {T.stem(w) for w in ("комплект", "набор", "ремкомплект", "к-т", "деталь", "запчасть")}
@@ -712,7 +835,8 @@ def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]
     «Уплотнительная прокладка натяжителя») — если клиент спрашивал саму деталь, а не её. Только когда
     после этого что-то остаётся: у Ford воздушный фильтр зовётся «Фильтрующий элемент»."""
     def first_two(c: "Candidate") -> list[str]:
-        return T.stems(c.d.name)[:2]
+        # До «с …»: «ШРУС с пыльником, монтажными деталями…» у VAG — это сам ШРУС (внутренний), не пыльник
+        return T.stems(re.split(r"\s(?:с|со)\s|,", c.d.name)[0])[:2]
 
     for a, b in _EXCLUSIVE:
         if any(T.same(x, a) for x in q) and not any(T.same(x, b) for x in q):
@@ -933,7 +1057,8 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
         out.append(_offer_line(orig, numbers, theirs if same else catalog_name, "оригинал"))
     else:
         num = f" {var['oem']}" if numbers else ""
-        out.append(f"• {nice_brand(var['brand'])}{num} (оригинал) — {catalog_name} — цену и срок уточним")
+        if not var.get("via"):   # сайлентблок по номеру рычага: оригинала отдельно нет, так и написано выше
+            out.append(f"• {nice_brand(var['brand'])}{num} (оригинал) — {catalog_name} — цену и срок уточним")
     for a in alts:
         ao = a["offers"]
         who = "Motorcraft, тот же оригинал" if "motorcraft" in a["name"].lower() else "тот же оригинал"
@@ -944,7 +1069,7 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
     if o and o["analogs"]:
         shown = o["analogs"][:analogs]
         out += [_offer_line(a, numbers, fallback=catalog_name) for a in shown]
-        more = o["stats"]["articles"] - 1 - len(shown)
+        more = o["stats"]["articles"] - (1 if o["original"] else 0) - len(shown)
     return out, max(more, 0)
 
 
@@ -990,15 +1115,24 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     lines += [f"Обратите внимание: {w[0].lower() + w[1:]}." for w in res["warnings"]]
     found = 0
     order = {"part": 0, "": 0, "fluid": 1, "battery": 2, "tire": 3, "tool": 4, "chemistry": 4, "accessory": 4}
-    shown_positions = sorted(res["positions"], key=lambda p: order.get(p.get("kind", ""), 0))
+    # «Задок: … Передок: …» — запчасти так же, по частям машины, в порядке клиента
+    axis_of = lambda p: (p.get("side") or {}).get("axis", "") if order.get(p.get("kind", ""), 0) == 0 else None  # noqa: E731
+    axes = [axis_of(p) for p in res["positions"] if axis_of(p) is not None]
+    by_axis = len(axes) >= 3 and {"front", "rear"} <= set(axes)
+    first = {a: axes.index(a) for a in set(axes)}
+    shown_positions = sorted(res["positions"], key=lambda p: (order.get(p.get("kind", ""), 0),
+                                                             first.get(axis_of(p), 0) if by_axis else 0))
     sections = len({order.get(p.get("kind", ""), 0) for p in shown_positions}) > 1
-    section = None
+    section, part = None, None
     for i, p in enumerate(shown_positions, 1):
         query = p["query"]
         sec = order.get(p.get("kind", ""), 0)
         if sections and sec != section:
             lines += ["", KIND_TITLE[sec] + ":"]
             section = sec
+        if by_axis and sec == 0 and axis_of(p) != part:
+            part = axis_of(p)
+            lines += ["", AXIS_TITLE[part]]
         lines += ["", f"{i}) {query[:1].upper() + query[1:]}"]
         if p.get("kind") in KIND_NOTE and p["status"] == "not_found":
             lines.append("   " + KIND_NOTE[p["kind"]])
@@ -1043,6 +1177,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             amount = re.match(r"\d+", var["amount"] or "")
             k = int(amount.group(0)) if amount else 1   # каталог пишет и «2», и «01»
             per = f"на машину нужно {k} шт., цены за штуку" if k > 1 else ""
+            if var.get("pair"):
+                per = f"левый и правый одинаковые, {per}"
             if many:
                 side = labels[n - 1]
                 if not side or labels.count(side) > 1:
@@ -1065,6 +1201,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
 
 # Клиент часто пишет одну деталь, а нужно несколько: спросить, всё ли (менеджеры спрашивают так же)
 ANYTHING_ELSE = "Что-то ещё нужно по этой машине?"
+AXIS_TITLE = {"rear": "Сзади:", "front": "Спереди:", "": "Остальное:"}
 
 
 def _title(x: dict) -> str:

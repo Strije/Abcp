@@ -84,6 +84,11 @@ DETAILS = {
     # Каталог стороны не пишет — решают описания поставщиков
     ("TOYOTA00", 15): [cat("Тормоза", unit("Колодки", [det("04465-33471", "PAD KIT, DISC BRAKE"),
                                                        det("04466-33180", "PAD KIT, DISC BRAKE")]))],
+    # Toyota: сайлентблоки рычага отдельно не продаются — рычаг «в подсборе» (один номер на обе стороны) и фиксатор
+    ("TOYOTA00", 13402): [cat("Подвеска", unit("FRONT AXLE ARM & STEERING KNUCKLE", [
+        det("48068-48020", "Рычаг передней подвески, нижний правый № 1 (в подсборе)"),
+        det("48068-48020", "Рычаг передней подвески, нижний левый № 1 (в подсборе)"),
+        det("48657-28010", "Фиксатор сайлентблока переднего нижнего рычага", "2")]))],
 }
 # Что в составе группы, а что только в узле (all=true): воздушный фильтр Ford — только по составу
 FULL_EXTRA = {("FORD202201", 3): [det("1745844", "Впуск. труб. воздушного фильтра")]}
@@ -104,6 +109,11 @@ OFFERS = {
                                [offer(b, f"P{i}", 900 + i, desc="Колодки тормозные передние") for i, b in enumerate("ABCD")],
     ("04466-33180", "TOYOTA"): [offer("TOYOTA", "04466-33180", 7000)] +
                                [offer(b, f"R{i}", 700 + i, desc="Колодки торм. задние") for i, b in enumerate("ABCD")],
+    ("48068-48020", "TOYOTA"): [offer("TOYOTA", "48068-48020", 15000, desc="Рычаг передний нижний"),
+                                offer("Masuma", "RU-380", 580, desc="Сайлентблок переднего рычага"),
+                                offer("Zekkert", "GM5000", 370, desc="С/блок задний перед. рычага"),
+                                offer("Febest", "0124-X", 5290, desc="Рычаг передний нижний без шаровой")],
+    ("48657-28010", "TOYOTA"): [offer("TOYOTA", "48657-28010", 760)],
 }
 
 
@@ -131,7 +141,7 @@ class Fake:
     async def brands(self, number):
         if number.startswith("21") or number.startswith("18") or number.startswith("17"):
             return [{"brand": "FOMOCO"}, {"brand": "FORD"}]  # FOMOCO первым — выбрать всё равно FORD
-        return [{"brand": "TOYOTA"}] if number.startswith("04") else [{"brand": "VAG"}]
+        return [{"brand": "TOYOTA"}] if number.startswith(("04", "48")) else [{"brand": "VAG"}]
 
     async def offers(self, number, brand):
         self.calls.append(("offers", number, brand))
@@ -685,3 +695,38 @@ def test_kinds_and_rules_confidence():
     r = from_llm(d, mem, 3, "2 штуки")["reply"]
     assert not r["picks"] and r["unclear"] == ["колодки"]
     assert from_llm(d, mem, 3, "давайте за 9000")["reply"]["picks"]
+
+
+def test_left_and_right_under_one_number_are_two_pieces():
+    """Наконечник Lexus RX: «Левый» и «Правый» — один номер. Это одна деталь на обе стороны, на машину две."""
+    p = run("XW7BF4FK30S064389 рычаг передний нижний")["positions"][0]
+    v = p["variants"][0]
+    assert p["status"] == "found" and len(p["variants"]) == 1 and v["lr"] == "" and v["pair"] and v["amount"] == "2"
+    from app.podbor.engine import draft
+    assert "левый и правый одинаковые, на машину нужно 2 шт." in draft(run("XW7BF4FK30S064389 рычаг передний нижний")).lower()
+
+
+def test_bushings_by_arm_number():
+    """Сайлентблоков рычага Toyota в каталоге нет — берём сайлентблоки из кроссов номера рычага, сам рычаг — нет."""
+    res = run("XW7BF4FK30S064389 сайлентблоки переднего рычага")
+    v = res["positions"][0]["variants"][0]
+    assert v["name"] == "Сайлентблок рычага" and v["offers"]["original"] is None
+    assert {a["brand"] for a in v["offers"]["analogs"]} == {"Masuma", "Zekkert"}
+    from app.podbor.engine import draft
+    text = draft(res)
+    assert "не продаёт" in text and "цену и срок уточним" not in text
+
+
+def test_price_outliers_are_dropped():
+    rows = [offer("CTR", "CE1", 50)] + [offer(b, f"N{i}", 600 + 50 * i) for i, b in enumerate(["A", "B", "C", "D", "E"])]
+    o = curate(rows, "X", "TOYOTA", set())
+    assert "CTR" not in {a["brand"] for a in o["analogs"]} and o["stats"]["price_min"] == 600
+
+
+def test_floating_bushing_words_and_carrier_name():
+    from app.podbor.catalog import _rename
+    assert "сайлентблоки задней цапфы" in T.expand("Задок: плавающие и втулки стабилизатора")
+    assert T.expand("плавающий с/б") == "сайлентблок задней цапфы"
+    assert T.expand("Полиуретан. сайл.блок задней подв").startswith("Полиуретан. сайлентблок")
+    assert _rename("Крепление заднего моста, правый (в подсборе)", "4230448030") == "Задний кулак (цапфа), правый (в подсборе)"
+    assert _rename("Крепление заднего моста", "1234") == "Крепление заднего моста"

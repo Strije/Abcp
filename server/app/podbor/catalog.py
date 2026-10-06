@@ -151,6 +151,19 @@ def _attrs(o: dict) -> dict[str, str]:
     return out
 
 
+# Машинный перевод Laximo, по которому деталь не найти словами клиента: у Toyota «CARRIER SUB-ASSY, RR AXLE»
+# (42304/42305 — задняя цапфа, в неё запрессован «плавающий сайлентблок») переведено как
+# «Крепление заднего моста, правый (в подсборе)»
+_RENAME = [(re.compile(r"^Крепление заднего моста", re.I), re.compile(r"^4230[45]"), "Задний кулак (цапфа)")]
+
+
+def _rename(name: str, oem: str) -> str:
+    for rx, num, to in _RENAME:
+        if rx.search(name) and num.search(re.sub(r"[^0-9A-Z]", "", oem.upper())):
+            return rx.sub(to, name)
+    return name
+
+
 def parse_details(data: Any, group_id: int = 0) -> list[Detail]:
     cats = data if isinstance(data, list) else (data.get("categories") or data.get("data") or []) \
         if isinstance(data, dict) else []
@@ -166,7 +179,7 @@ def parse_details(data: Any, group_id: int = 0) -> list[Detail]:
                     continue  # «Смазка не является запчастью» и т.п.
                 da = _attrs(d)
                 out.append(Detail(
-                    oem=oem, name=str(d.get("name") or "").strip(), note=da.get("note", ""),
+                    oem=oem, name=_rename(str(d.get("name") or "").strip(), oem), note=da.get("note", ""),
                     amount=da.get("amount", ""), match=d.get("match"),
                     unit=str(u.get("name") or ""), unit_note=ua.get("note", ""),
                     unit_id=str(u.get("unitId") or ""), unit_ssd=str(u.get("ssd") or ""),

@@ -155,7 +155,12 @@ def not_the_part(description: str, name: str) -> bool:
     h = T.head(st) if st else None
     if not h or not any(T.same(h, s) for s in _SMALL):
         return False
-    return not any(T.same(h, s) for s in T.stems(name))
+    # «ШРУС с пыльником, монтажными деталями…» (VAG) — сам ШРУС: «Пыльник ШРУСа» ему не аналог
+    main = re.split(r"\s(?:с|со)\s|,", name)[0]
+    return not any(T.same(h, s) for s in T.stems(main))
+
+
+OUTLIER = 0.12   # 50 ₽ при середине 700 ₽ — 0.07; дешёвые китайские колодки при середине 1 600 ₽ — около 0.2
 
 
 def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5, name: str = "") -> dict:
@@ -167,6 +172,15 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
     if name:
         clean = [r for r in clean if not not_the_part(str(r.get("description") or ""), name)
                  or _key(r.get("numberFix") or r.get("number")).lstrip("0") == _key(oem).lstrip("0")]
+    # «CTR — 50 ₽» за рулевую тягу при остальных 450–960 ₽: ошибка в прайсе или не та позиция.
+    # Самым дешёвым такое не показываем — отсекаем то, что в разы дешевле середины по артикулам
+    low: dict[tuple, float] = {}
+    for r in clean:
+        k = (bkey(r.get("brand")), _key(r.get("numberFix") or r.get("number")))
+        low[k] = min(low.get(k, math.inf), _num(r.get("price")))
+    if len(low) >= 5:
+        mid = sorted(low.values())[len(low) // 2]
+        clean = [r for r in clean if _num(r.get("price")) >= OUTLIER * mid]
     fast: dict[tuple, dict] = {}
     cheap: dict[tuple, dict] = {}
     count: dict[tuple, int] = {}
