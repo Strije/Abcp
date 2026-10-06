@@ -560,6 +560,63 @@ def llm_compare(chats_path: str, vinqu: str, out: str, n: str = "120", url: str 
     print(f"Разборы рядом: {out}")
 
 
+def followups_llm(path: str, out: str, n: str = "150", url: str = "https://109.73.199.217"):
+    """Вторые сообщения: где правила не уверены, спрашиваем модель (через сервер) — что она поняла.
+    Отчёт: доля неуверенных у правил, что сказала модель, и все пары «правила / модель» для просмотра."""
+    import os
+    import random
+    import httpx
+    from .chats import load
+    from .dialog import plan
+    rows = load(path)
+    freq = collections.Counter(m["text"].strip().lower()[:80] for r in rows for m in r["messages"] if m["role"] == "client")
+    tmpl = {t for t, c in freq.items() if c >= 15}
+    cases = []
+    for r in rows:
+        ms = r["messages"]
+        i = next((i for i, m in enumerate(ms) if m["role"] == "manager" and PRICE_LINE.search(m["text"])), None)
+        if i is None:
+            continue
+        nxt = next((t for m in ms[i + 1:] if m["role"] == "client" and not JUNK.match(m["text"].strip())
+                    and m["text"].strip().lower()[:80] not in tmpl
+                    and re.search(r"[а-яёa-z]", t := clean_reply(m["text"]), re.I)), None)
+        if not nxt or len(nxt) > 300:
+            continue
+        asked = [ENGINE.clean(p) for m in ms[:i] if m["role"] == "client"
+                 for ch in T.parse(m["text"]).chunks for p in [ch] if INDEX.known(T.stems(p, STOP))]
+        mem = offer_memory(ms[i]["text"], asked)
+        if mem["positions"]:
+            cases.append((nxt, mem))
+    random.seed(21)
+    cases = random.sample(cases, min(int(n), len(cases)))
+    c = httpx.Client(base_url=url, auth=("m", os.environ["PODBOR_PASSWORD"]), timeout=120)
+    report, tot = [], collections.Counter()
+    for j, (text, mem) in enumerate(cases, 1):
+        pl = plan(text, mem, STOP, INDEX, 3, ENGINE.clean)
+        tot["всего"] += 1
+        tot["правила уверены"] += pl["sure"]
+        llm = None
+        if not pl["sure"]:
+            try:
+                llm = c.post("/v1/podbor/understand", json={"text": text, "memory": mem}).json().get("parsed")
+            except Exception as e:
+                print(f"  {j}: ошибка {e}")
+            if llm:
+                k = ("уточнить" if llm["unsure"] or (llm["clarify"] and not llm["picks"]) else
+                     "выбор" if llm["picks"] else "вопрос" if llm["asks"] else
+                     "новая/уточнение" if llm["new_parts"] or llm["refine"] else
+                     "менеджеру" if llm["manager"] else "пусто")
+                tot[f"модель: {k}"] += 1
+        report.append({"text": text, "rules": pl["kind"], "sure": pl["sure"], "llm": llm,
+                       "shown": [p["query"] for p in mem["positions"]]})
+        if j % 25 == 0:
+            print(f"  {j}/{len(cases)}", flush=True)
+    for k, v in sorted(tot.items()):
+        print(f"  {k}: {v}")
+    Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"Пары: {out}")
+
+
 def typos(path: str):
     """Какие слова переписки «исправляются» как опечатки: частые — почти наверняка обычные слова (в not_typos)."""
     from .chats import load
@@ -575,4 +632,4 @@ if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     {"requests": requests, "chats": chats, "typos": typos, "snapshot": snapshot, "diff": diff,
      "followups": followups, "crosscheck": crosscheck, "prices": prices, "fleet": fleet,
-     "llm": llm_compare}[cmd](*args)
+     "llm": llm_compare, "followups_llm": followups_llm}[cmd](*args)

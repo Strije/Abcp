@@ -109,6 +109,7 @@ class PodborIn(BaseModel):
 
 class PodborTextOnly(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
+    memory: dict | None = None   # с памятью — разбор следующего сообщения разговора
 
 
 class PodborTextIn(BaseModel):
@@ -460,7 +461,10 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     async def podbor_understand(body: PodborTextOnly):
         """Только разбор текста моделью — без каталога и цен: для сравнения модели с правилами."""
         t0 = time.time()
-        parsed = await podbor.understand.understand(state["llm"], body.text)
+        if body.memory:
+            parsed = await podbor.understand.understand_reply(state["llm"], body.text, body.memory)
+        else:
+            parsed = await podbor.understand.understand(state["llm"], body.text)
         return {"parsed": parsed, "seconds": round(time.time() - t0, 1)}
 
     @app.get("/v1/podbor/laximo-usage", dependencies=[Depends(podbor_auth)])

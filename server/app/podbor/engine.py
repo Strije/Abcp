@@ -123,7 +123,7 @@ class Engine:
         t0 = time.time()
         req = T.parse(text)
         if memory and (memory.get("ident") or memory.get("plate")) and not req.ident and not req.plate:
-            return await self._follow(text, req, memory, analogs, t0)
+            return await self._follow(text, req, memory, analogs, t0, llm is not False)
         res: dict[str, Any] = {"request": {"ident": req.ident, "plate": req.plate, "model": req.model,
                                            "chunks": req.chunks, "vehicle": vehicle},
                                "status": "ok", "vehicle": None, "vehicles": [], "warnings": [], "positions": []}
@@ -167,7 +167,9 @@ class Engine:
                 res["understood"] = {"by": "rules"}
         if not items:
             return self._done(res, "no_positions", t0)
-        res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in items[:MAX_POSITIONS])))
+        kinds = [m.get("kind", "") for m in meta] + [""] * len(items)
+        res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s, kinds[i])
+                                                       for i, (q, s) in enumerate(items[:MAX_POSITIONS]))))
         for p, m in zip(res["positions"], meta):
             # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
             p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
@@ -185,7 +187,8 @@ class Engine:
 
     # ---------- следующая реплика разговора ----------
 
-    async def _follow(self, text: str, req: T.Request, mem: dict, analogs: int, t0: float) -> dict:
+    async def _follow(self, text: str, req: T.Request, mem: dict, analogs: int, t0: float,
+                      use_llm: bool = True) -> dict:
         """«давайте за 1650», «а задние?», «прокладку», «а расходомер воздуха?» — машина и позиции из памяти."""
         res: dict[str, Any] = {"request": {"ident": mem.get("ident", ""), "plate": mem.get("plate", ""), "model": "",
                                            "chunks": req.chunks, "vehicle": mem.get("vehicle")},
@@ -206,6 +209,25 @@ class Engine:
             return self._done(res, "no_quick_groups" if e.code == "E_NOTSUPPORTED" else "catalog_error", t0, mem)
         positions = mem.get("positions") or []
         plan = D.plan(text, mem, self.stop, tree, analogs, self.clean)
+        if not plan["sure"] and use_llm and self.llm is not None and getattr(self.llm, "enabled", False):
+            # Правила не уверены («Хорошо, давайте», длинное сообщение с новыми деталями) — спрашиваем модель
+            parsed = await U.understand_reply(self.llm, text, mem, analogs)
+            if parsed is not None:
+                res["understood"] = {"by": "llm", "rules": plan["kind"], **parsed}
+                hp = D.from_llm(parsed, mem, analogs)
+                if hp["reply"] or hp["jobs"] or hp["handoff"]:
+                    plan = hp
+        if plan["kind"] == "llm":
+            res["handoff"] = plan["handoff"]
+            if plan["reply"]:
+                res["reply"] = await self._reply(plan["reply"], positions, v)
+            if not plan["jobs"]:
+                if not plan["reply"]:
+                    return self._done(res, "chat", t0, mem)
+                return self._done(res, "answer" if plan["reply"]["kind"] == "answer" else "order", t0, mem)
+            res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s)
+                                                           for q, s in plan["jobs"][:MAX_POSITIONS])))
+            return self._done(res, "ok", t0, mem)
         if plan["kind"] != "chat" and plan.get("handoff"):
             res["handoff"] = plan["handoff"]   # на это менеджер отвечает сам — бот сделал свою часть
         if plan["kind"] in ("pick", "pick_unclear", "answer"):
@@ -244,7 +266,8 @@ class Engine:
                     break
             answers.append(got or item("no_brand", p, None, word=a["word"]))
         picks = [{"type": "pick", **x} for x in r.get("picks", [])]
-        return {"kind": r["kind"], "answers": answers, "picks": picks, "unclear": r.get("unclear", [])}
+        return {"kind": r["kind"], "answers": answers, "picks": picks, "unclear": r.get("unclear", []),
+                "clarify": r.get("clarify", "")}
 
     # ---------- позиции ----------
 
@@ -348,10 +371,14 @@ class Engine:
         return any(all(any(T.same(w, s) for s in q) for w in nc) and T.same(_main(q), _main(nc))
                    for nc in self.not_catalog)
 
-    async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side) -> dict:
-        pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
-                               "groups": [], "variants": [], "question": "", "note": ""}
+    async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
         q = T.stems(query, self.stop)
+        kind = kind or kind_of(q)
+        pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
+                               "groups": [], "variants": [], "question": "", "note": "", "kind": kind}
+        if kind in ("battery", "tire", "tool", "chemistry", "accessory"):
+            pos["note"] = KIND_NOTE[kind]   # не каталог машины: подберём отдельно — так и пишем
+            return pos
         if self.outside(q):
             pos["note"] = "Это не деталь каталога автомобиля — подберём по названию."
             return pos
@@ -696,6 +723,37 @@ def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]
     return keep or tier
 
 
+# Виды позиций: запчасти ищем в каталоге, масла и жидкости — тоже (у многих марок есть оригинал), остальное —
+# подбираем отдельно, по параметрам или названию
+KIND_TITLE = {0: "Запчасти", 1: "Масла и жидкости", 2: "Аккумулятор", 3: "Шины и диски", 4: "Другое"}
+KIND_NOTE = {
+    "battery": "Аккумулятор подберём по ёмкости, пусковому току, полярности и размерам — напишем варианты.",
+    "tire": "Шины и диски подберём по размеру — напишите размер с боковины шины или пришлите фото.",
+    "tool": "Это не деталь автомобиля — подберём по названию и напишем.",
+    "chemistry": "Это не деталь автомобиля — подберём по названию и напишем.",
+    "accessory": "Это не деталь автомобиля — подберём по названию и напишем.",
+}
+_KIND_WORDS = {
+    "fluid": ("масло", "масла", "антифриз", "тосол", "жидкость", "омывайка", "незамерзайка"),
+    "battery": ("аккумулятор", "акб", "аккум", "батарея"),
+    "tire": ("шина", "шины", "резина", "покрышка", "колесо"),
+}
+
+
+def kind_of(q: list[str]) -> str:
+    """Вид по главному слову, когда модель не разбирала: «масло моторное» — жидкость, «АКБ» — аккумулятор.
+    «Масляный фильтр» — запчасть: главное слово «фильтр». «Резина» — шины, только если она главное слово
+    и рядом нет «уплотнительная», «двери» и т. п."""
+    h = T.head(q) if q else ""
+    for kind, words in _KIND_WORDS.items():
+        if any(T.same(h, T.stem(w)) for w in words):
+            if kind == "tire" and len(q) > 1 and not any(T.same(s, T.stem(w)) for s in q
+                                                          for w in ("зимняя", "летняя", "шипованная", "липучка", "r")):
+                return "part"   # «резинка двери», «колесо рулевое» — детали
+            return kind
+    return "part"
+
+
 def needs_llm(chunks: list[str]) -> bool:
     """Когда звать модель: несколько строк, заголовки «Задок:», «+», «либо», длинный текст. Короткое
     «колодки передние» правила разбирают быстрее и не хуже."""
@@ -922,16 +980,30 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         return reply_text(res["reply"], numbers)
     v = res["vehicle"]
     if res.get("followup"):
-        lines = []   # продолжение разговора: без приветствия и машины, они уже были
+        # продолжение разговора: без приветствия и машины, они уже были; ответ про показанное — первым
+        lines = [reply_text(res["reply"], numbers)] if res.get("reply") else []
     else:
         lines = ["Здравствуйте! Подобрали запчасти по VIN для вашего автомобиля:", v.get("short") or v["summary"]]
     lines += [f"Обратите внимание: {w[0].lower() + w[1:]}." for w in res["warnings"]]
     found = 0
-    for i, p in enumerate(res["positions"], 1):
+    order = {"part": 0, "": 0, "fluid": 1, "battery": 2, "tire": 3, "tool": 4, "chemistry": 4, "accessory": 4}
+    shown_positions = sorted(res["positions"], key=lambda p: order.get(p.get("kind", ""), 0))
+    sections = len({order.get(p.get("kind", ""), 0) for p in shown_positions}) > 1
+    section = None
+    for i, p in enumerate(shown_positions, 1):
         query = p["query"]
+        sec = order.get(p.get("kind", ""), 0)
+        if sections and sec != section:
+            lines += ["", KIND_TITLE[sec] + ":"]
+            section = sec
         lines += ["", f"{i}) {query[:1].upper() + query[1:]}"]
+        if p.get("kind") in KIND_NOTE and p["status"] == "not_found":
+            lines.append("   " + KIND_NOTE[p["kind"]])
+            continue
         if p["status"] == "not_found":
-            if "не деталь каталога" in p["note"]:
+            if p.get("kind") == "fluid":
+                lines.append("   Подберём по допуску производителя и объёму заправки — напишем варианты.")
+            elif "не деталь каталога" in p["note"]:
                 lines.append("   Это не из каталога автомобиля — подберём по названию и напишем.")
             elif p["note"].startswith("В каталоге в этой группе нашёлся только"):
                 lines.append("   " + p["note"])   # «нашёлся только внутренний вариант — нужный уточним»
@@ -1004,6 +1076,8 @@ def _title(x: dict) -> str:
 def reply_text(r: dict, numbers: bool = False) -> str:
     """Ответ на реплику про показанные предложения: «Оформляем: …, итого» или «Самый недорогой — …»."""
     lines: list[str] = []
+    if r.get("clarify"):
+        lines += [r["clarify"], ""]
     for a in r.get("answers", []):
         t, title = a["type"], _title(a)
         if t == "cheapest":

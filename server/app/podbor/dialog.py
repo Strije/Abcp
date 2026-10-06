@@ -590,6 +590,97 @@ KINDS = {
 
 def plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
          clean=lambda t: t.strip()) -> dict:
+    """Разбор правилами и отметка, уверены ли они («sure»). Не уверены — сервер спросит модель (from_llm)."""
+    out = _plan(text, mem, stop, tree, analogs, clean)
+    out["sure"] = _sure(out, text)
+    return out
+
+
+def _sure(out: dict, text: str) -> bool:
+    """Правила уверены: выбор по цене, фирме, номеру; вопрос «дешевле?», «оригинал есть?»; «а задние?»;
+    ответ на вопрос бота; короткая новая деталь; «подумаю». Не уверены: согласие без варианта, длинное
+    или многострочное сообщение с новой деталью, «не про подбор» без явной отсрочки."""
+    kind = out["kind"]
+    if kind == "pick":
+        return bool((out.get("reply") or {}).get("picks"))
+    if kind in ("answer", "side", "attr", "reply"):
+        return True
+    if kind == "new":
+        return len(text) <= 80 and "\n" not in text.strip()
+    if kind == "chat":
+        return bool(DEFER.search(text))
+    return False
+
+
+def from_llm(d: dict, mem: dict, analogs: int = 3) -> dict:
+    """Ответ модели о следующем сообщении → те же действия, что у правил: выбор, ответы, поиск, менеджеру,
+    уточняющий вопрос клиенту. Ссылки модели на П/В проверяем: несуществующие пропускаем."""
+    positions = mem.get("positions") or []
+    last_turn = max((p.get("turn", 0) for p in positions), default=0)
+    recent = [p for p in positions if p.get("turn", 0) == last_turn] or positions[-1:]
+
+    def pos(i):
+        return positions[i - 1] if i and 0 < i <= len(positions) else None
+
+    picks, answers, ask_brand, jobs = [], [], [], []
+    for x in d.get("picks", []):
+        p = pos(x["p"])
+        vis = shown(p, analogs) if p else []
+        if p and 0 < x["v"] <= len(vis):
+            picks.append(_pick(p, vis[x["v"] - 1], False, x.get("qty") or 0))
+    for a in d.get("asks", []):
+        for p in ([pos(a["p"])] if pos(a.get("p")) else recent):
+            about = a["about"]
+            if about == "cheaper":
+                has = any(x["who"] == "" for x in all_offers(p))
+                answers.append(("cheapest", p, _cheapest(p)) if has else _analogs_answer(p, analogs))
+            elif about == "original":
+                answers.append(("original", p, next((x for x in all_offers(p) if x["who"] == "оригинал"), None)))
+            elif about == "analogs":
+                seen = {(x["offer"]["brand"], x["offer"]["number"]) for x in shown(p, analogs)}
+                extra = [x for x in all_offers(p) if x["who"] == "" and
+                         (x["offer"]["brand"], x["offer"]["number"]) not in seen][:3]
+                answers += [("more", p, x) for x in extra] or [_analogs_answer(p, analogs)]
+            elif about == "best":
+                answers.append(("best", p, _best(p)))
+            elif about == "stock":
+                vis = shown(p, analogs)
+                here = [x for x in vis if x["offer"]["days"] <= 0][:3]
+                answers += [("stock", p, x) for x in here] or (
+                    [("fastest", p, min(vis, key=lambda x: (x["offer"]["days"], x["offer"]["price"])))] if vis else [])
+            elif about == "spec":
+                spec = _spec(p, analogs)
+                if spec:
+                    answers.append(("spec", p, spec))
+            elif about == "brand" and a.get("brand"):
+                key = _bk(a["brand"])
+                hit = next((x for x in all_offers(p) if _bk(x["offer"]["brand"]) == key), None)
+                if hit:
+                    answers.append(("brand", p, hit))
+                else:
+                    ask_brand.append({"position": positions.index(p), "brand": key, "word": a["brand"]})
+    for r in d.get("refine", []):
+        p = pos(r["p"])
+        if not p:
+            continue
+        base = strip_side(p["query"])
+        if r.get("attr"):
+            base = replace_adj(base, r["attr"])
+        side = T.Side(r.get("axis") or "", r["lr"] if r.get("lr") in ("left", "right") else "")
+        jobs.append((side_query(base, side) if side.axis or side.lr else base, side))
+    for n in d.get("new_parts", []):
+        jobs.append((n["part"], T.Side(n.get("axis") or "", n["lr"] if n.get("lr") in ("left", "right") else "")))
+    clarify = d.get("clarify", "") if (d.get("unsure") or not (picks or answers or ask_brand or jobs)) else ""
+    reply = None
+    if picks or answers or ask_brand or clarify:
+        reply = {"kind": "order" if picks and not answers and not ask_brand else "answer",
+                 "picks": picks, "answers": answers, "ask_brand": ask_brand, "unclear": [], "clarify": clarify}
+    return {"kind": "llm", "reply": reply, "jobs": jobs, "replaced": [], "handoff": d.get("manager", []),
+            "sure": not d.get("unsure")}
+
+
+def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
+          clean=lambda t: t.strip()) -> dict:
     """Что делать со следующим сообщением клиента. Общая для сервера и замера по переписке
     (python -m app.podbor.measure followups), чтобы замер мерил то, что работает на самом деле.
     tree — дерево групп машины (TreeIndex); jobs — запросы для подбора: (текст, сторона)."""
