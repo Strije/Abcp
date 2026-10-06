@@ -11,3 +11,6 @@ app/podbor/engine_bak.py
 outputs/
 zapgpt_lora_model/
 app/podbor/scenarios_local.json
+app/podbor/parse_catalog.py
+app/podbor/semantic_search.py
+app/podbor/train_*.py
