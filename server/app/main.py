@@ -10,7 +10,8 @@ POST /v1/laximo/{method}      подбор по авто через Laximo (па
 POST /v1/podbor/text         ответ клиенту из готового подбора с другими настройками (артикулы, число аналогов)
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
 GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
-GET  /v1/podbor/laximo-usage сколько запросов ушло в Laximo: сегодня, за месяц, по методам (пароль подбора)
+GET  /v1/podbor/laximo-usage сколько запросов ушло в Laximo и в языковую модель (пароль подбора)
+POST /v1/podbor/understand   только разбор текста моделью, без каталога — для сравнения с правилами
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
 DELETE /v1/access-request     доступ появился — закрыть заявку
@@ -106,6 +107,10 @@ class PodborIn(BaseModel):
     llm: bool | None = None                                 # разбор моделью: None — сама решает, False — только правила
 
 
+class PodborTextOnly(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
 class PodborTextIn(BaseModel):
     """Пересобрать ответ клиенту из уже полученного подбора — без новых запросов в каталог."""
     result: dict
@@ -171,6 +176,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             t.cancel()
         await state["abcp"].close()
         await state["laximo"].close()
+        await state["llm"].close()
 
     app = FastAPI(title="Avtodrug API", lifespan=lifespan, docs_url=None, redoc_url=None)
 
@@ -449,6 +455,13 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             return {"text": podbor.draft(body.result, body.numbers, body.analogs)}
         except (KeyError, TypeError, AttributeError, IndexError, ValueError):
             raise HTTPException(422, "Это не результат подбора")
+
+    @app.post("/v1/podbor/understand", dependencies=[Depends(podbor_auth)])
+    async def podbor_understand(body: PodborTextOnly):
+        """Только разбор текста моделью — без каталога и цен: для сравнения модели с правилами."""
+        t0 = time.time()
+        parsed = await podbor.understand.understand(state["llm"], body.text)
+        return {"parsed": parsed, "seconds": round(time.time() - t0, 1)}
 
     @app.get("/v1/podbor/laximo-usage", dependencies=[Depends(podbor_auth)])
     async def laximo_usage():

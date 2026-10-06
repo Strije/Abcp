@@ -22,7 +22,7 @@ from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
 from .offers import _offer, axis_vote, brand_candidates, curate, days, lr_vote, oem_brand_for
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
-MAX_POSITIONS = 10
+MAX_POSITIONS = 15   # сообщение мастера «по всей подвеске» — до 11–12 позиций
 MAX_VARIANTS = 6
 MAX_PRICED = 4
 
@@ -377,13 +377,22 @@ class Engine:
             # «Тормозные барабаны» у Nissan: отдельной группы нет, а «барабанные» в названии группы колодок
             # совпало с «барабаны». Главного слова клиента нет ни в одном найденном названии — ищем его
             # по всем узлам этих групп и берём, если нашлось
-            head = T.head(tree.known(q) or q)
-            has = lambda name: any(T.same(head, s) for s in T.stems(name, self.stop))  # noqa: E731
-            if head and head not in T.ADJ and head not in _GENERIC_HEADS and not any(has(c.d.name) for c in cands):
+            known = tree.known(q) or q
+            raw_head = T.head(q)
+            # Главного слова клиента нет в словаре каталога: «сайлентблок переднего рычага» у Toyota привёл
+            # в «Рычаг передний нижний» одним «рычагом» — сайлентблок ищем внутри узла (у Toyota это «втулка»)
+            lost = bool(raw_head) and raw_head not in known and raw_head not in T.ADJ and raw_head not in _GENERIC_HEADS
+            head = raw_head if lost else T.head(known)
+            aliases = [head] + _PART_ALIASES.get(head, [])
+            has = lambda name: any(T.same(a, s) for a in aliases for s in T.stems(name, self.stop))  # noqa: E731
+            # Иначе — только при неполном совпадении с группой: «Стойки стабилизатора» у Toyota совпали точно,
+            # а деталь в ней — «Шарнир переднего стабилизатора»; искать «стойку» по узлам — найти «Опору стойки»
+            if (best < 1.0 or lost) and head and head not in T.ADJ and head not in _GENERIC_HEADS \
+                    and not any(has(c.d.name) for c in cands):
                 lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                              return_exceptions=True)
                 full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)]
-                better = self._candidates(tree, q, want, groups, full, set()) if full else []
+                better = self._candidates(tree, q + aliases[1:2], want, groups, full, set()) if full else []
                 if better:
                     cands = better
                 else:
@@ -652,10 +661,15 @@ def _main(q: list[str]) -> str | None:
     h = T.head(q)
     nouns = [s for s in q if s not in T.ADJ and s != h]
     return nouns[0] if h in _BUNDLE and nouns else h
+# Как деталь, которую клиент называет по-своему, может называться в каталоге: сайлентблок у Toyota — «втулка»
+_PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
+                 T.stem("пыльник"): [T.stem("чехол"), "boot"],
+                 T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
 _PARKING = [T.stem(w) for w in ("стояночного", "стояночный", "ручного", "ручник")]
 # Общие слова: «комплект ГРМ» — не повод писать «Комплект уточним отдельно»
 _GENERIC_HEADS = {T.stem(w) for w in ("комплект", "набор", "ремкомплект", "к-т", "деталь", "запчасть")}
-_EXCLUSIVE = [(T.stem("ремень"), T.stem("цепи")), (T.stem("цепь"), T.stem("ремня"))]
+_EXCLUSIVE = [(T.stem("ремень"), T.stem("цепи")), (T.stem("цепь"), T.stem("ремня")),
+              (T.stem("рычаг"), T.stem("очистителя")), (T.stem("рычаг"), T.stem("стеклоочистителя"))]
 # Мелочь при детали в каталоге. Ремкомплекта нет: «ремкомплект подшипника» у Ford — сам подшипник с крепежом
 _SMALL = [T.stem(w) for w in ("пружина", "направляющая", "прокладка", "уплотнительная", "уплотнение", "болт", "гайка", "шайба",
                                "скоба", "клипса", "фиксатор", "заглушка", "кольцо", "стопорное", "датчик", "пыльник",

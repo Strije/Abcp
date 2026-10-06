@@ -496,6 +496,70 @@ def fleet(path: str, out: str | None = None):
         Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+# ---------- модель против правил: разбор сумбурных сообщений ----------
+
+def llm_compare(chats_path: str, vinqu: str, out: str, n: str = "120", url: str = "https://109.73.199.217"):
+    """Сообщения, которые бот отдал бы модели (несколько строк, «+», «:», «либо», длинные), из заявок и
+    переписки. Каждое разбирают правила и модель (через сервер — ключ только там); позиции обоих оцениваем
+    одинаково — уверенно ли ведут в одну группу каталога. Пароль страницы — в PODBOR_PASSWORD."""
+    import os
+    import random
+    import time as _time
+    import httpx
+    from .chats import load
+    from .engine import needs_llm
+    msgs = []
+    for line in Path(vinqu).read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            r = json.loads(line)
+            body = str(r.get("claim") or r.get("query") or "")
+            if needs_llm(T.parse(body).chunks):
+                msgs.append(("заявка", body))
+    for d in load(chats_path):
+        first = next((m["text"] for m in d["messages"] if m["role"] == "client"), "")
+        ch = T.parse(first).chunks
+        if needs_llm(ch) and INDEX.known(T.stems(first, STOP)) and len(first) < 1500:
+            msgs.append(("чат", first))
+    random.seed(11)
+    msgs = random.sample(msgs, min(int(n), len(msgs)))
+    c = httpx.Client(base_url=url, auth=("m", os.environ["PODBOR_PASSWORD"]), timeout=120)
+    rows, tot = [], collections.Counter()
+    for i, (src, body) in enumerate(msgs, 1):
+        req = T.parse(body)
+        rules = [q for q, _ in ENGINE.split(req.chunks, INDEX)]
+        t0 = _time.time()
+        try:
+            parsed = c.post("/v1/podbor/understand", json={"text": "\n".join(req.chunks)}).json().get("parsed")
+        except Exception as e:   # сеть — отметим и пойдём дальше
+            parsed = None
+            print(f"  {i}: ошибка {e}")
+        took = _time.time() - t0
+        llm = [p["part"] for p in (parsed or {}).get("positions", [])]
+        def score(qs):
+            k = collections.Counter(classify(q)[0] for q in qs)
+            return k
+        sr, sl = score(rules), score(llm)
+        tot["сообщений"] += 1
+        tot["правила: позиций"] += len(rules)
+        tot["правила: одна группа"] += sr["одна группа"]
+        tot["модель: позиций"] += len(llm)
+        tot["модель: одна группа"] += sl["одна группа"]
+        tot["модель: не ответила"] += parsed is None
+        tot["модель: секунд"] += took
+        rows.append({"src": src, "text": body[:600], "rules": rules, "llm": (parsed or {}).get("positions"),
+                     "questions": (parsed or {}).get("questions"), "seconds": round(took, 1)})
+        if i % 10 == 0:
+            print(f"  {i}/{len(msgs)}", flush=True)
+    print(f"Сообщений: {tot['сообщений']}, модель не ответила: {tot['модель: не ответила']}, "
+          f"среднее время модели: {tot['модель: секунд'] / max(tot['сообщений'], 1):.1f} с")
+    for who in ("правила", "модель"):
+        a, b = tot[f"{who}: позиций"], tot[f"{who}: одна группа"]
+        print(f"  {who}: позиций {a} ({a / max(tot['сообщений'], 1):.1f} на сообщение), уверенно в одну группу "
+              f"{b} ({b * 100 / max(a, 1):.0f}%)")
+    Path(out).write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"Разборы рядом: {out}")
+
+
 def typos(path: str):
     """Какие слова переписки «исправляются» как опечатки: частые — почти наверняка обычные слова (в not_typos)."""
     from .chats import load
@@ -510,4 +574,5 @@ def typos(path: str):
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     {"requests": requests, "chats": chats, "typos": typos, "snapshot": snapshot, "diff": diff,
-     "followups": followups, "crosscheck": crosscheck, "prices": prices, "fleet": fleet}[cmd](*args)
+     "followups": followups, "crosscheck": crosscheck, "prices": prices, "fleet": fleet,
+     "llm": llm_compare}[cmd](*args)

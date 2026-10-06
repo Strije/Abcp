@@ -224,7 +224,9 @@ class TreeIndex:
         for syn in synonyms or []:
             gid = next((int(g) for g in syn.get("groups", []) if int(g) in self.groups), None)
             if gid is None:
-                for w in syn["words"]:
+                # Только помеченные «strict»: у них перечислены все группы этой детали. У «сайлентблок рычага»
+                # не все (у Toyota сайлентблоки — в «Рычаг передний нижний»), там «не нашли» было бы ложью
+                for w in syn["words"] if syn.get("strict") else []:
                     st = T.stems(w, stop)
                     if len(st) >= 2:   # одно слово — слишком общее, чтобы решать за весь каталог
                         self.absent.add((frozenset(st), T.side(w).axis))
