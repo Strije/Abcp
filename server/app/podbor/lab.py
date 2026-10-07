@@ -170,11 +170,15 @@ def run(path: str, out: str, mode: str = "") -> None:
     rows = [x.split("\t") for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
     print(f"Машин в парке: {len(trees)}, фраз: {len(rows)}")
     report = []
+    part = _has_part()
     for row in rows:
         q, types = row[0], (row[1].split(",") if len(row) > 1 else [])
         clean = re.sub(r"\s+", " ", _MAKES.sub(" ", q)).strip()
         # «Диски и колодки передние» — две детали, как делит движок; худший результат из частей определяет фразу
         parts = [x for x in share_noun(T.split_pieces(clean), STOP) if T.stems(x, STOP)] or [clean]
+        # «Амортизатор renault grand scenic II/scenic II» режется по «/» на кусок «scenic II» без слова детали —
+        # движок такой кусок отбрасывает, а лаборатория считала его деталью, которой «нет ни у одной машины»
+        parts = [x for x in parts if part(x)] or parts
         stems_of = lambda x: T.stems(T.expand(x), STOP)   # noqa: E731
         if all(ENGINE.outside(stems_of(x)) or kind_of(stems_of(x)) != "part" for x in parts):
             report.append({"query": q, "types": types, "category": "не каталог", "kinds": {}, "groups": []})
