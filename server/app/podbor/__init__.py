@@ -5,3 +5,4 @@ from .sources import Direct, Remote
 
 __all__ = ["Engine", "Direct", "Remote", "LaximoError", "draft", "load_rules"]
 from . import journal  # noqa: F401  (журнал разговоров для разбора)
+from . import shadow  # noqa: F401  (теневой разбор моделью рядом с правилами)

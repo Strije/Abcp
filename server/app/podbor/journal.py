@@ -64,6 +64,12 @@ class Journal:
         self._write({"t": datetime.now().isoformat(timespec="seconds"), "type": "turn", "dialog": dialog or "",
                      "turn": turn, "text": clean(text)[:4000]} | brief(res))
 
+    def shadow(self, dialog: str, turn: int, diff: dict):
+        """Разбор моделью рядом с правилами: совпали или нет — для судьи и для ручного разбора."""
+        self._write({"t": datetime.now().isoformat(timespec="seconds"), "type": "shadow", "dialog": dialog or "",
+                     "turn": turn, "agree": bool(diff.get("agree")), "rules": diff.get("rules"), "llm": diff.get("llm"),
+                     "llm_not_in_rules": diff.get("llm_not_in_rules")})
+
     def feedback(self, dialog: str, turn: int, good: bool | None, comment: str):
         self._write({"t": datetime.now().isoformat(timespec="seconds"), "type": "feedback", "dialog": dialog or "",
                      "turn": turn, "good": good, "comment": clean(comment)[:1000]})

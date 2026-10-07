@@ -447,6 +447,9 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             seen[h] = now
         raise HTTPException(401, "Нужен пароль", headers={"WWW-Authenticate": 'Basic realm="podbor", charset="UTF-8"'})
 
+    SHADOW_DAY_LIMIT = 400   # вызовов модели в сутки, после которых теневой разбор молчит (тариф помесячный)
+    shadow_tasks: set = set()   # ссылки на фоновые задачи, пока не отработали
+
     @app.post("/v1/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_run(body: PodborIn, request: Request):
         if not state["laximo"].enabled:
@@ -460,6 +463,15 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         res["text"] = podbor.draft(res, body.numbers, body.analogs)
         if state.get("journal"):
             state["journal"].turn(body.dialog or "", body.turn or 0, body.text, res)
+            if body.llm is not False and not body.memory and state.get("llm") and state["llm"].enabled                     and state["llm"].usage[time.strftime("%Y-%m-%d")]["calls"] < SHADOW_DAY_LIMIT:
+                # Теневой разбор моделью (первое сообщение): после ответа клиенту, расхождения — в журнал
+                async def _shadow(dialog=body.dialog or "", turn=body.turn or 0, text=body.text, snap=res):
+                    diff = await podbor.shadow.run(state["llm"], text, snap)
+                    if diff is not None:
+                        state["journal"].shadow(dialog, turn, diff)
+                task = asyncio.create_task(_shadow())
+                shadow_tasks.add(task)
+                task.add_done_callback(shadow_tasks.discard)
         return res
 
     @app.post("/v1/podbor/feedback", dependencies=[Depends(podbor_auth)])

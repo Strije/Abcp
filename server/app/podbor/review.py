@@ -178,6 +178,17 @@ def report(folder: Path, days: int = 7) -> str:
     return "\n".join(lines)
 
 
+def shadow_report(folder: Path, days: int = 7) -> str:
+    """Где модель и правила разобрали сообщение по-разному (теневой режим): кандидат в «сначала модель»."""
+    rows = [r for r in _read(folder, days) if r.get("type") == "shadow"]
+    diff = [r for r in rows if not r.get("agree")]
+    lines = [f"Теневой разбор: {len(rows)}, совпало {len(rows) - len(diff)}, расхождений {len(diff)}"]
+    for r in diff[:40]:
+        lines += ["", f"— {r['t'][:16]} разговор {r['dialog'] or '—'}",
+                  f"  правила: {', '.join(r.get('rules') or []) or '—'}", f"  модель:  {', '.join(r.get('llm') or []) or '—'}"]
+    return "\n".join(lines)
+
+
 def _folder(arg: str | None) -> Path:
     if arg:
         return Path(arg)
@@ -195,6 +206,7 @@ async def main(argv: list[str] | None = None) -> int:
     folder = _folder(args.folder)
     if args.cmd == "report":
         print(report(folder, args.days or 7))
+        print("\n" + shadow_report(folder, args.days or 7))
         return 0
     from ..config import load
     from ..llm import LLM

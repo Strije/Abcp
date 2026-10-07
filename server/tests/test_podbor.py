@@ -971,3 +971,27 @@ def test_note_diffs_show_only_sizes_and_trim():
     assert note_diffs([v1, v2]) == ["314x25mm", "300x12"]
     assert note_diffs([v1, dict(v1)]) == ["", ""]                       # одинаковые — нечего показывать
     assert note_diffs([{"name": "А", "note": "VALUE PARTS"}, {"name": "Б", "note": ""}]) == ["", ""]   # шум не показываем
+
+
+def test_shadow_compare_and_report(tmp_path):
+    import json
+    from datetime import date
+    from app.podbor import review as R
+    from app.podbor.shadow import compare
+    res = {"status": "ok", "positions": [{"query": "колодки передние", "kind": "part", "groups": [{"name": "Колодки тормозные"}],
+                                          "variants": [{"name": "Колодки тормозные передние"}]}]}
+    same = {"positions": [{"part": "колодки тормозные передние", "kind": "part"}]}
+    assert compare(same, res)["agree"] is True
+    other = {"positions": [{"part": "пыльник шруса", "kind": "part"}]}
+    d = compare(other, res)
+    assert d["agree"] is False and d["llm_not_in_rules"] == ["пыльник шруса"]
+    assert compare(None, res) is None and compare(same, {"status": "no_vin", "positions": []}) is None
+    # запись и отчёт
+    jr = tmp_path / "journal"
+    jr.mkdir()
+    day = date.today().isoformat()
+    rec = {"t": f"{day}T10:00:00", "type": "shadow", "dialog": "d1", "turn": 1, "agree": False, "rules": ["кольцо подвесного"],
+           "llm": ["подшипник подвесной"], "llm_not_in_rules": ["подшипник подвесной"]}
+    (jr / f"{day}.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+    text = R.shadow_report(jr, 1)
+    assert "расхождений 1" in text and "кольцо подвесного" in text and "подшипник подвесной" in text
