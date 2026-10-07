@@ -149,9 +149,17 @@ _SMALL = {T.stem(w) for w in ("ремкомплект", "пыльник", "да�
                                "фишка", "штекер", "клемма", "сайлентблок", "шарнир")}
 
 
+# «Комплект установочный задн. торм. колодок» (Zekkert), «Комплект монтажный тормозных колодок» (Patron) —
+# пружины и скобы к колодкам, а не колодки: слово «комплект» голову не меняет, поэтому отдельно
+_FITTING = {T.stem(w) for w in ("установочный", "монтажный", "ремонтный", "крепёжный")}
+
+
 def not_the_part(description: str, name: str) -> bool:
     """«Ремкомплект передних тормозных колодок» при детали «Колодки тормозные» — не аналог."""
     st = T.stems(T.expand(description))   # «С/блок задний переднего рычага» — сайлентблок, не рычаг
+    if st and st[0] and T.same(st[0], T.stem("комплект")) and any(T.same(w, f) for w in st[1:3] for f in _FITTING):
+        if not any(T.same(w, f) for w in T.stems(name) for f in _FITTING):
+            return True   # клиент просил именно такой комплект («монтажный комплект колодок») — оставляем
     h = T.head(st) if st else None
     if not h or not any(T.same(h, s) for s in _SMALL):
         return False

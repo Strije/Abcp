@@ -746,3 +746,15 @@ def test_firm_question_narrowed_by_detail_word():
     assert _narrow_by_words([oil, cabin], "зеккерт есть?", frozenset(), ()) == [oil, cabin]
     # слово не совпало ни с одним предложением — не молчим
     assert _narrow_by_words([oil, cabin], "а воздушный зеккерт есть?", frozenset(), ()) == [oil, cabin]
+
+
+def test_fitting_kit_is_not_the_pads():
+    """«Комплект установочный/монтажный колодок» — крепёж, а не колодки: не «самый дешёвый» и не в заказ."""
+    from app.podbor.offers import not_the_part
+    name = "Колодки тормозные задние"
+    assert not_the_part("Комплект установочный задн. торм. колодок Hyundai i30 I, II", name)
+    assert not_the_part("Комплект монтажный тормозных колодок KIA HYUNDAI CEED IX35", name)
+    assert not not_the_part("Комплект тормозных колодок задних", name)   # обычный комплект колодок
+    assert not not_the_part("Колодки тормозные задние", name)
+    # клиент сам просил монтажный комплект
+    assert not not_the_part("Комплект монтажный тормозных колодок", "Монтажный комплект колодок")
