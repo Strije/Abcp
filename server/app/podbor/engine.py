@@ -1280,6 +1280,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         many = len(groups) > 1
         labels = [T.side_label(query, var["axis"], var["lr"]) for var, _ in groups]
         seen: dict[str, int] = {}
+        diffs = note_diffs([g[0] for g in groups]) if many else []
         for n, (var, alts) in enumerate(groups, 1):
             found += 1
             rows, more = _block(var, alts, numbers, analogs if not many else min(analogs, 2), query)
@@ -1296,6 +1297,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                     name = ru_name(base_name(var["name"]))
                     side = (f"{side}, вариант {seen[side]}" if side else f"Вариант {n}") + f" — «{name}»"
                 lines += ["", f"   {side}" + (f" ({per})" if per else "") + ":"]
+                if diffs[n - 1]:
+                    lines.append(f"   Отличие по каталогу: {diffs[n - 1]}.")   # размер, фирма, комплектация из примечаний
             elif per:
                 lines.append(f"   {per[:1].upper() + per[1:]}.")
             lines += ["   " + r for r in rows]
@@ -1310,6 +1313,30 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                  else "Уточним по позициям и напишем.")
     lines.append(ANYTHING_ELSE)
     return "\n".join(lines).strip("\n")
+
+
+# Что в примечании каталога клиент может сравнить сам: размер («314x25mm», «Ø280», «300 мм») и комплектация.
+# Остальное (коды PR, номера лет, названия заводов) — шум, его не показываем
+_NOTE_SIZE = re.compile(r"(?:Ø|d\s*=\s*)?\d{2,3}\s*[xх×]\s*\d{1,3}(?:\s*(?:mm|мм))?|(?:Ø|d\s*=\s*)\d{2,3}(?:\s*(?:mm|мм))?|\d{3}\s*(?:mm|мм)", re.I)
+_NOTE_KIT = re.compile(r"спортивн\w*|усилен\w*|с\s+датчик\w*|без\s+датчик\w*|с\s+abs|без\s+abs|4x4|4wd|полный\s+привод", re.I)
+
+
+def note_diffs(variants: list[dict]) -> list[str]:
+    """Чем варианты отличаются в примечаниях каталога: размер и комплектация. Названия варианты и так показывают;
+    «Отличие по каталогу: 314x25mm» против «300x12» помогает клиенту выбрать, не гадая по схеме."""
+    def facts(v: dict) -> list[str]:
+        text = " ".join(str(v.get(k) or "") for k in ("note", "unit_note", "name"))
+        out = []
+        for rx in (_NOTE_SIZE, _NOTE_KIT):
+            for m in rx.finditer(text):
+                f = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+                if f not in out:
+                    out.append(f)
+        return out
+    per = [facts(v) for v in variants]
+    common = set.intersection(*(set(x) for x in per)) if per else set()
+    res = [" ".join(w for w in x if w not in common)[:60] for x in per]
+    return res if sum(1 for x in res if x) >= 1 and len(set(res)) > 1 else [""] * len(per)
 
 
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)

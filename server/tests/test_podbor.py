@@ -962,3 +962,12 @@ def test_lost_head_with_weak_group_is_not_shown():
     ps = [lost, fine]
     eng._drop_lost(ps)
     assert ps[0]["status"] == "not_found" and ps[0]["variants"] == [] and ps[1]["variants"] == [{"oem": "1"}]
+
+
+def test_note_diffs_show_only_sizes_and_trim():
+    from app.podbor.engine import note_diffs
+    v1 = {"name": "Тормозной диск", "note": "Тормозной диск (вентилир.);314X25MM 5/112", "unit_note": "ATE 1LT"}
+    v2 = {"name": "Тормозной диск", "note": "300x12 5/112", "unit_note": "TRW-GIRLING 1KW"}
+    assert note_diffs([v1, v2]) == ["314x25mm", "300x12"]
+    assert note_diffs([v1, dict(v1)]) == ["", ""]                       # одинаковые — нечего показывать
+    assert note_diffs([{"name": "А", "note": "VALUE PARTS"}, {"name": "Б", "note": ""}]) == ["", ""]   # шум не показываем
