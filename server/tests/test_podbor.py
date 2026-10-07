@@ -283,7 +283,8 @@ def test_rear_hub_is_an_assembly():
     assert "на машину нужно 2 шт." in r["text"].lower() and "9 020 ₽" in r["text"]
     assert "Ford Focus CB8, 2012 г., 1.6 л 123 л.с." in r["text"]
     # Аналоги — по сроку: сначала что привезём быстрее
-    assert [a["days"] for a in o["analogs"]] == sorted(a["days"] for a in o["analogs"])
+    shown_days = [a["days"] for a in o["analogs"][:3]]   # показанные клиенту — по сроку; скрытые идут за ними
+    assert shown_days == sorted(shown_days)
 
 
 def test_hub_without_side_asks_front_or_rear():
@@ -889,3 +890,25 @@ def test_curate_anti_cross_by_supplier_count():
     # бренд с гарантией магазина порогу не подчиняется
     o = curate(rows, "OEM1", "TOYOTA", {"SOLO"})
     assert "SOLO" in [a["brand"] for a in o["analogs"]]
+
+
+def test_curate_keeps_cheapest_among_shown_and_text_rules():
+    """Самый дешёвый аналог (он же самый медленный) — среди трёх показанных, а не в «ещё вариантах»."""
+    rows = [offer("ORIG", "OEM1", 1000)] + [offer(b, f"N{i}", 600 + i, hours=24 * (i + 1), confirm=6)
+                                           for i, b in enumerate("ABCD")]
+    rows.append(offer("SLOWCHEAP", "S1", 100, hours=24 * 9, confirm=6))
+    o = curate(rows, "OEM1", "TOYOTA", set())
+    assert "SLOWCHEAP" in [a["brand"] for a in o["analogs"][:3]]
+    # «Комплект фильтров для ТО» — три фильтра, а не группа «Комплект» кузова
+    assert T.expand("комплект фильтров для ТО") == "масляный фильтр, воздушный фильтр, салонный фильтр"
+    assert T.expand("фильтры на техобслуживание") == "масляный фильтр, воздушный фильтр, салонный фильтр"
+    assert T.expand("масло и фильтры") != "масляный фильтр, воздушный фильтр, салонный фильтр"
+
+
+def test_pending_request_continues_after_vin():
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    first = asyncio.run(eng.run("хорошие фильтры на машину"))
+    assert first["status"] == "no_vin" and "фильтры" in first["memory"]["pending"]

@@ -255,6 +255,12 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
         if k not in chosen:
             chosen.append(k)
     chosen.sort(key=lambda k: _speed(fast[k]))
+    # «Самый дешёвый» должен быть среди показанных: в ответе клиенту аналогов 2–3 по скорости, а самый дешёвый
+    # бывает самым медленным (AMD 410 ₽, 6 дней) — тогда он уезжал в «ещё варианты» с пометкой «самый дешёвый»
+    if pool and by_cost[0] in chosen and chosen.index(by_cost[0]) > 2:
+        cheapest = by_cost[0]
+        top = sorted(chosen[:2] + [cheapest], key=lambda k: _speed(fast[k]))   # показанные по-прежнему по сроку
+        chosen = top + [k for k in chosen[2:] if k != cheapest]
     prices = [_num(r.get("price")) for r in cheap.values()]
     return {
         "original": original,

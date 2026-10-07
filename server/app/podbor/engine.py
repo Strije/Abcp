@@ -123,13 +123,21 @@ class Engine:
         """Заявка. С памятью прошлого ответа и без VIN в тексте — следующая реплика того же разговора."""
         t0 = time.time()
         req = T.parse(text)
+        pending = (memory or {}).get("pending") or ""
+        if pending and (req.ident or req.plate):
+            # «Хорошие фильтры на машину» без VIN, следом — только VIN: просьба не теряется, продолжаем её
+            text = pending + "\n" + text
+            req, memory = T.parse(text), None
         if memory and (memory.get("ident") or memory.get("plate")) and not req.ident and not req.plate:
             return await self._follow(text, req, memory, analogs, t0, llm is not False)
         res: dict[str, Any] = {"request": {"ident": req.ident, "plate": req.plate, "model": req.model,
                                            "chunks": req.chunks, "vehicle": vehicle},
                                "status": "ok", "vehicle": None, "vehicles": [], "warnings": [], "positions": []}
         if not req.ident and not req.plate:
-            return self._done(res, "no_vin", t0)
+            out = self._done(res, "no_vin", t0)
+            if req.chunks:   # запомнить, что просил клиент: когда пришлёт VIN, ответим на это
+                out["memory"]["pending"] = (pending + "\n" + text).strip()[-1500:]
+            return out
         try:
             found = await self.catalog.vehicles(req.ident, req.plate)
         except LaximoError as e:

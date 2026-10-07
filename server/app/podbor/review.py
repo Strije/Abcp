@@ -83,21 +83,24 @@ def cases(rows: list[dict], done: set[str]) -> list[dict]:
     """Реплики на разбор: история разговора, реплика, ответ. Сначала те, что люди отметили «не помог»."""
     marks = {(r["dialog"], r["turn"]): r for r in rows if r.get("type") == "feedback"}
     history: dict[str, list[str]] = {}
+    replies: dict[str, list[str]] = {}   # что робот отвечал раньше: без этого «ещё варианты» похожи на повтор
     out = []
     for r in rows:
         if r.get("type") != "turn":
             continue
         dialog = r.get("dialog") or ""
         before = history.setdefault(dialog, []) if dialog else []
+        earlier = replies.setdefault(dialog, []) if dialog else []
         key = f"{dialog}:{r.get('turn')}:{r.get('t')}"
         if key not in done and r.get("answer"):
             m = marks.get((dialog, r.get("turn")))
             out.append({"key": key, "dialog": dialog, "turn": r.get("turn"), "t": r.get("t"), "car": r.get("car", ""),
-                        "before": list(before[-3:]), "text": r.get("text", ""), "answer": r.get("answer", ""),
+                        "before": list(before[-3:]), "earlier": list(earlier[-2:]), "text": r.get("text", ""), "answer": r.get("answer", ""),
                         "status": r.get("status"), "human": None if not m else m.get("good"),
                         "comment": (m or {}).get("comment", "")})
         if dialog:
             before.append(r.get("text", ""))
+            earlier.append(r.get("answer", "")[:900])
     out.sort(key=lambda c: (c["human"] is not False, c["t"] or ""))
     return out
 
@@ -108,6 +111,8 @@ def prompt(c: dict) -> str:
         parts.append(f"Машина: {c['car']}")
     if c["before"]:
         parts.append("Раньше клиент писал:\n" + "\n".join(f"— {t[:300]}" for t in c["before"]))
+    if c.get("earlier"):
+        parts.append("Раньше робот ответил (чтобы не считать новое повтором):\n" + "\n---\n".join(c["earlier"]))
     parts.append(f"Сейчас клиент пишет:\n{c['text'][:1200]}")
     parts.append(f"Ответ робота [{c['status']}]:\n{c['answer'][:3500]}")
     return "\n\n".join(parts)
