@@ -968,7 +968,7 @@ def test_note_diffs_show_only_sizes_and_trim():
     from app.podbor.engine import note_diffs
     v1 = {"name": "Тормозной диск", "note": "Тормозной диск (вентилир.);314X25MM 5/112", "unit_note": "ATE 1LT"}
     v2 = {"name": "Тормозной диск", "note": "300x12 5/112", "unit_note": "TRW-GIRLING 1KW"}
-    assert note_diffs([v1, v2]) == ["314x25mm", "300x12"]
+    assert note_diffs([v1, v2]) == ["314x25mm вентилируемый", "300x12"]   # вентилируемый — тоже видно на диске
     assert note_diffs([v1, dict(v1)]) == ["", ""]                       # одинаковые — нечего показывать
     assert note_diffs([{"name": "А", "note": "VALUE PARTS"}, {"name": "Б", "note": ""}]) == ["", ""]   # шум не показываем
 
@@ -1122,3 +1122,70 @@ def test_tree_fix_by_sound_keeps_real_words():
     assert tree.fix(T.stem("тармазные")) == T.stem("тормозные")
     assert tree.fix(T.stem("калектор")) == T.stem("коллектор")
     assert tree.fix(T.stem("доброго")) == T.stem("доброго")             # слова не из каталога остаются как есть
+
+
+# ---------- почему несколько номеров одной детали ----------
+
+def test_differ_overlap_partner_and_economy():
+    from app.podbor import differ as DF
+    assert DF.overlap({"A", "B", "C"}, {"B", "C", "D", "E"}) == (2, 3)
+    assert DF.interchangeable(22, 156) is False and DF.interchangeable(117, 123) is True
+    assert DF.interchangeable(3, 5) is None            # мало данных — не судим
+    assert DF.partner("КОЛОДКА В КОМПЛЕКТЕ-ТОРМОЗ ЗАДН SHOULD USE T/W 96800088") == "96800088"
+    assert DF.partner("Тормозной диск") == ""
+    assert DF.economy("JZW615301N", "Тормозн.диск") and DF.economy("1K0", "Амортизатор Economy")
+    assert not DF.economy("1J0615301L", "Тормозной диск")
+
+
+def test_differ_contrast_takes_features_not_models():
+    """«без ушек» у одного номера и ни разу у другого — признак; модели («Gentra») — нет."""
+    from app.podbor import differ as DF
+    row = lambda b, n, d: {"brand": b, "number": n, "description": d}  # noqa: E731
+    a = [row(f"A{i}", f"N{i}", "Колодки задние Lacetti Aveo") for i in range(8)] + [row("Z", "Z1", "Колодки c ушками")]
+    b = [row(f"B{i}", f"M{i}", "Колодки задние Lacetti Gentra без ушек") for i in range(4)] + \
+        [row(f"C{i}", f"K{i}", "Колодки задние Lacetti Gentra") for i in range(5)]
+    ha, hb = DF.contrast(a, b)
+    assert hb == ["без ушек"] and ha == []
+
+
+def test_differ_siblings_only_calipers():
+    """Соседи, которых каталог по VIN не различает, — только суппорты: «Корпус», «Шток» у VAG не причина."""
+    from app.podbor import differ as DF
+    from app.podbor.catalog import Detail
+    d = lambda oem, name: Detail(oem, name, "", "1", None, "ЗАДНИЙ ТОРМОЗ", "", "", "", "", "", "")  # noqa: E731
+    pool = [d("96463798", "СУППОРТ А-ТОРМОЗ, ЗАДН  LH"), d("96463799", "СУППОРТ А-ТОРМОЗ, ЗАДН  RH"),
+            d("96549622", "СУППОРТ А-ТОРМОЗ, ЗАДН  LH"), d("96549623", "СУППОРТ А-ТОРМОЗ, ЗАДН  RH"),
+            d("96800085", "СУППОРТ А-ТОРМОЗ, ЗАДН  LH"), d("96800086", "СУППОРТ А-ТОРМОЗ, ЗАДН  RH"),
+            d("X1", "Корпус"), d("X2", "Корпус"), d("X3", "Корпус")]
+    name, n = DF.siblings(pool, {"96405131"}, "ЗАДНИЙ ТОРМОЗ")
+    assert n == 3 and name.startswith("СУППОРТ")
+    assert DF.siblings(pool[6:], set(), "ЗАДНИЙ ТОРМОЗ") is None
+
+
+def test_differ_lines_text():
+    from app.podbor.engine import differ_lines
+    d = {"oems": ["A", "B"], "common": 22, "total": 156, "same": False, "vin": True, "eco": [],
+         "hints": {"A": [], "B": ["без ушек"]}, "with": {"B": {"number": "96800088", "name": "Пружина прижимная суппорта GM"}},
+         "siblings": {"name": "Суппорт", "count": 3}}
+    text = "\n".join(differ_lines(d, {"A": "вариант 1", "B": "вариант 2"}))
+    assert "3 вида детали «Суппорт»" in text and "общих аналогов 22 из 156" in text
+    assert "Вариант 2 ставится вместе с отдельной деталью «Пружина прижимная суппорта»" in text
+    assert "«без ушек»" in text and "Как выбрать" in text
+    eco = dict(d, eco=["B"])
+    assert differ_lines(eco, {"A": "вариант 1", "B": "вариант 2"}) == [
+        "Вариант 2 — линейка VAG Economy: та же деталь от VAG, дешевле, ставится на то же место."]
+
+
+def test_lab_junk_phrases():
+    """В лабораторию — только просьбы покупателей о деталях: реклама, речь продавца, контакты — мимо."""
+    from app.podbor import lab
+    part = lambda p, loose=False: any(w in p.lower() for w in ("колодк", "ремен", "фильтр", "масл", "фар"))  # noqa: E731
+    assert lab.junk("🌐 15 ГБ интернет без ограничений скорости", part) == "реклама/рассылка"
+    assert lab.junk("⭕️НЕ ЗАБЫВАЙТЕ ВЫКЛЮЧАТЬ VPN⭕️", part) == "реклама/рассылка"
+    assert lab.junk("не ответили вчера. Наш рабочий день заканчивается в 18:00", part) == "речь продавца"
+    assert lab.junk("Чехол для Iphone XS Max", part) == "не для машины"
+    assert lab.junk("[имя] ([тел]Подскажите", part) == "контакты/анкета"
+    assert lab.junk("(изменено)", part) == "служебное"
+    assert lab.junk("Сделайте первый шаг к свободе", part) == "нет детали"
+    assert lab.junk("колодки передние", part) == "" and lab.junk("Ремень", part) == ""
+    assert lab.junk("натяжной ролик и ремень ГРМ с доставкой в Черкесск", part) == ""   # доставка рядом с деталью — годится

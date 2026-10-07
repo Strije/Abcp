@@ -5,6 +5,7 @@
 и что пишут поставщики в описаниях этого номера. Не сошлось или не хватает данных — вопрос клиенту.
 """
 import asyncio
+import collections
 import json
 import re
 import time
@@ -15,6 +16,7 @@ from typing import Any
 from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
+from . import differ as DF
 from . import reviews as R
 from . import understand as U
 from . import text as T
@@ -682,6 +684,10 @@ class Engine:
         for var in pos["variants"]:
             R.annotate(var, [query] + [g.name for g, _ in groups])
         pos["status"], pos["question"] = verdict(list(kinds), want, query)
+        try:
+            await self._explain(v, pos, kept)   # «почему два номера и как выбрать» — из фактов
+        except Exception:
+            pass   # объяснение — подсказка; из-за него подбор не падает
         for a in self.ask:
             if all(any(T.same(w, s) for s in q) for w in a["query"]) \
                     and not any(T.same(w, s) for w in a["unless"] for s in q):
@@ -818,6 +824,50 @@ class Engine:
         if not own or len(own) > 2 or (len(own) == 2 and {x.lr for x in sides} != {"left", "right"}):
             return []
         return [Candidate(d, 1.0, 1.0, True, x, "каталог" if x.axis else "") for d, x in zip(own.values(), sides)]
+
+    async def _explain(self, v: Vehicle, pos: dict, kept: list[Candidate]):
+        """Несколько номеров одной детали в одном узле (Lacetti: колодки 96405131 и 96800089): чем они отличаются
+        по фактам — общие аналоги, «ставится вместе с», соседние детали узла, которые каталог по VIN не различает,
+        признаки в описаниях поставщиков. Пишем в pos["differ"], текст собирает draft."""
+        main = [x for x in pos["variants"] if not x["alt"]]
+        same: dict[tuple, list[dict]] = {}
+        for x in main:
+            same.setdefault((x["axis"], x["lr"], x["unit"]), []).append(x)
+        pair = max(same.values(), key=len) if same else []
+        if len(pair) < 2:
+            return
+        a, b = pair[:2]
+        by_oem = {c.d.oem: c for c in kept}
+        ca, cb = by_oem.get(a["oem"]), by_oem.get(b["oem"])
+        common, total = DF.overlap((a["offers"] or {}).get("numbers", []), (b["offers"] or {}).get("numbers", []))
+        hints_a, hints_b = DF.contrast((ca.rows if ca else None) or [], (cb.rows if cb else None) or [])
+        info: dict[str, Any] = {"oems": [a["oem"], b["oem"]], "common": common, "total": total,
+                                "same": DF.interchangeable(common, total),
+                                "hints": {a["oem"]: hints_a, b["oem"]: hints_b}, "with": {}, "siblings": None,
+                                "vin": bool(a.get("match") and b.get("match")),
+                                "eco": [x["oem"] for x in (a, b) if DF.economy(x["oem"], x["name"])]}
+        for x in (a, b):
+            n = DF.partner(x["name"], x["note"])
+            if n:
+                info["with"][x["oem"]] = {"number": n, "name": await self._describe(n, v)}
+        if a.get("match") and b.get("match") and ca:
+            # Обе подходят по VIN — значит, каталог не знает, что стоит на машине: ищем, чего он не различает
+            sib = DF.siblings(await self.catalog.details(v, ca.d.group_id, True), {a["oem"], b["oem"]}, a["unit"])
+            if sib:
+                info["siblings"] = {"name": sib[0].split()[0].capitalize(), "count": sib[1]}
+        if info["same"] is not None or any(info["hints"].values()) or info["with"] or info["siblings"] or info["eco"]:
+            pos["differ"] = info
+
+    async def _describe(self, number: str, v: Vehicle) -> str:
+        """Что за деталь под номером — по описаниям поставщиков («Пружина прижимная тормозного суппорта»)."""
+        try:
+            rows = await self.src.brands(number)
+        except Exception:
+            return ""
+        own = set(brand_candidates(rows, v.brand))
+        descs = [str(r.get("description") or "").strip() for r in sorted(rows, key=lambda r: r.get("brand") not in own)]
+        ru = [d for d in descs if re.search(r"[а-яё]{4,}", d, re.I)]
+        return (ru or [""])[0][:70]
 
     async def _bushings_by_host(self, v: Vehicle, pool: list[Detail], want: T.Side,
                                 host: tuple[list[str], str]) -> tuple[Candidate, str] | None:
@@ -1353,6 +1403,17 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         labels = [T.side_label(query, var["axis"], var["lr"]) for var, _ in groups]
         seen: dict[str, int] = {}
         diffs = note_diffs([g[0] for g in groups]) if many else []
+        # Как каждый вариант назван в ответе («Задние, вариант 2») — чтобы объяснение ссылалось на то же
+        called, cnt = {}, {}
+        for n, (var, _) in enumerate(groups, 1):
+            side = labels[n - 1]
+            if not side or labels.count(side) > 1:
+                cnt[side] = cnt.get(side, 0) + 1
+                called[var["oem"]] = f"вариант {cnt[side]}" if side else f"вариант {n}"
+            else:
+                called[var["oem"]] = side.lower()
+        if many and p.get("differ"):
+            lines += ["   " + x for x in differ_lines(p["differ"], called, numbers)]
         for n, (var, alts) in enumerate(groups, 1):
             found += 1
             rows, more = _block(var, alts, numbers, analogs if not many else min(analogs, 2), query)
@@ -1387,10 +1448,51 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     return "\n".join(lines).strip("\n")
 
 
+def differ_lines(d: dict, called: dict[str, str], numbers: bool = False) -> list[str]:
+    """«Почему несколько вариантов и как выбрать» — по фактам из _explain."""
+    a, b = d["oems"]
+    na, nb = called.get(a, "первый вариант"), called.get(b, "второй вариант")
+    out = []
+    if d.get("eco") and len(d["eco"]) < 2:
+        # VAG: «JZW…», «…'ECO'» — не загадка: та же деталь от VAG, только бюджетная линейка
+        e = d["eco"][0]
+        out.append(f"{called.get(e, 'Вариант').capitalize()} — линейка VAG Economy: та же деталь от VAG, дешевле, "
+                   f"ставится на то же место.")
+        return out
+    if d.get("siblings"):
+        s = d["siblings"]
+        out.append(f"Почему несколько вариантов: по каталогу у этой модели {s['count']} "
+                   f"{plural(s['count'], 'вид', 'вида', 'видов')} детали «{s['name']}», "
+                   f"а какой стоит на вашей машине, по VIN не видно.")
+    elif d.get("vin"):
+        out.append("Почему несколько вариантов: по VIN каталог их не различает — обе подходят к вашей машине.")
+    if d.get("same") is False:
+        out.append(f"Это разные детали, а не новый номер старой: общих аналогов {d['common']} из {d['total']}.")
+    elif d.get("same") is True:
+        out.append(f"По аналогам это почти одна деталь ({d['common']} общих из {d['total']}) — "
+                   f"подойдёт любой вариант, выбирайте по цене и сроку.")
+    for oem, w in d.get("with", {}).items():
+        # «Пружина прижимная тормозного суппорта CHEVROLET LACETTI» — без марки в хвосте
+        what = re.sub(r"(?:\s+[A-Z][A-Z0-9().,/-]*)+\s*$", "", w.get("name") or "").strip(" ,.")
+        num = f" {w['number']}" if numbers or not what else ""
+        out.append(f"{called.get(oem, 'Вариант').capitalize()} ставится вместе с отдельной деталью"
+                   + (f" «{what}»" if what else "") + f"{num} — её тоже нужно заказать.")
+    hints = [(called.get(o, ""), h) for o, h in d.get("hints", {}).items() if h]
+    if hints:
+        out.append("По описаниям поставщиков: " + "; ".join(
+            f"{name} — " + ", ".join(f"«{x}»" for x in h) for name, h in hints) + ".")
+    if d.get("same") is not True and out:
+        feats = [x for _, h in hints for x in h if x.split()[0] in ("без", "с", "со")]
+        look = f" — например, {' или '.join('«' + x + '»' for x in feats[:2])}" if feats else ""
+        out.append(f"Как выбрать: сравните со снятой деталью{look}, или пришлите её фото — подскажем.")
+    return out
+
+
 # Что в примечании каталога клиент может сравнить сам: размер («314x25mm», «Ø280», «300 мм») и комплектация.
 # Остальное (коды PR, номера лет, названия заводов) — шум, его не показываем
-_NOTE_SIZE = re.compile(r"(?:Ø|d\s*=\s*)?\d{2,3}\s*[xх×]\s*\d{1,3}(?:\s*(?:mm|мм))?|(?:Ø|d\s*=\s*)\d{2,3}(?:\s*(?:mm|мм))?|\d{3}\s*(?:mm|мм)", re.I)
-_NOTE_KIT = re.compile(r"спортивн\w*|усилен\w*|с\s+датчик\w*|без\s+датчик\w*|с\s+abs|без\s+abs|4x4|4wd|полный\s+привод", re.I)
+_NOTE_SIZE = re.compile(r"(?:Ø|d\s*=\s*)?\d{2,3}\s*[xх×]\s*\d{1,3}(?:\s*(?:mm|мм))?|(?:Ø|d\s*=\s*)\d{2,3}(?:\s*(?:mm|мм))?|\b\d{3}\s*(?:mm|мм)\b", re.I)
+_NOTE_KIT = re.compile(r"спортивн\w*|усилен\w*|с\s+датчик\w*|без\s+датчик\w*|с\s+abs|без\s+abs|4x4|4wd|полный\s+привод|"
+                       r"невентил\w*|вентил\w*|с\s+индик\w*|без\s+индик\w*", re.I)   # «Тормозной диск (вентилир.)»
 
 
 def note_diffs(variants: list[dict]) -> list[str]:
@@ -1402,10 +1504,17 @@ def note_diffs(variants: list[dict]) -> list[str]:
         for rx in (_NOTE_SIZE, _NOTE_KIT):
             for m in rx.finditer(text):
                 f = re.sub(r"\s+", " ", m.group(0)).strip().lower()
+                f = re.sub(r"^(не)?вентил\w*", lambda x: (x.group(1) or "") + "вентилируемый", f)   # «вентилир.»
                 if f not in out:
                     out.append(f)
         return out
     per = [facts(v) for v in variants]
+    units = [re.sub(r"\(\d+\)|\s+", " ", str(v.get("unit") or "")).strip().lower() for v in variants]
+    if len(set(units)) > 1:
+        # Колодки Lacetti: две в «Заднем тормозе (дисковом)», третья — в «Стояночном тормозе»: узел пишем только у той,
+        # что не там, где большинство
+        usual = collections.Counter(units).most_common(1)[0][0]
+        per = [x + ([f"узел «{u}»"] if u and u != usual else []) for x, u in zip(per, units)]
     common = set.intersection(*(set(x) for x in per)) if per else set()
     res = [" ".join(w for w in x if w not in common)[:60] for x in per]
     return res if sum(1 for x in res if x) >= 1 and len(set(res)) > 1 else [""] * len(per)
