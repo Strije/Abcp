@@ -872,3 +872,20 @@ def test_all_around_and_price_tail_and_adjective_word():
     assert _PRICE_TAIL.sub("", "шаровые сколько стоят?") == "шаровые"
     # признак, который уже в запросе, второй раз не дописываем («шаровые шаровые»)
     assert replace_adj("сайлент блоки шаровые", "шаровые нужны") == "сайлент блоки шаровые"
+
+
+def test_curate_anti_cross_by_supplier_count():
+    """Аналог — только если артикул предлагают ≥5 поставщиков; нет трёх таких — порог ступенчато понижается."""
+    rows = [offer("ORIG", "OEM1", 1000, confirm=3)]
+    rows += [offer(b, f"N{i}", 500 + i, confirm=6) for i, b in enumerate(("A", "B", "C"))]    # подтверждены
+    rows += [offer("SOLO", "S1", 100, confirm=1), offer("PAIR", "P1", 120, confirm=2)]          # один и два поставщика
+    o = curate(rows, "OEM1", "TOYOTA", set())
+    assert sorted(a["brand"] for a in o["analogs"]) == ["A", "B", "C"] and o["stats"]["min_stars"] == 5
+    # подтверждённых меньше трёх — понижаем: 5 → 3 → 2 → 1
+    few = [offer("ORIG", "OEM1", 1000), offer("A", "N1", 500, confirm=6), offer("B", "N2", 510, confirm=3),
+           offer("PAIR", "P1", 120, confirm=2), offer("SOLO", "S1", 100, confirm=1)]
+    o = curate(few, "OEM1", "TOYOTA", set())
+    assert o["stats"]["min_stars"] == 2 and sorted(a["brand"] for a in o["analogs"]) == ["A", "B", "PAIR"]
+    # бренд с гарантией магазина порогу не подчиняется
+    o = curate(rows, "OEM1", "TOYOTA", {"SOLO"})
+    assert "SOLO" in [a["brand"] for a in o["analogs"]]

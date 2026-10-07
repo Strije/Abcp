@@ -171,7 +171,12 @@ def not_the_part(description: str, name: str) -> bool:
 OUTLIER = 0.12   # 50 ₽ при середине 700 ₽ — 0.07; дешёвые китайские колодки при середине 1 600 ₽ — около 0.2
 
 
-def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5, name: str = "") -> dict:
+MIN_STARS = (5, 3, 2, 1)   # ступени порога «сколько поставщиков предлагают артикул» (замер 07.10.2026: ★≥5 — 23% артикулов)
+ENOUGH_ANALOGS = 3
+
+
+def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5, name: str = "",
+           min_stars: tuple[int, ...] = MIN_STARS) -> dict:
     """Оригинал и до `limit` аналогов — по одному на бренд, в порядке «что быстрее привезти».
     В выборку обязательно попадают самый дешёвый, ★ частая замена и бренд с гарантией магазина;
     остальные места — самым быстрым. У каждого артикула — самое быстрое предложение и, если есть,
@@ -205,11 +210,24 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
     ok = next((k for k in fast if is_orig(k)), None)
     original = _offer(fast[ok], ["оригинал"], count[ok], cheap[ok]) if ok else None
 
-    # Один артикул на бренд: Krauf с тремя номерами за одну цену — это один вариант, а не три
-    per_brand: dict[str, tuple] = {}
-    for k in fast:
-        if not is_orig(k) and (k[0] not in per_brand or _speed(fast[k]) < _speed(fast[per_brand[k[0]]])):
-            per_brand[k[0]] = k
+    # Анти-кросс: аналог остаётся, если тот же артикул предлагают не меньше N разных поставщиков (★N). Артикул
+    # от одного поставщика — частая ошибка кросса. Порог ступенчатый: если аналогов меньше трёх, он понижается
+    # (5 → 3 → 2 → 1). Бренды с гарантией магазина порогу не подчиняются.
+    def stars(k: tuple) -> int:
+        return max(int(fast[k].get("confirmCount") or 0), int(cheap[k].get("confirmCount") or 0))
+
+    def by_brand(need: int) -> dict[str, tuple]:
+        # Один артикул на бренд: Krauf с тремя номерами за одну цену — это один вариант, а не три
+        out: dict[str, tuple] = {}
+        for k in fast:
+            if is_orig(k) or not (stars(k) >= need or k[0] in warranty):
+                continue
+            if k[0] not in out or _speed(fast[k]) < _speed(fast[out[k[0]]]):
+                out[k[0]] = k
+        return out
+
+    need = next((n for n in min_stars if len(by_brand(n)) >= ENOUGH_ANALOGS), min_stars[-1])
+    per_brand = by_brand(need)
     pool = list(per_brand.values())
     by_speed = sorted(pool, key=lambda k: _speed(fast[k]))
 
@@ -241,7 +259,7 @@ def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit
     return {
         "original": original,
         "analogs": [_offer(fast[k], tags.get(k, []), count[k], cheap[k]) for k in chosen],
-        "stats": {"offers": len(clean), "articles": len(fast),
+        "stats": {"offers": len(clean), "articles": len(fast), "min_stars": need,
                   "price_min": min(prices) if prices else 0, "price_max": max(prices) if prices else 0},
         # Все номера-кроссы оригинала: по ним видно, что оригинал определён верно, даже если менеджер
         # ответил аналогом не из показанных пяти (и для поиска по номеру, который назвал клиент)
