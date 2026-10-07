@@ -6,9 +6,11 @@
     Запрос состоит из следующих позиций:  Подшипник задней ступицы форд фокус 3
 Свободный текст («вот вин …, нужны передние колодки») разбирается так же, только без шаблона.
 """
+import json
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 
 import snowballstemmer
 
@@ -149,9 +151,29 @@ _SHORT = [
 ]
 
 
+def _load_typos() -> dict[str, str]:
+    try:
+        path = Path(__file__).resolve().parent.parent / "data" / "podbor_typos.json"
+        return {k.lower(): v for k, v in json.loads(path.read_text(encoding="utf-8")).get("words", {}).items() if k != v}
+    except (OSError, ValueError):
+        return {}
+
+
+TYPO_WORDS = _load_typos()   # проверенные вручную опечатки клиентов: «калектор» → «коллектор»
+_WORD_RX = re.compile(r"[А-Яа-яЁё]+")
+
+
+def sound(s: str) -> str:
+    """Как слово звучит для опечатки: безударные о/а, е/и, ы/и и двойные буквы путают («тармазные», «калектор»)."""
+    t = s.lower().replace("ё", "е").replace("о", "а").replace("е", "и").replace("ы", "и")
+    return re.sub(r"(.)\1+", r"\1", t)
+
+
 def expand(text: str) -> str:
     for rx, full in _SHORT:
         text = rx.sub(full, text)
+    if TYPO_WORDS:
+        text = _WORD_RX.sub(lambda m: TYPO_WORDS.get(m.group(0).lower(), m.group(0)), text)
     return text
 
 

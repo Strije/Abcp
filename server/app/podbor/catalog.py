@@ -279,8 +279,24 @@ class TreeIndex:
             if s.endswith(".") or s in self.not_typos or any(T.same(s, v) for v in self.vocab):
                 self._fix[s] = s
             else:
-                self._fix[s] = next((v for v in sorted(self.vocab) if v[:1] == s[:1] and T.near(s, v)), s)
+                hit = next((v for v in sorted(self.vocab) if v[:1] == s[:1] and T.near(s, v)), s)
+                if hit == s and len(s) >= 6:
+                    # Звуковая опечатка в несколько букв: «тармазн» = «тормозн», «калектор» = «коллектор»
+                    hit = self._by_sound().get(T.sound(s), s)
+                    hit = hit if hit[:1] == s[:1] else s
+                self._fix[s] = hit
         return self._fix[s]
+
+    def _by_sound(self) -> dict[str, str]:
+        """Слово каталога по звучанию; если два слова звучат одинаково, оба выпадают — угадывать нельзя."""
+        if getattr(self, "_sound", None) is None:
+            seen: dict[str, str | None] = {}
+            for v in sorted(self.vocab):
+                if len(v) >= 6 and not v.endswith("."):
+                    k = T.sound(v)
+                    seen[k] = v if k not in seen else None
+            self._sound = {k: v for k, v in seen.items() if v}
+        return self._sound
 
     def _walk(self, node: dict, path: list[str]):
         name = str(node.get("name") or node.get("quickGroupName") or "").strip()

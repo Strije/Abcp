@@ -189,6 +189,53 @@ def _print(report: list[dict]) -> None:
             print(f"  {r['query'][:52]:<52} [{','.join(r['types'])[:22]}] → {g[:60]}")
 
 
+def _dl(a: str, b: str) -> int:
+    """Расстояние Дамерау — Левенштейна (замена, вставка, пропуск, перестановка соседних букв)."""
+    d = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(len(a) + 1):
+        d[i][0] = i
+    for j in range(len(b) + 1):
+        d[0][j] = j
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            c = 0 if a[i - 1] == b[j - 1] else 1
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
+
+
+def typos(chats: str, min_count: str = "3", top: str = "150") -> None:
+    """Кандидаты в словарь опечаток: частые слова переписки, которых нет в словаре каталога, но они на 1–2 буквы от слова
+    каталога (одну букву `fix` правит сам). Проверяет человек: «готов» ≠ «голов» — частые обычные слова не опечатки."""
+    from .chats import load
+    from .measure import INDEX, STOP
+    vocab = sorted(v for v in INDEX.vocab if len(v) >= 5 and not v.endswith("."))
+    words, theirs = collections.Counter(), collections.Counter()
+    for r in load(chats):
+        for m in r["messages"]:
+            for w in T.words(m["text"]):
+                if len(w) >= 5 and re.fullmatch(r"[а-яё]+", w):
+                    (words if m["role"] == "client" else theirs)[w] += 1
+    # Слово, которое пишут и менеджеры, — обычное слово («заберу», «работа»), а не опечатка клиента
+    for w in [w for w in words if theirs[w] >= 2]:
+        del words[w]
+    out = []
+    for w, c in words.items():
+        if c < int(min_count):
+            continue
+        st = T.stem(w)
+        if INDEX.fix(st) != st or any(T.same(st, v) for v in INDEX.vocab):
+            continue   # уже правится или это слово каталога
+        lim = 1 if len(st) < 7 else 2
+        best = min(((_dl(st, v), v) for v in vocab if abs(len(v) - len(st)) <= lim and v[:1] == st[:1]), default=None)
+        if best and best[0] <= lim:
+            out.append((c, w, st, best[1], best[0]))
+    for c, w, st, v, d in sorted(out, reverse=True)[:int(top)]:
+        print(f"{c:5} {w:<22} {st:<16} → {v:<16} (правок {d})")
+    print(f"всего кандидатов: {len(out)}")
+
+
 def compare(before: str, after: str) -> None:
     a = {r["query"]: r for r in json.loads(Path(before).read_text(encoding="utf-8"))}
     b = {r["query"]: r for r in json.loads(Path(after).read_text(encoding="utf-8"))}
@@ -211,7 +258,7 @@ def compare(before: str, after: str) -> None:
 
 
 if __name__ == "__main__":
-    cmd = {"phrases": phrases, "run": run, "compare": compare}.get(sys.argv[1] if len(sys.argv) > 1 else "")
+    cmd = {"phrases": phrases, "run": run, "compare": compare, "typos": typos}.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if not cmd:
         print(__doc__)
         raise SystemExit(1)

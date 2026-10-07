@@ -1104,3 +1104,21 @@ def test_qualifier_researches_lost_word_or_hides_generic_group():
     # всё найдено полностью — ничего не меняем
     ok = dict(base, groups=[{"id": 2, "name": "Маховик", "score": 1.0}])
     assert asyncio.run(eng._qualifier(None, tree, "маховик", T.Side(), "", ok)) is None
+
+
+def test_typo_dictionary_and_sound_key():
+    """Опечатки клиентов: словарь проверенных слов и звуковое сходство (о/а, е/и, двойные буквы)."""
+    assert T.expand("нужны калектор и ступчитые подшипники") == "нужны коллектор и ступичные подшипники"
+    assert T.expand("Бензаносос") == "бензонасос" and T.expand("вылка сцепления") == "вилка сцепления"
+    assert T.expand("колодки передние") == "колодки передние"           # обычные слова не трогаем
+    assert T.sound("тармазние") == T.sound("тормозные") and T.sound("калектор") == T.sound("коллектор")
+    assert T.sound("заберу") != T.sound("забор")
+
+
+def test_tree_fix_by_sound_keeps_real_words():
+    from app.podbor.catalog import TreeIndex
+    tree = TreeIndex([{"name": "Тормозные колодки", "quickGroupId": 1, "link": True, "synonyms": ""},
+                      {"name": "Впускной коллектор", "quickGroupId": 2, "link": True, "synonyms": ""}], frozenset(), None, [])
+    assert tree.fix(T.stem("тармазные")) == T.stem("тормозные")
+    assert tree.fix(T.stem("калектор")) == T.stem("коллектор")
+    assert tree.fix(T.stem("доброго")) == T.stem("доброго")             # слова не из каталога остаются как есть
