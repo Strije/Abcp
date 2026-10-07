@@ -187,6 +187,7 @@ class Engine:
             if parsed:
                 res["handoff"] = parsed["questions"] + [f"не из каталога: {x}" for x in parsed["not_parts"]]
         arts = A.find("\n".join(req.chunks))
+        hints: dict[str, str] = {}   # слова клиента рядом с номером: «прокладка на патрубок турбины V758424680»
         if arts:
             # Позиции из самого номера («571003L100 - Насос ГУР», «артикул 26209425906») заменит проверка номера
             # Из фразы вырезаем сам номер и «артикул … подойдёт?» — остальное («И масляный фильтр») остаётся позицией
@@ -199,6 +200,10 @@ class Engine:
                 # «…подойдёт? И масляный фильтр» — после знака или «и» начинается другая просьба, её оставляем
                 rest = re.sub(r"^(?:и|а|также|ещ[её]|плюс)\s+", "", rest, flags=re.I)
                 other = rest == q.strip() or bool(re.search(r"[?!;]|\.\s|\s(?:и|а)\s|\+|\bтакже\b|\bещ[её]\b", q, re.I))
+                if rest and self._partish(rest, tree) and not other:
+                    for a in arts:
+                        if A.norm(a) in A.norm(q):
+                            hints[a] = rest
                 if rest and self._partish(rest, tree) and other:
                     kept_items.append((rest if rest != q.strip() else q, sd))
                     if meta:
@@ -223,12 +228,15 @@ class Engine:
             # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
             p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
         for a in arts:
-            res["positions"].append(await self._article(v, tree, a))
+            pos = await self._article(v, tree, a, hints.get(a, ""), res["positions"])
+            if pos is not None:
+                res["positions"].append(pos)
         if len(items) > MAX_POSITIONS:
             res["warnings"].append(f"Разобраны первые {MAX_POSITIONS} позиций из {len(items)}")
         return self._done(res, "ok", t0)
 
-    async def _article(self, v: Vehicle, tree: TreeIndex, number: str) -> dict:
+    async def _article(self, v: Vehicle, tree: TreeIndex, number: str, hint: str = "",
+                       positions: list[dict] | None = None) -> dict | None:
         """«Подойдёт ли 26209425906?» — что это за деталь (поставщики), что ставится по VIN (каталог) и есть ли номер
         клиента среди аналогов этого оригинала."""
         try:
@@ -242,12 +250,23 @@ class Engine:
         oem = any(bkey(r.get("brand")) in own and re.search(r"[а-яё]{4,}", str(r.get("description") or ""), re.I)
                   and not re.search(r"аналог|analog|замена\s+для", str(r.get("description") or ""), re.I) for r in rows)
         info = {"number": number, "brand": brand, "desc": desc, "fit": None, "oem": oem}
-        if not desc or not A.name_of(desc):
+        # Деталь клиент назвал сам — ищем по его словам: у V758424680 поставщики пишут «вентиляционная решётка»
+        name = self.clean(hint) if hint else A.name_of(desc)
+        head = _name_head(name) if name else ""
+        for p in positions or []:
+            # «генератор krauf ALB1689DD или другой» — генератор уже в ответе: номер проверяем там, без новой позиции
+            if head and T.same(_name_head(p.get("query", "")), head) and not p.get("article"):
+                info["desc"] = info["desc"] or name
+                info["fit"] = A.fits(number, p.get("variants") or [])
+                p["article"] = info
+                return None
+        if not name:
             return {"query": f"номер {number}", "side": {"axis": "", "lr": ""}, "status": "not_found", "groups": [],
                     "variants": [], "question": "", "note": "", "kind": "part", "article": info}
-        pos = await self.position(v, tree, A.name_of(desc), T.Side())
+        pos = await self.position(v, tree, name, T.Side())
         info["fit"] = A.fits(number, pos.get("variants") or [])
-        return pos | {"query": f"{desc[:60]} ({number})", "article": info}
+        info["desc"] = info["desc"] or name
+        return pos | {"query": f"{(hint or desc)[:60]} ({number})", "article": info}
 
     def _done(self, res: dict, status: str, t0: float, prev: dict | None = None,
               replaced: list[int] | None = None) -> dict:
