@@ -181,6 +181,7 @@ class Engine:
         kinds = [m.get("kind", "") for m in meta] + [""] * len(items)   # «в круг» растит items только без модели
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s, kinds[i])
                                                        for i, (q, s) in enumerate(items[:MAX_POSITIONS]))))
+        asks = [a for a in asks if res["positions"][a["position"]].get("variants")]   # «комплект Zekkert» без детали — не про фирму
         if asks:
             res["reply"] = await self._reply({"kind": "answer", "answers": [], "picks": [], "ask_brand": asks},
                                              res["positions"], v)
@@ -259,6 +260,19 @@ class Engine:
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
         return self._done(res, "ok", t0, mem, replaced)
+
+    @staticmethod
+    def _vague(q: list[str], query: str) -> str:
+        """Запрос из одного общего слова («комплект», «подшипник») или одного признака («наружный») ничего не называет:
+        групп с таким словом десятки, и любая выбранная — случайная. Возвращает вопрос клиенту или пустую строку."""
+        # По словам запроса, а не по T.ADJ: тот пополняется из деревьев машин («ремен» попадает в прилагательные)
+        words = [w for w in T.words(query) if T.stem(w) in q]
+        nouns = [T.stem(w) for w in words if not D.adj_word(w)]
+        if q and not nouns:
+            return f"«{query}» — это только признак детали. Напишите, какая деталь нужна."
+        if len(nouns) == 1 and len(q) == 1 and nouns[0] in VAGUE_NOUNS:
+            return f"«{query}» бывает разным. Напишите, какая именно деталь нужна ({VAGUE_NOUNS[nouns[0]]})."
+        return ""
 
     def _drop_lost(self, positions: list[dict]) -> None:
         """Главное слово клиента не нашлось в каталоге и группа оценена слабо («кольцо подвесного» → уплотнения
@@ -504,6 +518,10 @@ class Engine:
             return pos
         if self.outside(q):
             pos["note"] = "Это не деталь каталога автомобиля — подберём по названию."
+            return pos
+        vague = self._vague(q, query)
+        if vague:
+            pos["note"] = vague   # «Комплект», «подшипник», «наружный»: гадать группу нельзя — спрашиваем, какая деталь
             return pos
         ranked = tree.rank(q, want)
         if not ranked or ranked[0][1] < 0.3:
@@ -1356,6 +1374,16 @@ def note_diffs(variants: list[dict]) -> list[str]:
     return res if sum(1 for x in res if x) >= 1 and len(set(res)) > 1 else [""] * len(per)
 
 
+# Общие слова, которые сами по себе не называют деталь: ключ — основа слова, значение — примеры для вопроса клиенту
+VAGUE_NOUNS = {T.stem(k): v for k, v in {
+    "комплект": "например, комплект ГРМ, сцепления, тормозных колодок", "набор": "например, набор ГРМ или колодок",
+    "ремкомплект": "например, ремкомплект суппорта, рулевой рейки, ШРУСа", "цилиндр": "главный тормозной, рабочий тормозной, сцепления",
+    "подшипник": "ступичный, выжимной, натяжного ролика, подвесной", "датчик": "ABS, коленвала, кислорода, температуры",
+    "насос": "водяной, топливный, ГУР, масляный",
+    "прокладка": "ГБЦ, клапанной крышки, поддона", "крышка": "клапанная, бензобака, расширительного бачка",
+    "шланг": "радиатора, ГУР, тормозной", "патрубок": "радиатора, впускной, термостата", "деталь": "название детали",
+    "запчасть": "название детали", "элемент": "название детали",
+}.items()}
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)

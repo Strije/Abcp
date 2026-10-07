@@ -25,7 +25,7 @@ from . import text as T
 from .engine import share_noun
 
 # Тип фразы — по признакам; у фразы может быть несколько
-_NOISE = re.compile(r"нажм|кнопк|профил|устройств|сесси|контроль качества|агрегатор|подписк|канал|принять|отказ|"
+_NOISE = re.compile(r"₽|•|руб|нажм|кнопк|профил|устройств|сесси|контроль качества|агрегатор|подписк|канал|принять|отказ|"
                     r"спасибо|здравствуйте|добрый|привет|подъед|работаете|оплат|заберу|реквизит|скидк|безопасная сделка|"
                     r"отправ|номер заказа|карт[аеуы]\b|сбербанк|тинькофф|адрес|телефон", re.I)
 _FIRM = re.compile(r"\b(?:bosch|бош|mann|манн|zekkert|зекерт|зеккерт|febest|ngk|ёнк|denso|gates|skf|sachs|trw|ate|lemforder|"
@@ -103,8 +103,11 @@ def _kind(rank: list, st: list[str], tree) -> tuple[str, str, float]:
     return kind, g.name, s
 
 
-def run(path: str, out: str) -> None:
+def run(path: str, out: str, mode: str = "") -> None:
+    """mode=nogate — без порога «пустышек»: то, как было до правки (для сравнения `compare`)."""
+    from .engine import Engine, kind_of
     from .measure import ENGINE, STOP, _fleet_trees
+    gate = mode == "nogate"
     trees = _fleet_trees()
     rows = [x.split("\t") for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
     print(f"Машин в парке: {len(trees)}, фраз: {len(rows)}")
@@ -114,8 +117,13 @@ def run(path: str, out: str) -> None:
         clean = re.sub(r"\s+", " ", _MAKES.sub(" ", q)).strip()
         # «Диски и колодки передние» — две детали, как делит движок; худший результат из частей определяет фразу
         parts = [x for x in share_noun(T.split_pieces(clean), STOP) if T.stems(x, STOP)] or [clean]
-        if all(ENGINE.outside(T.stems(x, STOP)) for x in parts):
+        stems_of = lambda x: T.stems(T.expand(x), STOP)   # noqa: E731
+        if all(ENGINE.outside(stems_of(x)) or kind_of(stems_of(x)) != "part" for x in parts):
             report.append({"query": q, "types": types, "category": "не каталог", "kinds": {}, "groups": []})
+            continue
+        if not gate and all(Engine._vague(stems_of(x), x) for x in parts if kind_of(stems_of(x)) == "part"):
+            # Одно общее слово или один признак: бот спросит, а не угадает (порог «пустышек» в движке)
+            report.append({"query": q, "types": types, "category": "уточняем", "kinds": {}, "groups": []})
             continue
         kinds, groups, per_car = collections.Counter(), collections.Counter(), {}
         for car, tree in trees.items():
@@ -155,7 +163,7 @@ def run(path: str, out: str) -> None:
 
 
 _BAD = {"уверенно": 0, "слабо": 1, "выбор": 2, "мимо": 3, "потеряно слово": 4}
-ORDER = ["потеряно слово", "несогласованно", "слабо", "выбор везде", "у части машин нет", "везде мимо", "уверенно", "не каталог"]
+ORDER = ["потеряно слово", "несогласованно", "слабо", "выбор везде", "у части машин нет", "везде мимо", "уверенно", "уточняем", "не каталог"]
 
 
 def _print(report: list[dict]) -> None:
@@ -191,7 +199,7 @@ def compare(before: str, after: str) -> None:
         if ra == rb:
             continue
         # «уверенно» — лучшее; «не каталог» и «везде мимо» не считаем ни улучшением, ни ухудшением
-        score = lambda c: {"уверенно": 0, "слабо": 1, "выбор везде": 1, "у части машин нет": 2,  # noqa: E731
+        score = lambda c: {"уверенно": 0, "уточняем": 0, "слабо": 1, "выбор везде": 1, "у части машин нет": 2,  # noqa: E731
                            "несогласованно": 3, "потеряно слово": 4}.get(c, 2)
         (better if score(rb) < score(ra) else worse if score(rb) > score(ra) else []).append((q, ra, rb))
     print(f"Улучшилось: {len(better)}, ухудшилось: {len(worse)}")

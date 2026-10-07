@@ -1049,3 +1049,16 @@ def test_lab_phrase_types_and_compare(tmp_path):
         lab.compare(str(pa), str(pb))
     out = buf.getvalue()
     assert "Улучшилось: 1, ухудшилось: 1" in out
+
+
+def test_vague_generic_word_is_asked_not_guessed():
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    st = lambda w: T.stems(T.expand(w), eng.stop)   # noqa: E731
+    assert "какая именно деталь" in eng._vague(st("ремкомплект"), "ремкомплект")
+    assert "какая именно деталь" in eng._vague(st("Комплект"), "Комплект")
+    assert "только признак" in eng._vague(st("наружный"), "наружный")
+    for ok in ("комплект ГРМ", "подшипник ступицы", "ГБЦ и клапаны", "свечи", "тормозные колодки", "клапаны", "ремень",
+               "шланг сцепления", "шланг радиатора"):
+        assert eng._vague(st(ok), ok) == "", ok
