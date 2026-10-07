@@ -234,6 +234,25 @@ def _seen(positions: list[dict]) -> tuple[set[str], frozenset[str]]:
     return firms, words
 
 
+def _narrow_by_words(hits: list[tuple], piece: str, stop: frozenset[str], seen) -> list[tuple]:
+    """«А салонный зеккерт есть?» про позицию «Фильтра»: Zekkert есть и у масляного, и у салонного.
+    Слово клиента («салонный») оставляет только предложения, в названии или описании которых оно есть;
+    если не совпало ни одно — отвечаем как раньше, по всем."""
+    firms = {T.stem(w) for w, _ in brand_words(piece, *seen)}
+    words = [s for s in T.stems(piece, stop) if s not in FILLER and s not in firms
+             and not T.side(s).axis and not T.side(s).lr]
+    if not words or len(hits) < 2:
+        return hits
+
+    def fits(h: tuple) -> bool:
+        text = f"{h[1]['var'].get('name', '')} {h[1]['offer'].get('description') or ''}"
+        have = T.stems(text[:120], stop)
+        return any(T.same(w, b) for w in words for b in have)
+
+    kept = [h for h in hits if fits(h)]
+    return kept or hits
+
+
 def refers(piece: str, p: dict, stop: frozenset[str]) -> bool:
     """Реплика про эту позицию: слово запроса или каталожного названия («свечи», «фильтр масляный»)."""
     firms = {T.stem(w) for w, _ in brand_words(piece, *_seen([p]))}   # «А салонный зеккерт есть?» — «зеккерт» не деталь
@@ -369,7 +388,7 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     answers.append(("original", p, x))
             elif brands:
                 touched = True
-                for p, x, _ in uniq:
+                for p, x, _ in _narrow_by_words(uniq, piece, stop, seen):
                     answers.append(("brand", p, x))
                 # «Фирмы Зеккерт есть?» про три фильтра: у масляного и воздушного показан, про салонный — проверить
                 # по всем предложениям (сервер), а не молчать

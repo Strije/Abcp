@@ -730,3 +730,19 @@ def test_floating_bushing_words_and_carrier_name():
     assert T.expand("Полиуретан. сайл.блок задней подв").startswith("Полиуретан. сайлентблок")
     assert _rename("Крепление заднего моста, правый (в подсборе)", "4230448030") == "Задний кулак (цапфа), правый (в подсборе)"
     assert _rename("Крепление заднего моста", "1234") == "Крепление заднего моста"
+
+
+def test_firm_question_narrowed_by_detail_word():
+    """«А салонный зеккерт есть?» про позицию «Фильтра»: масляный Zekkert не показываем."""
+    from app.podbor.dialog import _narrow_by_words
+
+    def hit(var, desc):
+        return ({}, {"var": {"name": var}, "offer": {"brand": "Zekkert", "description": desc}}, False)
+
+    oil = hit("Масляный фильтр", "Фильтр масл. Audi A4 IV 07")
+    cabin = hit("Фильтр. элемент", "Фильтр салон. уголь Audi A4 IV 07")
+    assert _narrow_by_words([oil, cabin], "а салонный зеккерт есть?", frozenset(), ()) == [cabin]
+    # слова детали нет — отвечаем по всем, как раньше
+    assert _narrow_by_words([oil, cabin], "зеккерт есть?", frozenset(), ()) == [oil, cabin]
+    # слово не совпало ни с одним предложением — не молчим
+    assert _narrow_by_words([oil, cabin], "а воздушный зеккерт есть?", frozenset(), ()) == [oil, cabin]
