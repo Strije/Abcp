@@ -44,13 +44,33 @@ class Request:
     chunks: list[str] = field(default_factory=list)  # позиции до разбиения по запятым
 
 
+_TRANSLIT = {**{str(i): i for i in range(10)}, **dict(zip("ABCDEFGH", range(1, 9))), **dict(zip("JKLMN", range(1, 6))),
+             "P": 7, "R": 9, **dict(zip("STUVWXYZ", range(2, 10)))}
+_WEIGHTS = (8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2)
+
+
+def _check_digit_ok(vin: str) -> bool:
+    """Девятый знак VIN — контрольный (ISO 3779, обязателен в США и Канаде)."""
+    try:
+        total = sum(_TRANSLIT[c] * w for c, w in zip(vin, _WEIGHTS)) % 11
+    except KeyError:
+        return False
+    return vin[8] == ("X" if total == 10 else str(total))
+
+
 def _vin(token: str) -> str | None:
     """17 знаков → VIN. O/I/Q в VIN не бывает — это опечатки вместо 0/1/0."""
     s = token.upper().translate(_TO_LATIN).replace("O", "0").replace("I", "1").replace("Q", "0")
     if not (_VIN_OK.match(s) and re.search(r"\d", s) and re.search(r"[A-Z]", s)):
         return None
-    # ISO 3779: последние четыре знака — цифры; иначе это склеенные слова («HRETETLCTEGJLAT10» с фото СТС)
-    return s if s[-4:].isdigit() else None
+    # Склеенные слова с фото СТС («HRETETLCTEGJLAT10») — почти без цифр: у настоящего VIN их не меньше пяти,
+    # и в хвосте цифры (по ISO 3779 последние четыре — цифры; у Z94C241BALR15141B в хвосте буква, это бывает)
+    if sum(c.isdigit() for c in s) < 5 or sum(c.isdigit() for c in s[-4:]) < 3:
+        return None
+    # Контрольная цифра обязательна только в Северной Америке (VIN на 1–5): у остальных её нет, 2/3 настоящих не сходятся
+    if s[0] in "12345" and not _check_digit_ok(s):
+        return None
+    return s
 
 
 def find_ident(text: str) -> str:

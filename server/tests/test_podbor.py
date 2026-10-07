@@ -850,6 +850,11 @@ def test_vin_rejects_garbage_words():
     assert find_ident("VIN: WV1ZZZ2HZB8005243") == "WV1ZZZ2HZB8005243"
     assert find_ident("HRETETLCTEGJLAT10") == ""
     assert find_ident("VIN: HRETETLCTEGJLAT10") == ""
+    # настоящие: с буквой в хвосте (Kia Рио), европейские без контрольной цифры, американский с верной
+    assert find_ident("Z94C241BALR15141B") == "Z94C241BALR15141B"
+    assert find_ident("WAUZZZ8K9BA123456") == "WAUZZZ8K9BA123456"
+    assert find_ident("1M8GDM9AXKP042788") == "1M8GDM9AXKP042788"
+    assert find_ident("1M8GDM9A1KP042788") == ""   # США: контрольная цифра не сходится
 
 
 def test_all_around_and_price_tail_and_adjective_word():
