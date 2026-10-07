@@ -1,6 +1,6 @@
 """Парк машин для проверок без Laximo: деревья групп конкретных машин (у каждой своё) и детали групп.
 
-    python -m app.podbor.fleet pick vinqu.jsonl            # выбрать ~45 машин из заявок → .podbor-cache/fleet.json
+    python -m app.podbor.fleet pick vinqu.jsonl [3] [2]    # выбрать ~45 машин из заявок (запасных 3, ×2 — ~90 машин)
     python -m app.podbor.fleet trees                        # машина и дерево групп для каждой (2 запроса на машину)
     python -m app.podbor.fleet details запросы.txt [1] [N]  # детали лучшей группы каждого запроса у первых N машин
 
@@ -42,9 +42,10 @@ FAMILIES = {
 DIESEL = re.compile(r"\b(?:\d\.\d\s*)?(?:d|td|tdi|crdi|cdi|dci|hdi|tdci|sdi|d-4d|dcti|jtd|cdti)\b|дизел", re.I)
 
 
-def pick(path: str, spare: int = 3):
+def pick(path: str, spare: int = 3, times: int = 1):
     """По каждой марке — разные модели, по возможности и бензин, и дизель; запасные — на случай,
-    если VIN не найдётся в Laximo."""
+    если VIN не найдётся в Laximo. times — во сколько раз больше машин каждой марки (ночные прогоны парка)."""
+    spare, times = int(spare), int(times)
     rows = [json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
     by_make: dict[str, list[dict]] = collections.defaultdict(list)
     for r in rows:
@@ -54,6 +55,7 @@ def pick(path: str, spare: int = 3):
     fleet = []
     for fam, makes in FAMILIES.items():
         for make, n in makes.items():
+            n *= times
             seen_models, chosen = set(), []
             cands = by_make.get(make, [])
             # Один дизель на марку (наборы групп бензина и дизеля отличаются), остальные — бензин, как в парке
