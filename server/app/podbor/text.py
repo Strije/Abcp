@@ -47,7 +47,10 @@ class Request:
 def _vin(token: str) -> str | None:
     """17 знаков → VIN. O/I/Q в VIN не бывает — это опечатки вместо 0/1/0."""
     s = token.upper().translate(_TO_LATIN).replace("O", "0").replace("I", "1").replace("Q", "0")
-    return s if _VIN_OK.match(s) and re.search(r"\d", s) and re.search(r"[A-Z]", s) else None
+    if not (_VIN_OK.match(s) and re.search(r"\d", s) and re.search(r"[A-Z]", s)):
+        return None
+    # ISO 3779: последние четыре знака — цифры; иначе это склеенные слова («HRETETLCTEGJLAT10» с фото СТС)
+    return s if s[-4:].isdigit() else None
 
 
 def find_ident(text: str) -> str:

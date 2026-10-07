@@ -824,3 +824,46 @@ def test_review_judge(tmp_path):
     assert stat2["cases"] == 1 and "колодки задние" in llm2.asked[0]
     text = R.report(jr, 1)
     assert "подозрений 1" in text and "оформлен комплект" in text and "не помог" in text
+
+
+def test_brand_in_first_message_is_split_off(monkeypatch):
+    """«Фильтр воздушный mann» в первой реплике: деталь ищем без фирмы, фирму проверяем отдельно."""
+    from types import SimpleNamespace
+    from app import brands as AB
+    from app.podbor.engine import Engine, load_rules
+
+    fake = AB.Brands({"brands": {"MANN-FILTER": ["mann", "манн"], "BMW": ["bmw", "бмв"]}})
+    monkeypatch.setattr(AB, "get", lambda: fake)
+    rules = load_rules()
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), rules)
+    v = SimpleNamespace(brand="BMW")
+    side = T.Side("", "")
+    items, asks = eng._split_brands([("фильтр воздушный mann", side), ("свечи", side), ("колодки bmw", side),
+                                     ("mann", side)], v)
+    assert [q for q, _ in items] == ["фильтр воздушный", "свечи", "колодки bmw", "mann"]
+    assert asks == [{"position": 0, "brand": fake.key("mann"), "word": "mann"}]   # фирма машины и одно слово — не запрос
+
+
+def test_vin_rejects_garbage_words():
+    """«HRETETLCTEGJLAT10» — склеенные слова с фото СТС — не VIN; настоящий VIN Amarok — VIN."""
+    from app.podbor.text import find_ident
+    assert find_ident("VIN: WV1ZZZ2HZB8005243") == "WV1ZZZ2HZB8005243"
+    assert find_ident("HRETETLCTEGJLAT10") == ""
+    assert find_ident("VIN: HRETETLCTEGJLAT10") == ""
+
+
+def test_all_around_and_price_tail_and_adjective_word():
+    from types import SimpleNamespace
+    from app.podbor.dialog import replace_adj
+    from app.podbor.engine import Engine, _PRICE_TAIL, load_rules
+    side = T.Side("", "")
+    # «Диски и колодки в круг»: перед и зад отдельно — сзади бывают барабаны
+    got = Engine._all_around([("диски тормозные", side), ("колодки в круг", side)], around=True)
+    assert [(q, s.axis) for q, s in got] == [("диски тормозные", "front"), ("диски тормозные", "rear"),
+                                              ("колодки", "front"), ("колодки", "rear")]
+    # без «в круг» ничего не делим, масло в том же сообщении — тоже
+    assert Engine._all_around([("диски тормозные", side)], around=False) == [("диски тормозные", side)]
+    assert [q for q, _ in Engine._all_around([("масло", side), ("колодки", side)], around=True)][:1] == ["масло"]
+    assert _PRICE_TAIL.sub("", "шаровые сколько стоят?") == "шаровые"
+    # признак, который уже в запросе, второй раз не дописываем («шаровые шаровые»)
+    assert replace_adj("сайлент блоки шаровые", "шаровые нужны") == "сайлент блоки шаровые"

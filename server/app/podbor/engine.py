@@ -168,9 +168,14 @@ class Engine:
                 res["understood"] = {"by": "rules"}
         if not items:
             return self._done(res, "no_positions", t0)
-        kinds = [m.get("kind", "") for m in meta] + [""] * len(items)
+        # «Фильтр воздушный mann» — фирма названа в первой реплике: ищем деталь без неё, фирму проверяем отдельно
+        items, asks = self._split_brands(items if meta else self._all_around(items, any(_AROUND.search(c) for c in req.chunks)), v)
+        kinds = [m.get("kind", "") for m in meta] + [""] * len(items)   # «в круг» растит items только без модели
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s, kinds[i])
                                                        for i, (q, s) in enumerate(items[:MAX_POSITIONS]))))
+        if asks:
+            res["reply"] = await self._reply({"kind": "answer", "answers": [], "picks": [], "ask_brand": asks},
+                                             res["positions"], v)
         for p, m in zip(res["positions"], meta):
             # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
             p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
@@ -227,7 +232,7 @@ class Engine:
                     return self._done(res, "chat", t0, mem)
                 return self._done(res, "answer" if plan["reply"]["kind"] == "answer" else "order", t0, mem)
             res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s)
-                                                           for q, s in plan["jobs"][:MAX_POSITIONS])))
+                                                           for q, s in self._all_around(plan["jobs"])[:MAX_POSITIONS])))
             return self._done(res, "ok", t0, mem)
         if plan["kind"] != "chat" and plan.get("handoff"):
             res["handoff"] = plan["handoff"]   # на это менеджер отвечает сам — бот сделал свою часть
@@ -242,6 +247,22 @@ class Engine:
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
         return self._done(res, "ok", t0, mem, replaced)
+
+    def _split_brands(self, items: list[tuple[str, T.Side]], v: Vehicle) -> tuple[list, list[dict]]:
+        """Фирмы из текста позиций: (позиции без слов фирмы, что спросить у поставщиков). Фирма машины («Ниссан»)
+        и слово, из которого не осталось бы детали, — не запрос фирмы."""
+        out, asks = [], []
+        car = AB.get().key(v.brand)
+        for i, (q, side) in enumerate(items):
+            for w, key in D.brand_words(q):
+                rest = re.sub(rf"(?<![\wа-яё]){re.escape(w)}(?![\wа-яё])", " ", q, flags=re.I)
+                rest = re.sub(r"\s+", " ", rest).strip(" ,;")
+                if key == car or not T.stems(rest, self.stop):
+                    continue
+                q = rest
+                asks.append({"position": i, "brand": key, "word": w})
+            out.append((q, side))
+        return out, asks
 
     async def _reply(self, r: dict, positions: list[dict], v: Vehicle) -> dict:
         """Ответ про показанные предложения — в виде, который можно сохранить и пересобрать в текст."""
@@ -353,6 +374,7 @@ class Engine:
 
     def clean(self, query: str) -> str:
         """«Здравствуйте, вин , нужны передние колодки» → «передние колодки»."""
+        query = _PRICE_TAIL.sub("", query)   # «А шаровые сколько стоят?» → «шаровые»
         ws = re.split(r"(\s+|,)", query)
         i = 0
         # Пропускаем стоп-слова и связки: «Здравствуйте, можно узнать цену и сроки, масляный фильтр» → «масляный фильтр»
@@ -373,6 +395,32 @@ class Engine:
                    for nc in self.not_catalog)
 
     async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
+        pos = await self._position(v, tree, query, want, kind)
+        if pos["status"] == "not_found" and want.axis == "rear" and _DISC.search(query):
+            # «Диски задние» на машине с барабанами: дисков в каталоге нет — даём барабаны и говорим об этом
+            alt = await self._position(v, tree, "барабан тормозной", want, kind)
+            if alt["status"] != "not_found":
+                alt["query"] = "Барабаны тормозные задние"
+                alt["note"] = ("Сзади у вашей машины барабанные тормоза, тормозных дисков там нет — "
+                               "вместо дисков стоят барабаны (колодки к ним — барабанные).")
+                return alt
+        return pos
+
+    @staticmethod
+    def _all_around(items: list[tuple[str, T.Side]], around: bool = False) -> list[tuple[str, T.Side]]:
+        """«Диски и колодки в круг» → передние и задние отдельно: сзади бывают барабаны, и это надо показать.
+        around — «в круг» сказано про всё сообщение: тормозные детали без стороны тоже делим на перед и зад."""
+        out = []
+        for q, side in items:
+            if (_AROUND.search(q) or (around and _BRAKE.search(q))) and not side.axis:
+                base = re.sub(r"\s+", " ", _AROUND.sub(" ", q)).strip(" ,")
+                if T.stems(base, frozenset()):
+                    out += [(base, T.Side("front", "")), (base, T.Side("rear", ""))]
+                    continue
+            out.append((q, side))
+        return out
+
+    async def _position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
         q = T.stems(T.expand(query), self.stop)
         kind = kind or kind_of(q)
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
@@ -1196,12 +1244,22 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             lines += ["   " + r for r in rows]
             if more:
                 lines.append(f"   Есть ещё {more} {plural(more, 'вариант', 'варианта', 'вариантов')} — подберём под бюджет.")
+    if not res.get("followup") and res.get("reply"):
+        extra = reply_text(res["reply"], numbers)   # «Фильтр воздушный — есть: Mann …» или «фирмы … нет»
+        if extra:
+            lines += ["", extra]
     lines.append("")
     lines.append("Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем." if found
                  else "Уточним по позициям и напишем.")
     lines.append(ANYTHING_ELSE)
     return "\n".join(lines).strip("\n")
 
+
+_PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
+_BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)
+_DISC = re.compile(r"диск\w*\s+тормоз|тормозн\w*\s+диск|^диск", re.I)
+_AROUND = re.compile(r"\bв\s+круг\b|\bпо\s+кругу\b|\bсо\s+всех\s+сторон\b|\bна\s+все\s+колес\w*|\bна\s+все\s+колёс\w*"
+                     r"|\bвсе\s+четыре\b|\bна\s+4\s+колеса\b|\bна\s+все\s+4\b", re.I)
 
 # Клиент часто пишет одну деталь, а нужно несколько: спросить, всё ли (менеджеры спрашивают так же)
 ANYTHING_ELSE = "Что-то ещё нужно по этой машине?"

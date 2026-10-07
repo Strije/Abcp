@@ -655,7 +655,8 @@ def replace_adj(query: str, text: str) -> str:
         pair = next((p for p in OPPOSITE if any(sw.startswith(x) for x in p)), None)
         if pair:
             out = [x for x in out if not any(T.stem(x).startswith(y) for y in pair)]
-        out.append(w)
+        if not any(T.same(sw, T.stem(x)) for x in out):   # «шаровые» уже в запросе — второй раз не дописываем
+            out.append(w)
     return " ".join(out)
 
 
@@ -797,6 +798,7 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
     cont = content(text, stop)
     known = tree.known(cont)
     names_old = any(refers(text, p, stop) for p in positions)
+    same_pos = [p for p in positions if cont and all(any(T.same(c, t) for t in T.stems(p["query"])) for c in cont)]
     surface = [w for w in T.words(text) if T.stem(w) in cont]
     adj_only = bool(surface) and all(adj_word(w) for w in surface)
     # Главное слово — первое не прилагательное из каталога: «Есть к нему шланг?» → «шланг»
@@ -825,6 +827,15 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
             return out | {"kind": "attr", "jobs": jobs, "replaced": [],
                           "handoff": out["handoff"] or ([text.strip()] if NOT_ORIGINAL.search(text) else [])}
 
+    side_req = T.side(text)
+    if same_pos and (side_req.axis or side_req.lr) and not manager and not _numbers(text) and not brand_words(text)             and not ORIGINAL.search(text):
+        # «А задние диски?» — та же деталь, что показывали, но с другой стороны: как «а задние?», только с названием детали
+        p = same_pos[-1]
+        sides = sides_wanted(text, p)
+        jobs = [(side_query(strip_side(p["query"]), sd), sd) for sd in sides]
+        if jobs:
+            return out | {"kind": "side", "jobs": jobs, "replaced": []}
+
     r = offer_reply(text, mem, stop, analogs)
     if r and (r.get("picks") or r.get("answers") or r.get("ask_brand") or not new_part):
         if r.get("answers") and all(k == "stock" or k == "fastest" for k, _, _ in r["answers"]):
@@ -834,6 +845,17 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
 
     jobs, replaced = out["jobs"], out["replaced"]
     last_turn = max((p.get("turn", 0) for p in positions), default=0)
+    # «А шаровые сколько стоят?» после сайлентблоков рычага: «шаровые» — слово каталога («Опора шаровая»), но это
+    # другая деталь, а не признак прежней: дописывать «шаровые» к «сайлент блоки рычагов» нельзя
+    if same_pos and adj_only and len(known) == len(cont) and not manager and not MORE.search(text)             and not _numbers(text) and not brand_words(text) and "?" not in text:
+        # «Шаровые нужны», когда «шаровые» уже показаны: это согласие, а не новый признак чужой позиции
+        reply = {"kind": "order", "picks": [], "answers": [], "ask_brand": [],
+                 "unclear": [same_pos[-1]["query"]], "clarify": ""}
+        return out | {"kind": "pick_unclear", "reply": reply}
+    adj_part = False
+    if positions and cont and adj_only and len(known) == len(cont) and not names_old:
+        alone = tree.rank(cont, T.Side())
+        adj_part = bool(alone) and alone[0][1] >= 0.8 and (len(alone) < 2 or alone[1][1] < alone[0][1] - 0.05)             and not any(T.same(c, t) for i in targets(mem) for t in T.stems(positions[i]["query"]) for c in cont)
     if positions and not cont and not manager:
         # «а задние?», «обе», «левую и правую» — сторона к позиции, по которой спрашивали, или к последним
         open_ = [i for i, p in enumerate(positions) if p.get("question")]
@@ -847,7 +869,7 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
                 replaced += [i] * len(sides)
         if jobs:
             out["kind"] = "side"
-    elif positions and cont and not manager and adj_only and len(known) == len(cont):
+    elif positions and cont and not manager and adj_only and len(known) == len(cont) and not adj_part:
         # Только слова каталога: «угольный», «внутренний»; «не актуально», «да нормально» — не признак детали
         # «а верхнюю?», «моторное», «впускной» — признак к детали, по которой спрашивали, или к последней
         for i in targets(mem):
@@ -868,7 +890,7 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
                 jobs.append((q, T.side(q)))
                 replaced.append(i)
             out["kind"] = "reply"
-        elif new_part and not re.search(r"фото|ссылк|оплат|возврат|банк|номер|код[ыа]?\b|карт", text, re.I) \
+        elif (new_part or adj_part) and not re.search(r"фото|ссылк|оплат|возврат|банк|номер|код[ыа]?\b|карт", text, re.I) \
                 and not ABOUT_OFFER.search(text):
             # Новая деталь на ту же машину: главное слово — из каталога («А фара?», «катушка зажигания»).
             # «Оно резиновая?», «до скольки работаете?» — менеджеру
