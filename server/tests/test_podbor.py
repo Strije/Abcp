@@ -758,3 +758,18 @@ def test_fitting_kit_is_not_the_pads():
     assert not not_the_part("Колодки тормозные задние", name)
     # клиент сам просил монтажный комплект
     assert not not_the_part("Комплект монтажный тормозных колодок", "Монтажный комплект колодок")
+
+
+def test_bitrix_export_masks_phones_and_skips_robot(monkeypatch):
+    monkeypatch.setenv("BX", "https://example.invalid/rest/1/x/")
+    monkeypatch.setattr("sys.argv", ["bitrix_export.py", "2026-01-01", "out.jsonl"])
+    from app.podbor import bitrix_export as B
+    for raw in ("t8 903 425-76-49", "звоните 903 425-76-49", "+7 (978) 123-45-67", "89781234567", "8 (8692) 12-34-56",
+                "тел 978-123-45-67 жду"):
+        out = B.clean(raw, set())
+        assert "[тел]" in out, raw
+        assert "425-76" not in out and "123-45" not in out and "1234567" not in out and "12-34-56" not in out, raw
+    # VIN, артикулы и суммы остаются
+    keep = "XWEFF242380003661 артикул 04892562AA сумма 8931.00 заказ 1164805"
+    assert B.clean(keep, set()) == keep
+    assert B.ROBOT.match("Отправлено роботом\nБлагодарим за заказ №1165020")

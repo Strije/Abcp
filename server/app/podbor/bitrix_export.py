@@ -43,7 +43,10 @@ def call(method: str, params: dict | list) -> dict:
 
 # ---------- маскирование ----------
 
-PHONE = re.compile(r"(?<![\dA-Za-z])(?:\+7|8|7)[\s\-()]*9\d{2}[\s\-()]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}(?!\d)")
+# Мобильный и без префикса («903 425-76-49», «(978) 123-45-67»), и любой номер с +7 / 8 / 7 в начале:
+# городской «8 (8692) 12-34-56» тоже. VIN и артикулы не задеваем: перед номером не бывает буквы или цифры
+PHONE = re.compile(r"(?<![\dA-Za-z])(?:(?:\+7|8|7)[\s\-()]*(?:\d[\s\-()]*){10}|\(?9\d{2}\)?[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2})(?!\d)")
+ROBOT = re.compile(r"^\s*Отправлено роботом", re.I)   # «Благодарим за заказ №…» — рассылка магазина, не клиент
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 URL = re.compile(r"(?:https?://|www\.)\S+", re.I)
 CARD = re.compile(r"(?<!\d)(?:\d{4}[\s-]?){3}\d{4}(?!\d)")
@@ -128,7 +131,7 @@ def dialog(sid: str, meta: dict, r: dict) -> dict | None:
         if sender == "0" or sender in bots:
             continue   # системные сообщения и боты
         text = clean(str(m.get("text") or ""), names)
-        if not text:
+        if not text or ROBOT.match(text):
             continue
         role = "client" if sender in clients else "manager"
         if out and out[-1]["role"] == role:
