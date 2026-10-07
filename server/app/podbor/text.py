@@ -198,7 +198,9 @@ def norm(word: str) -> str:
 def stem(word: str) -> str:
     w = norm(word)
     s = _stemmer.stemWord(w)
-    if _ADJ_END.search(w) and _ADJ_STEM.search(s) and len(s) >= 4:
+    # «крепление», «сцепление», «уплотнение» кончаются на «-ие», как «передние», но это существительные
+    # (на «-ение»/«-ание»; у прилагательных перед «-ние» согласная или «н»: передние, внутренние)
+    if _ADJ_END.search(w) and _ADJ_STEM.search(s) and len(s) >= 4 and not re.search(r"[еа]ние$", w):
         ADJ.add(s)
     return s
 

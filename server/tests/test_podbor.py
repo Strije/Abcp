@@ -1189,3 +1189,32 @@ def test_lab_junk_phrases():
     assert lab.junk("Сделайте первый шаг к свободе", part) == "нет детали"
     assert lab.junk("колодки передние", part) == "" and lab.junk("Ремень", part) == ""
     assert lab.junk("натяжной ролик и ремень ГРМ с доставкой в Черкесск", part) == ""   # доставка рядом с деталью — годится
+
+
+def test_nouns_on_nie_are_not_adjectives():
+    """«Крепление бампера» — главное слово «крепление», а не «бампер»; «передние колодки» — «колодки»."""
+    for phrase, head in [("Крепление бампера", "креплен"), ("сцепление в сборе", "сцеплен"),
+                         ("передние колодки", "колодк"), ("внутренние ШРУСы", "шрус"), ("верхние опоры", "опор")]:
+        assert T.head(T.stems(phrase)) == head, phrase
+
+
+def test_kia_bumper_cover_is_the_bumper():
+    from app.podbor.catalog import _rename
+    assert _rename("КРЫШКА В СБОРЕ-ПЕРЕДН. БАМПЕР", "865111H000") == "Бампер передний (облицовка в сборе)"
+    assert _rename("КРЫШКА В СБОРЕ-ЗАДН. БАМПЕР", "866111H100") == "Бампер задний (облицовка в сборе)"
+    assert _rename("КРЫШКА В СБОРЕ-КЛАПАНОВ", "224102B000") == "КРЫШКА В СБОРЕ-КЛАПАНОВ"
+
+
+def test_prefer_named_part_over_its_accessories():
+    """«Бампер передний»: сам бампер есть — гаситель и выступ той же стороны не предлагаем; другая сторона остаётся."""
+    from app.podbor.engine import Candidate, prefer_named, _name_head
+    from app.podbor.catalog import Detail
+    c = lambda name, axis: Candidate(Detail("1", name, "", "1", True, "", "", "", "", "", "", ""), 1.0, 1.0, True,  # noqa: E731
+                                     T.Side(axis, ""))
+    bumper, absorber, lip = c("Бампер передний (облицовка в сборе)", "front"), \
+        c("ГАСИТЕЛЬ-ЭНЕРГИИ ПЕРЕДНЕГО БАМПЕРА", "front"), c("ВЫСТУП-ПЕРЕДН. БАМПЕР", "front")
+    assert prefer_named([bumper, absorber, lip], T.stems("бампер передний")) == [bumper]
+    hub, bearing = c("Ступица колеса", "rear"), c("Подшипник ступицы", "")
+    assert prefer_named([hub, bearing], T.stems("ступица")) == [hub, bearing]
+    assert _name_head("Маловязкое моторное масло") == T.stem("масло")
+    assert _name_head("1 комплект тормозных колодок") == T.stem("колодок")

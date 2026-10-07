@@ -769,6 +769,7 @@ class Engine:
         if any(c.d.match for c in tier):
             tier = [c for c in tier if c.d.match]
         tier = drop_accessories(tier, q)
+        tier = prefer_named(tier, q)
         return sorted(tier, key=lambda c: -c.score)[:MAX_VARIANTS]
 
     def _foreign(self, tree: TreeIndex, name: list[str], q: list[str], chosen: set[int], near: list[str]) -> bool:
@@ -1058,6 +1059,36 @@ _EXCLUSIVE = [(T.stem("ремень"), T.stem("цепи")), (T.stem("цепь"),
 _SMALL = [T.stem(w) for w in ("пружина", "направляющая", "прокладка", "уплотнительная", "уплотнение", "болт", "гайка", "шайба",
                                "скоба", "клипса", "фиксатор", "заглушка", "кольцо", "стопорное", "датчик", "пыльник",
                                "сальник", "втулка", "кронштейн", "крышка", "кожух")]
+
+
+def _name_head(name: str) -> str:
+    """Главное слово названия детали без «1 комплект», «набор»: «1 комплект тормозных колодок» → «колодк».
+    Прилагательные — по окончанию самого слова: основа «маловязк» правило T.ADJ не узнаёт, и «Маловязкое
+    моторное масло» теряло «масло»."""
+    for w in T.words(T.expand(name)):
+        s = T.stem(w)
+        if not s or s[:1].isdigit() or s in _GENERIC_HEADS or s in T.ADJ:
+            continue
+        if re.fullmatch(r"[а-яё]+", w.lower()) and T._ADJ_END.search(w.lower()):
+            continue
+        return s
+    return ""
+
+
+def prefer_named(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
+    """Клиент назвал деталь, и она есть среди найденного — её обвес на той же стороне не предлагаем: на «бампер
+    передний» у Kia — сам бампер, а не «Гаситель энергии» и «Выступ» переднего бампера. Другая сторона остаётся:
+    «подшипник ступицы» спереди и «ступица в сборе» сзади — повод спросить, какая нужна."""
+    head = T.head(q) if q else ""
+    if not head or head in T.ADJ or head in _GENERIC_HEADS:
+        return tier
+    named = [c for c in tier if T.same(_name_head(c.d.name), head)]
+    if not named or len(named) == len(tier):
+        return tier
+    # Убираем только обвес той же стороны, что и сама деталь: передний подшипник без явной стороны рядом с задней
+    # ступицей у Audi — повод спросить «передняя или задняя?», а не лишний вариант
+    sides = {(c.side.axis, c.side.lr) for c in named}
+    return [c for c in tier if c in named or (c.side.axis, c.side.lr) not in sides]
 
 
 def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
