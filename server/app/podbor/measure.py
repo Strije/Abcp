@@ -23,6 +23,7 @@ from pathlib import Path
 from . import text as T
 from .catalog import TreeIndex
 from .engine import Engine, load_rules, share_noun
+from .engine import lost_words as _lost_words
 from .gaps import positions
 from .mine import union_tree
 
@@ -435,16 +436,7 @@ def _fleet_trees() -> dict[str, TreeIndex]:
 
 
 def lost_words(q: list[str], tree: TreeIndex, g) -> list[str]:
-    """Существительные запроса, которых нет ни в названии выбранной группы, ни в её синонимах:
-    «прокладка крышки головки» → «Прокладка головки цилиндра» теряет «крышки» — это другая деталь."""
-    have = [s for p, _ in g.phrases for s in p] + T.stems(g.name, STOP)
-    known = tree.known(q)
-    return [s for s in known if s not in T.ADJ and s not in _LOST_IGNORE and not any(T.same(s, h) for h in have)]
-
-
-# Слова, без которых деталь та же: «прокладка выпускного коллектора двигателя», «клапан системы вентиляции»
-_LOST_IGNORE = {T.stem(w) for w in ("двигателя", "двигатель", "системы", "система", "включения", "автомобиля", "машины",
-                                    "стекла", "комплект")}
+    return _lost_words(q, tree, g, STOP)
 
 
 def fleet(path: str, out: str | None = None):

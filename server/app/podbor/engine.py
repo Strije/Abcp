@@ -270,8 +270,8 @@ class Engine:
         nouns = [T.stem(w) for w in words if not D.adj_word(w)]
         if q and not nouns:
             return f"«{query}» — это только признак детали. Напишите, какая деталь нужна."
-        if len(nouns) == 1 and len(q) == 1 and nouns[0] in VAGUE_NOUNS:
-            return f"«{query}» бывает разным. Напишите, какая именно деталь нужна ({VAGUE_NOUNS[nouns[0]]})."
+        if len(nouns) == 1 and len(q) == 1 and _word_in(nouns[0], VAGUE_NOUNS):
+            return f"«{query}» бывает разным. Напишите, какая именно деталь нужна "                    f"({next(v for k, v in VAGUE_NOUNS.items() if T.same(nouns[0], k))})."
         return ""
 
     def _drop_lost(self, positions: list[dict]) -> None:
@@ -492,7 +492,44 @@ class Engine:
                 alt["note"] = ("Сзади у вашей машины барабанные тормоза, тормозных дисков там нет — "
                                "вместо дисков стоят барабаны (колодки к ним — барабанные).")
                 return alt
-        return pos
+        return await self._qualifier(v, tree, query, want, kind, pos) or pos
+
+    async def _qualifier(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str, pos: dict) -> dict | None:
+        """«Подшипник маховика» → группа «Подшипник коленвала»: слово-уточнение (маховик) в группе не нашлось, это другая
+        деталь. Ищем по уточнению («маховик»), берём из найденного узла то, что называет деталь (подшипник). Если у общей
+        группы («Ремкомплект», «Комплект») уточнения нет и узла по нему тоже — показывать случайную группу нельзя."""
+        if pos.get("kind", "") not in ("", "part") or pos["status"] not in ("found", "choose") or not pos.get("groups"):
+            return None
+        g = tree.groups.get(pos["groups"][0]["id"])
+        q = T.stems(T.expand(query), self.stop)
+        lost = lost_words(q, tree, g, self.stop) if g else []
+        if not lost:
+            return None
+        head = T.head(tree.known(q) or q) or ""
+        generic = _word_in(head, _GENERIC_HEADS) or _word_in(head, VAGUE_NOUNS)
+        # Одни общие слова («прокладки») узла не назовут: ищем по конкретному уточнению
+        specific = [w for w in lost if not _word_in(w, VAGUE_NOUNS) and not _word_in(w, _GENERIC_HEADS)]
+        alt = {"status": "not_found", "variants": [], "groups": []}
+        if specific:
+            try:
+                alt = await self._position(v, tree, " ".join(specific), want, "")
+            except Exception:
+                pass
+        # Узел должен называть ВСЕ слова-уточнения («турбокомпрессор» и «прокладки»), а не одно из них
+        alt_group = tree.groups.get(alt["groups"][0]["id"]) if alt.get("groups") else None
+        alt_ok = alt["status"] in ("found", "choose") and alt.get("variants") and self._score(alt) >= 0.6             and alt_group is not None and not lost_words(specific, tree, alt_group, self.stop)
+        if alt_ok:
+            aliases = [head] + _PART_ALIASES.get(head, [])
+            named = [x for x in alt["variants"] if any(T.same(a, s) for a in aliases for s in T.stems(x["name"], self.stop))]
+            # «Комплект/ремкомплект X» — деталь и есть узел X; «датчик/подшипник X» — нужны варианты, где названа сама деталь
+            if named or _word_in(head, _GENERIC_HEADS):
+                alt = dict(alt, variants=named or alt["variants"], query=query, qualifier_from=g.name,
+                           note=f"Нашли узел «{alt['groups'][0]['name']}»: {query.lower()} уточним по нему.")
+                return alt
+        if generic:
+            # Общая группа и уточнение без своего узла: показывать «Ремкомплект» вообще — случайность
+            return dict(pos, status="not_found", variants=[], groups=[], question="", note="", dropped=g.name)
+        return None
 
     @staticmethod
     def _all_around(items: list[tuple[str, T.Side]], around: bool = False) -> list[tuple[str, T.Side]]:
@@ -1384,6 +1421,24 @@ VAGUE_NOUNS = {T.stem(k): v for k, v in {
     "шланг": "радиатора, ГУР, тормозной", "патрубок": "радиатора, впускной, термостата", "деталь": "название детали",
     "запчасть": "название детали", "элемент": "название детали",
 }.items()}
+def lost_words(q: list[str], tree: TreeIndex, g, stop: frozenset[str] = frozenset()) -> list[str]:
+    """Существительные запроса, которых нет ни в названии выбранной группы, ни в её синонимах:
+    «прокладка крышки головки» → «Прокладка головки цилиндра» теряет «крышки» — это другая деталь."""
+    have = [s for p, _ in g.phrases for s in p] + T.stems(g.name, stop)
+    known = tree.known(q)
+    return [s for s in known if s not in T.ADJ and s not in _LOST_IGNORE and not any(T.same(s, h) for h in have)]
+
+
+# Слова, без которых деталь та же: «прокладка выпускного коллектора двигателя», «клапан системы вентиляции»
+_LOST_IGNORE = {T.stem(w) for w in ("двигателя", "двигатель", "системы", "система", "включения", "автомобиля", "машины", "сборе", "сборка",
+                                    "стекла", "комплект")}
+
+
+def _word_in(w: str, words) -> bool:
+    """Слово — одно из общих: «прокладок» и «прокладка» — одно слово, а основа у них разная."""
+    return bool(w) and any(T.same(w, k) for k in words)
+
+
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)

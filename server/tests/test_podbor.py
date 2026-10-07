@@ -1062,3 +1062,45 @@ def test_vague_generic_word_is_asked_not_guessed():
     for ok in ("комплект ГРМ", "подшипник ступицы", "ГБЦ и клапаны", "свечи", "тормозные колодки", "клапаны", "ремень",
                "шланг сцепления", "шланг радиатора"):
         assert eng._vague(st(ok), ok) == "", ok
+
+
+def test_qualifier_researches_lost_word_or_hides_generic_group():
+    """«Подшипник маховика» → «Подшипник коленвала»: слово-уточнение потеряно; ищем узел по нему, иначе общую группу прячем."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    stems = lambda t: T.stems(T.expand(t), eng.stop)   # noqa: E731
+
+    class Tree:
+        def __init__(self):
+            self.groups = {1: SimpleNamespace(name="Подшипник коленвала", phrases=[(stems("подшипник коленвала"), 1.0)]),
+                           2: SimpleNamespace(name="Маховик", phrases=[(stems("маховик"), 1.0)]),
+                           3: SimpleNamespace(name="Ремкомплект", phrases=[(stems("ремкомплект"), 1.0)])}
+            self.vocab = {s for g in self.groups.values() for s in stems(g.name)} | {"подшипник", "маховик", "турбокомпрессор"}
+
+        def known(self, q):
+            return [s for s in q if s in self.vocab or any(T.same(s, w) for w in self.vocab)]
+
+    tree = Tree()
+    base = {"kind": "part", "status": "found", "variants": [{"name": "Подшипник коленвала"}], "side": {}, "question": "", "note": "",
+            "groups": [{"id": 1, "name": "Подшипник коленвала", "score": 0.9}]}
+
+    async def fly(v, tr, q, side, kind=""):
+        return {"kind": "part", "status": "found", "side": {}, "question": "", "note": "",
+                "variants": [{"name": "Подшипник маховика пилотный"}, {"name": "Маховик"}],
+                "groups": [{"id": 2, "name": "Маховик", "score": 1.0}]}
+    eng._position = fly
+    got = asyncio.run(eng._qualifier(None, tree, "подшипник маховика", T.Side(), "", dict(base)))
+    assert got and [v["name"] for v in got["variants"]] == ["Подшипник маховика пилотный"] and got["query"] == "подшипник маховика"
+
+    async def nothing(v, tr, q, side, kind=""):
+        return {"kind": "part", "status": "not_found", "variants": [], "groups": [], "note": "", "question": "", "side": {}}
+    eng._position = nothing
+    # нужного узла нет: «Подшипник» — общая группа → прячем, а не показываем подшипник коленвала
+    hidden = asyncio.run(eng._qualifier(None, tree, "подшипник маховика", T.Side(), "", dict(base)))
+    assert hidden["status"] == "not_found" and hidden["variants"] == []
+    # всё найдено полностью — ничего не меняем
+    ok = dict(base, groups=[{"id": 2, "name": "Маховик", "score": 1.0}])
+    assert asyncio.run(eng._qualifier(None, tree, "маховик", T.Side(), "", ok)) is None
