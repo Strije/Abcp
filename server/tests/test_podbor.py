@@ -1168,7 +1168,7 @@ def test_differ_lines_text():
          "hints": {"A": [], "B": ["без ушек"]}, "with": {"B": {"number": "96800088", "name": "Пружина прижимная суппорта GM"}},
          "siblings": {"name": "Суппорт", "count": 3}}
     text = "\n".join(differ_lines(d, {"A": "вариант 1", "B": "вариант 2"}))
-    assert "3 вида детали «Суппорт»" in text and "общих аналогов 22 из 156" in text
+    assert "3 варианта суппорта" in text and "общих аналогов 22 из 156" in text
     assert "Вариант 2 ставится вместе с отдельной деталью «Пружина прижимная суппорта»" in text
     assert "«без ушек»" in text and "Как выбрать" in text
     eco = dict(d, eco=["B"])

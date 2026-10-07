@@ -1461,8 +1461,9 @@ def differ_lines(d: dict, called: dict[str, str], numbers: bool = False) -> list
         return out
     if d.get("siblings"):
         s = d["siblings"]
+        # Соседи берутся только среди суппортов (differ._DECIDES): у VAG это «Корпус» суппорта — пишем по смыслу
         out.append(f"Почему несколько вариантов: по каталогу у этой модели {s['count']} "
-                   f"{plural(s['count'], 'вид', 'вида', 'видов')} детали «{s['name']}», "
+                   f"{plural(s['count'], 'вариант', 'варианта', 'вариантов')} суппорта, "
                    f"а какой стоит на вашей машине, по VIN не видно.")
     elif d.get("vin"):
         out.append("Почему несколько вариантов: по VIN каталог их не различает — обе подходят к вашей машине.")
