@@ -3,6 +3,7 @@
     python -m app.podbor.lab phrases chats.jsonl фразы.tsv [300]   # выбрать фразы клиентов по типам (жаргон, фирма, несколько…)
     python -m app.podbor.lab run фразы.tsv отчёт.json              # прогнать по деревьям парка (fleet_ready.json), без Laximo и цен
     python -m app.podbor.lab compare до.json после.json            # что стало лучше, а что хуже после правки
+    python -m app.podbor.lab clean фразы.tsv чистые.tsv            # убрать из готового набора мусор (реклама, речь продавца)
 
 Парк — деревья машин из .podbor-cache (python -m app.podbor.fleet pick|trees), реальные фразы — из выгрузки переписки
 (bitrix_export.py, без персональных данных). Всё лежит в .podbor-cache, в git не попадает.
@@ -25,7 +26,7 @@ from . import text as T
 from .engine import share_noun
 
 # Тип фразы — по признакам; у фразы может быть несколько
-_NOISE = re.compile(r"₽|•|руб|нажм|кнопк|профил|устройств|сесси|контроль качества|агрегатор|подписк|канал|принять|отказ|"
+_NOISE = re.compile(r"₽|•|\bруб\b|нажм|кнопк|профил|устройств|сесси|контроль качества|агрегатор|подписк|канал\b|принять|отказ|"
                     r"спасибо|здравствуйте|добрый|привет|подъед|работаете|оплат|заберу|реквизит|скидк|безопасная сделка|"
                     r"отправ|номер заказа|карт[аеуы]\b|сбербанк|тинькофф|адрес|телефон", re.I)
 _FIRM = re.compile(r"\b(?:bosch|бош|mann|манн|zekkert|зекерт|зеккерт|febest|ngk|ёнк|denso|gates|skf|sachs|trw|ate|lemforder|"
@@ -37,10 +38,65 @@ _MANY = re.compile(r",|\+|\s и \s|\sа также\s", re.I)
 
 
 # Марки машин и «в сборе» в тексте клиента — не детали: без них «лишних» слов не бывает
-_MAKES = re.compile(r"(?:mitsubishi|митсубиси|митсубиши|opel|опель|bmw|бмв|ford|форд|nissan|ниссан|toyota|тойота|"
+_MAKES = re.compile(r"\b(?:mitsubishi|митсубиси|митсубиши|opel|опель|bmw|бмв|ford|форд|nissan|ниссан|toyota|тойота|"
                     r"hyundai|хендай|хундай|kia|киа|кия|mazda|мазда|renault|рено|peugeot|пежо|citroen|ситроен|honda|хонда|"
                     r"skoda|шкода|audi|ауди|volkswagen|фольксваген|мерседес|mercedes|chevrolet|шевроле|lacetti|лачетти|"
-                    r"солярис|рио|ceed|сид|инсигния|insignia|lanos|ланос)|в\s+сборе|\d{4}\s*г(?:ода|\.)?", re.I)
+                    r"солярис|рио|ceed|сид|инсигния|insignia|lanos|ланос)\b|в\s+сборе|\d{4}\s*г(?:ода|\.)?", re.I)
+
+
+# Не просьба покупателя о детали — в лабораторию не берём: иначе робот «ищет» деталь в рекламе тарифа
+# («🌐 15 ГБ интернет…» → «рабочий цилиндр»), а процент «уверенно» и правки подгоняются под шум.
+# Реклама, рассылки, новости, предложения поставщиков
+_ADS = re.compile(r"интернет|\bгб\b|кбит|безлимит|подписк|тариф|рынок\s+рф|регион\s+рф|канал\w*\s+в\s+т|телеграм|"
+                  r"поставляем|посредник|низк\w+\s+цен|потребност\w+\s+в\s+закупк|актуальн\w+\s+прайс|прайс-?лист|"
+                  r"сотрудничеств|оптов|дилерск|геран|бесплатно|пару\s+шагов|розыгрыш|подпиш|нового\s+образца|\bвпн\b|\bvpn\b", re.I)
+# Речь продавца или менеджера, а не покупателя
+_SELLER = re.compile(r"\b(?:мы|наш[аеиу]?|нам)\b[^.?!]{0,25}\b(?:можем|поставля|прода[её]м|привез[её]м|работаем|рабочий\s+день)|"
+                     r"рабочий\s+день|руководител|часто\s+их\s+прода|в\s+сво[её]м\s+бюджете|годом\s+гарантии|"
+                     r"не\s+ответили|наличие\s+уточн|уточним\s+и|подскаж\w+\s+пожалуйста\s+ваш", re.I)
+# Не автомобиль
+_NOT_CAR = re.compile(r"iphone|айфон|чехол\s+(?:для|на)\s+(?:тел|айф|iph)|телефон\w*\s+держател|магнитн\w+\s+держател", re.I)
+# Где заказ, когда приедет — продолжение разговора; без названия детали в лабораторию не идёт
+_STATUS = re.compile(r"пришл[оаи]|прид[её]т|подтвержден|забрать|получил|отправ|трек|доставк|\(изменено\)", re.I)
+# Значки рекламы и рассылок: в просьбах клиентов их почти нет (🛞 и 🥰 из карточек Авито — бывают, их не трогаем)
+_AD_EMOJI = re.compile("[\U0001F310\u267E\U0001F6E1\U0001F449\u2705\U0001F525\U0001F4A5\U0001F4E2\u26A1\U0001F381\U0001F4B0\u2B55]")
+
+
+def junk(p: str, has_part) -> str:
+    """Почему фраза — не просьба покупателя о детали («» — годится). has_part(p): есть ли в ней слово детали
+    из словаря каталога (существительное, не «рабочий» и не «передний»)."""
+    if re.fullmatch(r"\W*\(изменено\)\W*", p):
+        return "служебное"
+    if _ADS.search(p) or _AD_EMOJI.search(p):
+        return "реклама/рассылка"
+    if _SELLER.search(p):
+        return "речь продавца"
+    if _NOT_CAR.search(p):
+        return "не для машины"
+    if _STATUS.search(p) and not has_part(p):
+        return "статус заказа"
+    if re.search(r"\[(?:тел|почта|карта)\]|:\s*не установлено", p, re.I):
+        return "контакты/анкета"
+    if not has_part(p):
+        return "нет детали"   # «Телевизор», «Я просто за рулём…»: ни одного слова каталога, даже с опечаткой
+    return ""
+
+
+def _has_part():
+    """Есть ли в фразе существительное из словаря каталога — признак, что речь о детали."""
+    from .measure import INDEX, STOP
+
+    def has(p: str, loose: bool = False) -> bool:
+        # Точно из словаря: known() правит опечатки и находит «деталь» и в «(изменено)».
+        # loose — с опечатками и жаргоном («ступчитые»): хоть одно слово каталога должно быть
+        # Без отсева «прилагательных»: T.ADJ считает ими и «ремен», «сцеплен» — «Ремень» выпадал бы как не деталь
+        # Опечатку правим только в слово словаря: «масленный» → «масляный», «напужний» → «наружний» — деталь;
+        # «кешбэк», «консультация» — нет (known() находил «деталь» и там)
+        def word(s: str) -> bool:
+            s = s.rstrip(".")   # «шрус.» в конце фразы — сокращение для T.stems
+            return s in INDEX.vocab or (len(s) >= 5 and INDEX.fix(s) in INDEX.vocab)
+        return any(len(s) > 2 and (INDEX.known([s]) if loose else word(s)) for s in T.stems(p, STOP))
+    return has
 
 
 def phrase_types(p: str, vocab_known) -> list[str]:
@@ -66,7 +122,9 @@ def phrases(chats: str, out: str, n: str = "300") -> None:
     from .measure import INDEX, STOP, chat_pieces
     pieces, info = chat_pieces(chats)
     uniq = collections.Counter(p.strip() for p in pieces)
-    pool = [p for p in uniq if 6 <= len(p) <= 80 and not _NOISE.search(p) and not re.search(r"https?:|\d{9,}|@", p)]
+    part = _has_part()
+    pool = [p for p in uniq if 6 <= len(p) <= 80 and not _NOISE.search(p) and not re.search(r"https?:|\d{9,}|@", p)
+            and not junk(p, part)]
     # «всё слова в словаре каталога» — прокси для простых фраз; остальные — жаргон, опечатки, редкие детали
     known = lambda p: all(INDEX.known([s]) for s in T.stems(p, STOP) if len(s) > 3)  # noqa: E731
     by_type: dict[str, list[str]] = collections.defaultdict(list)
@@ -257,8 +315,25 @@ def compare(before: str, after: str) -> None:
                 print(f"  {q[:55]:<55} {ra} → {rb}")
 
 
+def clean(path: str, out: str) -> None:
+    """Убрать мусор из готового набора фраз (тот же фильтр, что при выборе) и показать, что убрано и почему."""
+    part = _has_part()
+    keep, gone = [], collections.defaultdict(list)
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        why = junk(line.split("\t")[0], part)
+        (gone[why].append(line.split("\t")[0]) if why else keep.append(line))
+    Path(out).write_text("\n".join(keep) + "\n", encoding="utf-8")
+    print(f"Осталось фраз: {len(keep)}, убрано: {sum(len(v) for v in gone.values())}")
+    for why, items in gone.items():
+        print(f"\n== {why}: {len(items)}")
+        for x in items:
+            print("  " + x[:90])
+
+
 if __name__ == "__main__":
-    cmd = {"phrases": phrases, "run": run, "compare": compare, "typos": typos}.get(sys.argv[1] if len(sys.argv) > 1 else "")
+    cmd = {"phrases": phrases, "run": run, "compare": compare, "typos": typos, "clean": clean}.get(sys.argv[1] if len(sys.argv) > 1 else "")
     if not cmd:
         print(__doc__)
         raise SystemExit(1)
