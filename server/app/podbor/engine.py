@@ -276,7 +276,12 @@ class Engine:
         """Слово из словаря каталога этой машины (опечатку правим только в слово словаря: «масленный» — да,
         «приветствую», «подойдёт», «кое» — нет: known() правит слишком охотно)."""
         s = s.rstrip(".")
-        return len(s) > 2 and s not in _GENERIC_HEADS and (s in tree.vocab or (len(s) >= 5 and tree.fix(s) in tree.vocab))
+        if len(s) <= 2 or s in _GENERIC_HEADS:
+            return False
+        if s in tree.vocab or (len(s) >= 5 and tree.fix(s) in tree.vocab):
+            return True
+        # Слитно: «ДАТЧИККОЛЕНВАЛА» — словарь каталога делит на «датчик» + «коленвал»
+        return any(x != s and x in tree.vocab for x in tree.split(s))
 
     def _partish(self, query: str, tree: TreeIndex) -> bool:
         """Есть ли во фразе хоть одно слово детали (не сторона, не «комплект»)."""
@@ -1206,7 +1211,8 @@ def share_noun(pieces: list[str], stop: frozenset[str]) -> list[str]:
     out = list(pieces)
     for i, p in enumerate(pieces):
         st = T.stems(p, stop)
-        if not st or any(s not in T.ADJ for s in st):
+        # «Комплекты передних и задних пружин»: «комплект» — не существительное детали, пружины берём у соседа
+        if not st or any(s not in T.ADJ and s not in _GENERIC_HEADS for s in st):
             continue
         noun = (noun_of(pieces[i + 1]) if i + 1 < len(pieces) else "") or (noun_of(pieces[i - 1]) if i else "")
         if noun:
