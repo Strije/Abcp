@@ -773,3 +773,54 @@ def test_bitrix_export_masks_phones_and_skips_robot(monkeypatch):
     keep = "XWEFF242380003661 артикул 04892562AA сумма 8931.00 заказ 1164805"
     assert B.clean(keep, set()) == keep
     assert B.ROBOT.match("Отправлено роботом\nБлагодарим за заказ №1165020")
+
+
+def test_review_judge(tmp_path):
+    """Судья: разбирает новые реплики журнала, «не помог» — первыми, повторно не отправляет, мусор модели не пишет."""
+    import asyncio
+    import json
+    from datetime import date
+    from app.podbor import review as R
+
+    day = date.today().isoformat()
+    jr = tmp_path / "journal"
+    jr.mkdir()
+    rows = [
+        {"type": "turn", "dialog": "a", "turn": 1, "t": f"{day}T10:00:00", "text": "колодки задние", "status": "ok",
+         "answer": "Колодки задние — Zekkert комплект установочный 350 ₽", "car": "KIA Ceed"},
+        {"type": "turn", "dialog": "a", "turn": 2, "t": f"{day}T10:01:00", "text": "давайте зекерт", "status": "order",
+         "answer": "Оформляем: Zekkert 350 ₽"},
+        {"type": "turn", "dialog": "b", "turn": 1, "t": f"{day}T10:02:00", "text": "масло", "status": "ok", "answer": "Масло…"},
+        {"type": "feedback", "dialog": "b", "turn": 1, "good": False, "comment": "не то"},
+        {"type": "turn", "dialog": "c", "turn": 1, "t": f"{day}T10:03:00", "text": "привет", "status": "chat", "answer": ""},
+    ]
+    (jr / f"{day}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\nобрыв{", encoding="utf-8")
+
+    class Fake:
+        enabled = True
+
+        def __init__(self):
+            self.asked = []
+
+        async def chat(self, system, user, max_tokens=0):
+            self.asked.append(user)
+            if "давайте зекерт" in user:
+                return '```json\n{"verdict":"suspect","problems":[{"kind":"wrong_order","what":"оформлен комплект, не колодки"}]}```'
+            if "масло" in user:
+                return '{"verdict":"suspect","problems":[]}'   # подозрение без причины — не находка
+            return "не смог разобрать"
+
+    llm = Fake()
+    stat = asyncio.run(R.run(jr, llm, days=1, limit=10))
+    # «привет» без ответа не разбирается; «не помог» (масло) идёт первым
+    assert stat["cases"] == 3 and stat["sent"] == 3 and stat["failed"] == 1 and stat["suspect"] == 1
+    assert llm.asked[0].startswith("Сейчас клиент пишет:\nмасло") or "масло" in llm.asked[0]
+    recs = [json.loads(x) for x in (jr / "review" / f"{day}.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["verdict"] for r in recs] == ["ok", "suspect"] and recs[0]["human"] is False
+    assert recs[1]["problems"][0]["kind"] == "wrong_order"
+    # повторный запуск: разобранное не отправляем, непонятый ответ модели — попробуем ещё раз
+    llm2 = Fake()
+    stat2 = asyncio.run(R.run(jr, llm2, days=1, limit=10))
+    assert stat2["cases"] == 1 and "колодки задние" in llm2.asked[0]
+    text = R.report(jr, 1)
+    assert "подозрений 1" in text and "оформлен комплект" in text and "не помог" in text
