@@ -57,8 +57,10 @@ deploy_code() {
     "$DIR/venv/bin/pip" install -q --upgrade pip
     "$DIR/venv/bin/pip" install -q -r "$DIR/requirements.txt"
     chown -R root:root "$DIR"
-    cp "$DIR/deploy/avtodrug-api.service" "$DIR/deploy/avtodrug-watchdog.service" "$DIR/deploy/avtodrug-watchdog.timer" /etc/systemd/system/
+    cp "$DIR/deploy/avtodrug-api.service" "$DIR/deploy/avtodrug-watchdog.service" "$DIR/deploy/avtodrug-watchdog.timer" \
+       "$DIR/deploy/avtodrug-review.service" "$DIR/deploy/avtodrug-review.timer" /etc/systemd/system/
     systemctl daemon-reload
+    systemctl enable --now avtodrug-review.timer >/dev/null 2>&1 || true   # судья подбора — ночью, раз в сутки
     ok "код из $BRANCH — в $DIR"
 }
 

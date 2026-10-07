@@ -1,0 +1,20 @@
+[Unit]
+Description=Судья подбора: модель разбирает журнал разговоров и отмечает возможные ошибки робота
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=avtodrug
+Group=avtodrug
+WorkingDirectory=/opt/avtodrug-api
+EnvironmentFile=/etc/avtodrug-api.env
+# Свежие реплики за двое суток, не больше 200 в запуск (лимит тарифа); находки — рядом с журналом, в review/
+ExecStart=/opt/avtodrug-api/venv/bin/python -m app.podbor.review run --days 2 --limit 200
+NoNewPrivileges=true
+ProtectSystem=strict
+StateDirectory=avtodrug-api
+StateDirectoryMode=0700
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=200M

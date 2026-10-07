@@ -1,0 +1,11 @@
+[Unit]
+Description=Судья подбора — раз в сутки ночью
+
+[Timer]
+# 03:40 по времени сервера, когда клиентов нет; пропущенный запуск (сервер был выключен) выполнится при старте
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
