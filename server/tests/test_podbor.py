@@ -1028,3 +1028,24 @@ def test_llm_arbiter_rescues_not_found_only_with_confident_result():
     ps = [dict(gone)]
     asyncio.run(eng._arbitrate(None, None, ps))
     assert ps[0]["status"] == "not_found"   # неуверенную находку не берём
+
+
+def test_lab_phrase_types_and_compare(tmp_path):
+    import json
+    from app.podbor import lab
+    assert lab.phrase_types("колодки передние", lambda p: True) == ["сторона/узел"]
+    assert "с фирмой" in lab.phrase_types("свечи bosch", lambda p: True)
+    assert "несколько деталей" in lab.phrase_types("масло, фильтр", lambda p: True)
+    assert lab.phrase_types("шруз", lambda p: False) == ["жаргон/опечатки"]
+    a = [{"query": "x", "types": [], "category": "слабо", "groups": []}, {"query": "y", "types": [], "category": "уверенно", "groups": []}]
+    b = [{"query": "x", "types": [], "category": "уверенно", "groups": []}, {"query": "y", "types": [], "category": "потеряно слово", "groups": []}]
+    pa, pb = tmp_path / "a.json", tmp_path / "b.json"
+    pa.write_text(json.dumps(a), encoding="utf-8")
+    pb.write_text(json.dumps(b), encoding="utf-8")
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        lab.compare(str(pa), str(pb))
+    out = buf.getvalue()
+    assert "Улучшилось: 1, ухудшилось: 1" in out
