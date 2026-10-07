@@ -995,3 +995,36 @@ def test_shadow_compare_and_report(tmp_path):
     (jr / f"{day}.jsonl").write_text(json.dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
     text = R.shadow_report(jr, 1)
     assert "расхождений 1" in text and "кольцо подвесного" in text and "подшипник подвесной" in text
+
+
+def test_llm_arbiter_rescues_not_found_only_with_confident_result():
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+
+    class Fake:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=0):
+            return '{"positions":[{"part":"замок капота","kind":"part","axis":"","lr":""}],"questions":[]}'
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules(), llm=Fake())
+    gone = {"query": "кожух замка капота", "status": "not_found", "kind": "part", "note": "", "groups": [], "variants": [],
+            "question": "", "side": {}}
+    noise = dict(gone, query="завтра подъеду") | {"kind": "chemistry"}   # не деталь — модель не зовём
+    assert eng._weak(gone) and not eng._weak(noise)
+
+    async def good(v, tree, q, side, kind=""):
+        return {"query": q, "status": "found", "kind": "part", "note": "", "variants": [{"oem": "X"}], "side": {},
+                "groups": [{"name": "Замок капота", "score": 1.0}]}
+
+    async def weak_alt(v, tree, q, side, kind=""):
+        return dict(await good(v, tree, q, side), groups=[{"name": "Что-то", "score": 0.4}])
+    eng.position = good
+    ps = [dict(gone)]
+    asyncio.run(eng._arbitrate(None, None, ps))
+    assert ps[0]["status"] == "found" and ps[0]["query"] == "кожух замка капота" and ps[0]["llm_part"] == "замок капота"
+    eng.position = weak_alt
+    ps = [dict(gone)]
+    asyncio.run(eng._arbitrate(None, None, ps))
+    assert ps[0]["status"] == "not_found"   # неуверенную находку не берём

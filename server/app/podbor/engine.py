@@ -273,9 +273,22 @@ class Engine:
 
     def _weak(self, p: dict) -> bool:
         """Правила нашли группу слабо: оценка низкая или главное слово клиента потеряно («Кольцо» уточним отдельно)."""
-        if p.get("kind", "") not in ("", "part") or p["status"] == "not_found" and not p.get("groups"):
+        if p.get("kind", "") not in ("", "part"):
             return False
-        return self._score(p) < WEAK_SCORE or "уточним по каталогу отдельно" in (p.get("note") or "")
+        if p["status"] == "not_found" and not p.get("groups"):
+            # Правила ничего не нашли («крышка омывателя фар», «кожух замка капота»): модель переведёт в название каталога
+            return bool(T.stems(p.get("query", ""), self.stop))
+        return self._score(p) < WEAK_SCORE or "уточним по каталогу отдельно" in (p.get("note") or "")             or self._coverage(p) < 0.5
+
+    def _coverage(self, p: dict) -> float:
+        """Какая доля значимых слов клиента нашлась в названии группы и вариантов: у «крышка омывателя фар» → «Крышка
+        клапанная» совпало одно слово из трёх. Меньше половины — результат подозрителен, его проверяет модель."""
+        words = [s for s in T.stems(p.get("query", ""), self.stop) if not T.side_of_word(s) and not s.endswith(".")]
+        if len(words) < 2 or p.get("status") == "not_found":
+            return 1.0
+        have = [s for g in p.get("groups", []) for s in T.stems(g.get("name", ""), self.stop)]
+        have += [s for v in p.get("variants", [])[:6] for s in T.stems(v.get("name", ""), self.stop)]
+        return sum(1 for w in words if any(T.same(w, h) for h in have)) / len(words)
 
     async def _arbitrate(self, v: Vehicle, tree: TreeIndex, positions: list[dict]) -> None:
         """Слабый результат правил проверяем моделью: «кольцо подвесного» правила вели в уплотнения форсунки, а
@@ -283,7 +296,7 @@ class Engine:
         по нему тем же поиском; берём результат модели, только если он заметно лучше (оценка группы выше)."""
         if not self.llm or not getattr(self.llm, "enabled", False):
             return
-        weak = [i for i, p in enumerate(positions) if self._weak(p)]
+        weak = [i for i, p in enumerate(positions) if self._weak(p)][:MAX_ARBITER]
         if not weak:
             return
         parsed = await asyncio.gather(*(U.understand(self.llm, positions[i]["query"]) for i in weak),
@@ -299,7 +312,11 @@ class Engine:
                 alt = await self.position(v, tree, first["part"], side)
             except Exception:
                 continue
-            better = alt["status"] in ("found", "choose") and self._score(alt) >= self._score(old) + 0.1
+            found = alt["status"] in ("found", "choose")
+            if old["status"] == "not_found" and not old.get("groups"):
+                better = found and self._score(alt) >= WEAK_SCORE - 0.05   # из «ничего» берём только уверенную находку
+            else:
+                better = found and self._score(alt) >= self._score(old) + 0.1
             if better or (alt["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (old.get("note") or "")
                           and self._score(alt) >= self._score(old)):
                 # Слова клиента остаются в заголовке и памяти; что искали по версии модели — в llm_part
@@ -1339,6 +1356,7 @@ def note_diffs(variants: list[dict]) -> list[str]:
     return res if sum(1 for x in res if x) >= 1 and len(set(res)) > 1 else [""] * len(per)
 
 
+MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
 _BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)
