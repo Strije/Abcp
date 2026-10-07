@@ -184,6 +184,10 @@ class Engine:
         if asks:
             res["reply"] = await self._reply({"kind": "answer", "answers": [], "picks": [], "ask_brand": asks},
                                              res["positions"], v)
+        if not meta:
+            if llm is not False:
+                await self._arbitrate(v, tree, res["positions"])
+            self._drop_lost(res["positions"])
         for p, m in zip(res["positions"], meta):
             # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
             p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
@@ -255,6 +259,51 @@ class Engine:
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
         return self._done(res, "ok", t0, mem, replaced)
+
+    def _drop_lost(self, positions: list[dict]) -> None:
+        """Главное слово клиента не нашлось в каталоге и группа оценена слабо («кольцо подвесного» → уплотнения
+        форсунки): показывать чужую деталь хуже, чем честно «уточним и напишем» — менеджер получит позицию."""
+        for i, p in enumerate(positions):
+            if p.get("kind", "") in ("", "part") and p["status"] != "not_found" and self._score(p) < WEAK_SCORE                     and "уточним по каталогу отдельно" in (p.get("note") or "") and "llm_part" not in p:
+                positions[i] = dict(p, status="not_found", variants=[], groups=[], question="", note="", dropped=p["note"][:200])
+
+    @staticmethod
+    def _score(p: dict) -> float:
+        return max((g.get("score", 0) for g in p.get("groups", [])), default=0.0)
+
+    def _weak(self, p: dict) -> bool:
+        """Правила нашли группу слабо: оценка низкая или главное слово клиента потеряно («Кольцо» уточним отдельно)."""
+        if p.get("kind", "") not in ("", "part") or p["status"] == "not_found" and not p.get("groups"):
+            return False
+        return self._score(p) < WEAK_SCORE or "уточним по каталогу отдельно" in (p.get("note") or "")
+
+    async def _arbitrate(self, v: Vehicle, tree: TreeIndex, positions: list[dict]) -> None:
+        """Слабый результат правил проверяем моделью: «кольцо подвесного» правила вели в уплотнения форсунки, а
+        «рем комплект для ручника супарта» — в цепь ГРМ. Модель переводит жаргон в название детали каталога, мы ищем
+        по нему тем же поиском; берём результат модели, только если он заметно лучше (оценка группы выше)."""
+        if not self.llm or not getattr(self.llm, "enabled", False):
+            return
+        weak = [i for i, p in enumerate(positions) if self._weak(p)]
+        if not weak:
+            return
+        parsed = await asyncio.gather(*(U.understand(self.llm, positions[i]["query"]) for i in weak),
+                                      return_exceptions=True)
+        for i, pr in zip(weak, parsed):
+            if not isinstance(pr, dict) or not pr.get("positions"):
+                continue
+            first, old = pr["positions"][0], positions[i]
+            if first.get("kind") not in ("part", "") or first["part"].lower() == old["query"].lower():
+                continue
+            side = T.Side(first["axis"], first["lr"] if first["lr"] in ("left", "right") else "")
+            try:
+                alt = await self.position(v, tree, first["part"], side)
+            except Exception:
+                continue
+            better = alt["status"] in ("found", "choose") and self._score(alt) >= self._score(old) + 0.1
+            if better or (alt["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (old.get("note") or "")
+                          and self._score(alt) >= self._score(old)):
+                # Слова клиента остаются в заголовке и памяти; что искали по версии модели — в llm_part
+                positions[i] = alt | {"query": old["query"], "llm_part": first["part"], "was_score": self._score(old)}
 
     def _split_brands(self, items: list[tuple[str, T.Side]], v: Vehicle) -> tuple[list, list[dict]]:
         """Фирмы из текста позиций: (позиции без слов фирмы, что спросить у поставщиков). Фирма машины («Ниссан»)
@@ -1263,6 +1312,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     return "\n".join(lines).strip("\n")
 
 
+WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
 _BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)
 _DISC = re.compile(r"диск\w*\s+тормоз|тормозн\w*\s+диск|^диск", re.I)

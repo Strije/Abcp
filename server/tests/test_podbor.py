@@ -912,3 +912,53 @@ def test_pending_request_continues_after_vin():
     eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
     first = asyncio.run(eng.run("хорошие фильтры на машину"))
     assert first["status"] == "no_vin" and "фильтры" in first["memory"]["pending"]
+
+
+def test_llm_arbiter_replaces_only_clearly_better_weak_result():
+    """Слабый результат правил проверяется моделью; берём её, если группа оценена заметно выше."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+
+    class Fake:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=0):
+            return '{"positions":[{"part":"подшипник подвесной карданного вала","kind":"part","axis":"","lr":""}],"questions":[]}'
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules(), llm=Fake())
+    weak = {"query": "кольцо подвесного", "status": "found", "kind": "part", "note": "«Кольцо» уточним по каталогу отдельно",
+            "groups": [{"name": "Прокладка форсунки", "score": 0.58}], "variants": [], "side": {}}
+    strong = {"query": "колодки", "status": "found", "kind": "part", "note": "",
+              "groups": [{"name": "Колодки тормозные", "score": 0.9}], "variants": [], "side": {}}
+    assert eng._weak(weak) and not eng._weak(strong)
+
+    async def position(v, tree, q, side, kind=""):
+        return {"query": q, "status": "found", "kind": "part", "note": "", "variants": [{"oem": "X"}], "side": {},
+                "groups": [{"name": "Подшипник подвесной", "score": 1.0}]}
+    eng.position = position
+    positions = [dict(weak), dict(strong)]
+    asyncio.run(eng._arbitrate(None, None, positions))
+    assert positions[0]["query"] == "кольцо подвесного" and positions[0]["llm_part"].startswith("подшипник подвесной")
+    assert positions[1]["query"] == "колодки" and "llm_part" not in positions[1]
+    # результат модели не лучше — остаётся результат правил
+    async def worse(v, tree, q, side, kind=""):
+        return {"query": q, "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+                "groups": [{"name": "Что-то", "score": 0.6}]}
+    eng.position = worse
+    positions = [dict(weak)]
+    positions[0]["note"] = ""
+    asyncio.run(eng._arbitrate(None, None, positions))
+    assert "llm_part" not in positions[0]
+
+
+def test_lost_head_with_weak_group_is_not_shown():
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    lost = {"query": "кольцо подвесного", "status": "found", "kind": "part", "note": "«Кольцо» уточним по каталогу отдельно, ниже — «X»",
+            "groups": [{"name": "Прокладка форсунки", "score": 0.58}], "variants": [{"oem": "1"}], "question": "", "side": {}}
+    fine = dict(lost, query="сайлентблок", groups=[{"name": "Втулка рычага", "score": 0.8}])
+    ps = [lost, fine]
+    eng._drop_lost(ps)
+    assert ps[0]["status"] == "not_found" and ps[0]["variants"] == [] and ps[1]["variants"] == [{"oem": "1"}]

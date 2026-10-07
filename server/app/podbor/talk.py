@@ -19,13 +19,20 @@ async def main(argv: list[str] | None = None) -> int:
     ap.add_argument("turns", help="реплики клиента через «|», первая — с VIN")
     ap.add_argument("--remote", default="https://109.73.199.217")
     ap.add_argument("--cache", default=".podbor-cache")
+    ap.add_argument("--llm", action="store_true", help="подключить модель (LLM_URL, LLM_API_KEY в окружении)")
+    ap.add_argument("--vehicle", type=int, default=None, help="какую из найденных по VIN машин брать (с 0)")
     args = ap.parse_args(argv)
     src = Remote(args.remote)
-    engine = Engine(src, Path(args.cache), warranty_brands())
+    llm = None
+    if args.llm:
+        from ..config import load
+        from ..llm import LLM
+        llm = LLM(load())
+    engine = Engine(src, Path(args.cache), warranty_brands(), llm=llm)
     mem = None
     try:
         for text in [t.strip() for t in args.turns.split("|") if t.strip()]:
-            res = await engine.run(text, memory=mem)
+            res = await engine.run(text, vehicle=args.vehicle, memory=mem)
             mem = res.get("memory") or mem
             print(f"\n=== КЛИЕНТ: {text}  [{res['status']}, {res.get('seconds')} с]")
             print(draft(res))
