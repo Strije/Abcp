@@ -163,7 +163,13 @@ class Engine:
             return self._done(res, "catalog_error", t0)
         meta: list[dict] = []
         parsed = None
-        if llm is not False and (llm or needs_llm(req.chunks)):
+        # Правила сначала — дёшево. Модель зовём не только на сумбурное, но и когда фраза больше чем наполовину не из
+        # слов каталога («Доброе утро, подскажите по цене насос гур на gentra» правила уводили в «чехлы») или когда
+        # в разборе правил нет ни одной детали («Подойдёт ли для Honda Jazz?», «Приветствую»)
+        rules_items = self.split(req.chunks, tree)
+        partish = [x for x in rules_items if self._partish(x[0], tree)]
+        if llm is not False and (llm or needs_llm(req.chunks) or self._chatty(req.chunks, tree)
+                                 or (rules_items and not partish)):
             # Сумбурное сообщение («Задок: … Передок: … Тяги+ наконечники …») — разбирает модель, ищем мы
             parsed = await U.understand(self.llm, "\n".join(req.chunks))
         if parsed and parsed["positions"]:
@@ -172,10 +178,13 @@ class Engine:
             res["understood"] = {"by": "llm", **parsed}
             res["handoff"] = parsed["questions"] + [f"не из каталога: {x}" for x in parsed["not_parts"]]
         else:
-            items = self.split(req.chunks, tree)
+            # Фраза без единого слова детали — не позиция: клиенту «1) Приветствую» не показываем
+            items = partish
             if parsed is not None or (llm is not False and self.llm and getattr(self.llm, "enabled", False)
                                       and needs_llm(req.chunks)):
                 res["understood"] = {"by": "rules"}
+            if parsed:
+                res["handoff"] = parsed["questions"] + [f"не из каталога: {x}" for x in parsed["not_parts"]]
         if not items:
             return self._done(res, "no_positions", t0)
         # «Фильтр воздушный mann» — фирма названа в первой реплике: ищем деталь без неё, фирму проверяем отдельно
@@ -262,6 +271,21 @@ class Engine:
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
         return self._done(res, "ok", t0, mem, replaced)
+
+    def _word(self, s: str, tree: TreeIndex) -> bool:
+        """Слово из словаря каталога этой машины (опечатку правим только в слово словаря: «масленный» — да,
+        «приветствую», «подойдёт», «кое» — нет: known() правит слишком охотно)."""
+        s = s.rstrip(".")
+        return len(s) > 2 and s not in _GENERIC_HEADS and (s in tree.vocab or (len(s) >= 5 and tree.fix(s) in tree.vocab))
+
+    def _partish(self, query: str, tree: TreeIndex) -> bool:
+        """Есть ли во фразе хоть одно слово детали (не сторона, не «комплект»)."""
+        return any(self._word(s, tree) and not T.side_of_word(s) for s in T.stems(T.expand(query), self.stop))
+
+    def _chatty(self, chunks: list[str], tree: TreeIndex) -> bool:
+        """Больше половины значимых слов — не из каталога, и их не меньше пяти: правилам такую фразу не доверяем."""
+        st = [s for s in T.stems(T.expand(" ".join(chunks)), self.stop) if len(s) > 2 and not s[:1].isdigit()]
+        return len(st) >= 5 and sum(1 for s in st if not self._word(s, tree)) * 2 > len(st)
 
     @staticmethod
     def _vague(q: list[str], query: str) -> str:
@@ -1363,7 +1387,10 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         lines += [f"{i + 1}) {x['summary']}" for i, x in enumerate(res["vehicles"])]
         return "\n".join(lines)
     if st == "no_positions":
-        return "Машину нашли. Напишите, какие запчасти нужны."
+        v = res.get("vehicle") or {}
+        car = (v.get("short") or v.get("summary") or "").rstrip(".")
+        return (f"Машину нашли{': ' + car if car else ''}. Напишите, какая деталь нужна — название, номер "
+                f"или ссылку на товар, проверим по VIN.")
     if st == "chat":
         return ""   # не про подбор: оплата, адрес, «когда забрать» — отвечает менеджер
     if st in ("order", "answer"):
