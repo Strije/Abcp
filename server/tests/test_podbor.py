@@ -1218,3 +1218,31 @@ def test_prefer_named_part_over_its_accessories():
     assert prefer_named([hub, bearing], T.stems("ступица")) == [hub, bearing]
     assert _name_head("Маловязкое моторное масло") == T.stem("масло")
     assert _name_head("1 комплект тормозных колодок") == T.stem("колодок")
+
+
+def test_article_numbers_in_client_text():
+    from app.podbor import article as A
+    assert A.find("Подскажите, артикул 26209425906 подойдет мне?") == ["26209425906"]
+    assert A.find("генератор krauf ALB1689DD или другой") == ["ALB1689DD"]
+    assert A.find("HYUNDAI | KIA 571003L100 - Насос ГУР") == ["571003L100"]
+    assert A.find("Свечи Denso Y27FER-C") == ["Y27FER-C"]
+    # не номера: цена, телефон, год, объём, вязкость, VIN
+    assert A.find("Масло 5W40 4л 4400р, тел 89781234567, 2008 года, 1.6л XW8ZZZ8K7AG200538") == []
+    assert A.norm("06H 905 110 G") == A.norm("06H905110G") and A.norm("0986452041") == "986452041"
+
+
+def test_article_fits_and_line():
+    from app.podbor import article as A
+    from app.podbor.engine import article_line
+    variants = [{"oem": "06J115403Q", "name": "Масляный фильтр", "offers": {"numbers": ["HU7196X", "W7192"]}}]
+    assert A.fits("HU 719/6 X", variants)["oem"] == "06J115403Q"
+    assert A.fits("06J115403Q", variants)["original"] is True
+    assert A.fits("HU7008Z", variants) is None
+    p = {"variants": variants, "article": {"number": "HU7008Z", "brand": "MANN", "desc": "Фильтр масляный",
+                                           "fit": None, "oem": False}}
+    assert "не значится — скорее всего не подойдёт" in article_line(p)
+    p["article"]["oem"] = True
+    assert "не замена ли это" in article_line(p)
+    p["article"]["fit"] = {"oem": "06J115403Q", "original": False}
+    assert "подходит: поставщики ведут его как аналог оригинала" in article_line(p)
+    assert "у поставщиков не нашли" in article_line({"article": {"number": "X1", "desc": ""}})

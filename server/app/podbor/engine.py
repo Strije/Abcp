@@ -16,12 +16,13 @@ from typing import Any
 from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
+from . import article as A
 from . import differ as DF
 from . import reviews as R
 from . import understand as U
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
-from .offers import _offer, axis_vote, brand_candidates, curate, days, lr_vote, oem_brand_for
+from .offers import _offer, axis_vote, bkey, brand_candidates, curate, days, lr_vote, oem_brand_for, original_keys
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
 MAX_POSITIONS = 15   # сообщение мастера «по всей подвеске» — до 11–12 позиций
@@ -185,7 +186,25 @@ class Engine:
                 res["understood"] = {"by": "rules"}
             if parsed:
                 res["handoff"] = parsed["questions"] + [f"не из каталога: {x}" for x in parsed["not_parts"]]
-        if not items:
+        arts = A.find("\n".join(req.chunks))
+        if arts:
+            # Позиции из самого номера («571003L100 - Насос ГУР», «артикул 26209425906») заменит проверка номера
+            # Из фразы вырезаем сам номер и «артикул … подойдёт?» — остальное («И масляный фильтр») остаётся позицией
+            cut = re.compile("|".join(re.escape(a) for a in arts) + r"|\bартикул\w*|\bномер\w*|\bподойд\w*|\bподход\w*"
+                             r"|запчасть по", re.I)
+            kept_items, kept_meta = [], []
+            for i, (q, sd) in enumerate(items):
+                rest = re.sub(r"\s+", " ", cut.sub(" ", q)).strip(" ,.?!-—")
+                # «571003L100 - Насос ГУР», «Масляный фильтр mann HU9326X» — подпись к номеру: её покажет проверка номера
+                # «…подойдёт? И масляный фильтр» — после знака или «и» начинается другая просьба, её оставляем
+                rest = re.sub(r"^(?:и|а|также|ещ[её]|плюс)\s+", "", rest, flags=re.I)
+                other = rest == q.strip() or bool(re.search(r"[?!;]|\.\s|\s(?:и|а)\s|\+|\bтакже\b|\bещ[её]\b", q, re.I))
+                if rest and self._partish(rest, tree) and other:
+                    kept_items.append((rest if rest != q.strip() else q, sd))
+                    if meta:
+                        kept_meta.append(meta[i])
+            items, meta = kept_items, (kept_meta if meta else meta)
+        if not items and not arts:
             return self._done(res, "no_positions", t0)
         # «Фильтр воздушный mann» — фирма названа в первой реплике: ищем деталь без неё, фирму проверяем отдельно
         items, asks = self._split_brands(items if meta else self._all_around(items, any(_AROUND.search(c) for c in req.chunks)), v)
@@ -203,9 +222,32 @@ class Engine:
         for p, m in zip(res["positions"], meta):
             # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
             p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
+        for a in arts:
+            res["positions"].append(await self._article(v, tree, a))
         if len(items) > MAX_POSITIONS:
             res["warnings"].append(f"Разобраны первые {MAX_POSITIONS} позиций из {len(items)}")
         return self._done(res, "ok", t0)
+
+    async def _article(self, v: Vehicle, tree: TreeIndex, number: str) -> dict:
+        """«Подойдёт ли 26209425906?» — что это за деталь (поставщики), что ставится по VIN (каталог) и есть ли номер
+        клиента среди аналогов этого оригинала."""
+        try:
+            rows = await self.src.brands(number)
+        except Exception:
+            rows = []
+        brand, desc = A.what(rows)
+        # Номер самого производителя машины (VAG у Audi): «не значится» может значить замену номера, а не «не подойдёт»
+        # (строка производителя с описанием «… аналог MANNFILTER» у HU7008Z — не его номер)
+        own = original_keys(v.brand)
+        oem = any(bkey(r.get("brand")) in own and re.search(r"[а-яё]{4,}", str(r.get("description") or ""), re.I)
+                  and not re.search(r"аналог|analog|замена\s+для", str(r.get("description") or ""), re.I) for r in rows)
+        info = {"number": number, "brand": brand, "desc": desc, "fit": None, "oem": oem}
+        if not desc or not A.name_of(desc):
+            return {"query": f"номер {number}", "side": {"axis": "", "lr": ""}, "status": "not_found", "groups": [],
+                    "variants": [], "question": "", "note": "", "kind": "part", "article": info}
+        pos = await self.position(v, tree, A.name_of(desc), T.Side())
+        info["fit"] = A.fits(number, pos.get("variants") or [])
+        return pos | {"query": f"{desc[:60]} ({number})", "article": info}
 
     def _done(self, res: dict, status: str, t0: float, prev: dict | None = None,
               replaced: list[int] | None = None) -> dict:
@@ -620,7 +662,8 @@ class Engine:
             raw_head = T.head(q)
             # Главного слова клиента нет в словаре каталога: «сайлентблок переднего рычага» у Toyota привёл
             # в «Рычаг передний нижний» одним «рычагом» — сайлентблок ищем внутри узла (у Toyota это «втулка»)
-            lost = bool(raw_head) and raw_head not in known and raw_head not in T.ADJ and raw_head not in _GENERIC_HEADS
+            # «подшибник» — опечатка, словарь сам правит её в «подшипник»: это не потерянное слово
+            lost = bool(raw_head) and raw_head not in known and tree.fix(raw_head) not in known                 and raw_head not in T.ADJ and raw_head not in _GENERIC_HEADS
             head = raw_head if lost else T.head(known)
             aliases = [head] + _PART_ALIASES.get(head, [])
             has = lambda name: any(T.same(a, s) for a in aliases for s in T.stems(name, self.stop))  # noqa: E731
@@ -1116,8 +1159,10 @@ def prefer_named(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
         return tier
     # Убираем только обвес той же стороны, что и сама деталь: передний подшипник без явной стороны рядом с задней
     # ступицей у Audi — повод спросить «передняя или задняя?», а не лишний вариант
-    sides = {(c.side.axis, c.side.lr) for c in named}
-    return [c for c in tier if c in named or (c.side.axis, c.side.lr) not in sides]
+    # Сама деталь без «лев/прав» (бампер Peugeot) закрывает и левый, и правый обвес той же оси («Защита на бампере; левый»)
+    def covered(c: "Candidate") -> bool:
+        return any(n.side.axis == c.side.axis and n.side.lr in ("", c.side.lr) for n in named)
+    return [c for c in tier if c in named or not covered(c)]
 
 
 def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
@@ -1429,6 +1474,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             part = axis_of(p)
             lines += ["", AXIS_TITLE[part]]
         lines += ["", f"{i}) {query[:1].upper() + query[1:]}"]
+        if p.get("article"):
+            lines.append("   " + article_line(p, numbers))
         if p.get("kind") in KIND_NOTE and p["status"] == "not_found":
             lines.append("   " + KIND_NOTE[p["kind"]])
             continue
@@ -1512,6 +1559,27 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     return "\n".join(lines).strip("\n")
 
 
+def article_line(p: dict, numbers: bool = False) -> str:
+    """Что с номером клиента: подходит (оригинал или аналог оригинала по VIN), не значится или не нашли вовсе."""
+    a = p["article"]
+    who = ""   # фирма «Вы искали» — по самому частому описанию (у HU7008Z выходила «Foton»): клиенту не показываем
+    if not a.get("desc"):
+        return f"Номер {a['number']} у поставщиков не нашли — проверим вручную и напишем."
+    fit = a.get("fit")
+    if fit and fit.get("original"):
+        return f"Номер {a['number']}{who} — оригинал для вашей машины по VIN, подходит."
+    if fit:
+        orig = f" {fit['oem']}" if numbers else ""
+        return f"Номер {a['number']}{who} подходит: поставщики ведут его как аналог оригинала{orig} для вашей машины."
+    if p.get("variants") and a.get("oem"):
+        return (f"Номер {a['number']} — оригинальный, но для вашей машины по VIN каталог даёт другой номер: проверим, "
+                f"не замена ли это. Ниже — что ставится по VIN.")
+    if p.get("variants"):
+        return (f"Номер {a['number']}{who} среди аналогов оригинала для вашей машины не значится — скорее всего "
+                f"не подойдёт. Ниже — что ставится по VIN.")
+    return f"Номер {a['number']}{who} — «{a['desc'][:50]}»: по каталогу вашей машины сразу не нашли, проверим вручную."
+
+
 def differ_lines(d: dict, called: dict[str, str], numbers: bool = False) -> list[str]:
     """«Почему несколько вариантов и как выбрать» — по фактам из _explain."""
     a, b = d["oems"]
@@ -1575,6 +1643,8 @@ def note_diffs(variants: list[dict]) -> list[str]:
         return out
     per = [facts(v) for v in variants]
     units = [re.sub(r"\(\d+\)|\s+", " ", str(v.get("unit") or "")).strip().lower() for v in variants]
+    # Узел VAG («поперечный рычаг поворотный кулак d - 05.01.2009>>*») — служебная строка, клиенту не отличие
+    units = [u if u and not re.search(r"\d|>>|\*", u) and len(u) <= 40 else "" for u in units]
     if len(set(units)) > 1:
         # Колодки Lacetti: две в «Заднем тормозе (дисковом)», третья — в «Стояночном тормозе»: узел пишем только у той,
         # что не там, где большинство

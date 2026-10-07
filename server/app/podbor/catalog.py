@@ -158,7 +158,16 @@ _RENAME = [(re.compile(r"^Крепление заднего моста", re.I), 
            # Hyundai/Kia «COVER ASSY-FRONT BUMPER» — это и есть бампер (облицовка), а «крышка» роботу — мелочь:
            # на «бампер передний» он показывал гаситель и выступ, а сам бампер прятал
            (re.compile(r"^КРЫШКА В СБОРЕ-ПЕРЕДН\.?\s*БАМПЕР.*", re.I), re.compile(r"^865"), "Бампер передний (облицовка в сборе)"),
-           (re.compile(r"^КРЫШКА В СБОРЕ-ЗАДН\.?\s*БАМПЕР.*", re.I), re.compile(r"^866"), "Бампер задний (облицовка в сборе)")]
+           (re.compile(r"^КРЫШКА В СБОРЕ-ЗАДН\.?\s*БАМПЕР.*", re.I), re.compile(r"^866"), "Бампер задний (облицовка в сборе)"),
+           # Peugeot 307: сам бампер — по-английски («OUT OF PRODUCTION FRONT BUMPER», 7401 T4), русский поиск его не видел
+           (re.compile(r"^OUT OF PRODUCTION FRONT BUMPER$", re.I), re.compile(r"."), "Бампер передний (снят с производства)"),
+           (re.compile(r"^OUT OF PRODUCTION REAR BUMPER$", re.I), re.compile(r"."), "Бампер задний (снят с производства)"),
+           (re.compile(r"^FRONT BUMPER$", re.I), re.compile(r"."), "Бампер передний"),
+           (re.compile(r"^REAR BUMPER$", re.I), re.compile(r"."), "Бампер задний"),
+           # Peugeot: 4404 66/67 — задние суппорты, а перевод — «Крышка тормозного суппорта»
+           (re.compile(r"^КРЫШКА ТОРМОЗНОГО СУППОРТА", re.I), re.compile(r"^440\d"), "Суппорт тормозной"),
+           # Toyota «LINK ASSY, STEERING» (45500/45510) — рулевая рейка в сборе, а перевод — «Тяга рулевого механизма»
+           (re.compile(r"^Тяга рулевого механизма \(в сборе\)", re.I), re.compile(r"^455[01]0"), "Рейка рулевая (в сборе)")]
 
 
 def _rename(name: str, oem: str) -> str:
