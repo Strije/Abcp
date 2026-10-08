@@ -435,6 +435,8 @@ class Engine:
         car = AB.get().key(v.brand)
         for i, (q, side) in enumerate(items):
             for w, key in D.brand_words(q):
+                if len(w) < 3:
+                    continue   # «GE» — код мотора Mazda, а не фирма
                 rest = re.sub(rf"(?<![\wа-яё]){re.escape(w)}(?![\wа-яё])", " ", q, flags=re.I)
                 rest = re.sub(r"\s+", " ", rest).strip(" ,;")
                 if key == car or not T.stems(rest, self.stop):
@@ -486,7 +488,10 @@ class Engine:
             whole = T.side(chunk)
             pieces = share_noun(T.split_pieces(chunk), self.stop)
             if len(pieces) == 1:
-                if T.stems(chunk, self.stop):
+                both = self._both_axes(chunk)
+                if both:
+                    out += both   # «колодки передние задние» — две позиции, а не вопрос «передние или задние?»
+                elif T.stems(chunk, self.stop):
                     out.append((self.clean(chunk), whole))
                 continue
             parts: list[dict] = []
@@ -523,6 +528,17 @@ class Engine:
                     base = T.RIGHT.sub("", T.LEFT.sub("", T.REAR.sub("", T.FRONT.sub("", near["text"]))))
                     out.append((self.clean(f"{base} {x['text']}"), x["side"]))
         return out
+
+    def _both_axes(self, chunk: str) -> list[tuple[str, T.Side]]:
+        """Клиент назвал обе оси в одной фразе («колодки передние задние», «перед и зад амортизаторы»): передние и задние
+        — две позиции. Пусто, если оси названы не обе или деталь без них не называется."""
+        if not (T.FRONT.search(chunk) and T.REAR.search(chunk)):
+            return []
+        base = re.sub(r"\s+", " ", T.REAR.sub(" ", T.FRONT.sub(" ", chunk))).strip(" ,.")
+        base = re.sub(r"(?:^|\s)(?:и|а|или|а также|на)(?=\s|$)", " ", base).strip()
+        if not T.stems(base, self.stop):
+            return []
+        return [(self.clean(f"{base} передние"), T.Side("front", "")), (self.clean(f"{base} задние"), T.Side("rear", ""))]
 
     def _context(self, parts: list[dict], tree: TreeIndex):
         """Соседние позиции уточняют друг друга: «колодки и диски» — диски тормозные, а не колёсные;
@@ -1444,8 +1460,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             return ("У SsangYong российской сборки VIN в каталоге не ищется. Пришлите, пожалуйста, корейский VIN — "
                     "он начинается на букву K: в ПТС в «Особых отметках» (номер шасси) или на табличке "
                     "в проёме водительской двери.")
-        return ("По этому VIN машина в каталоге не нашлась. Проверьте VIN или пришлите фото СТС — "
-                "подберём вручную.")
+        return ("По этому VIN машина в каталоге не нашлась — возможно, эта марка в нём не представлена. Менеджер подберёт "
+                "вручную и напишет; чтобы быстрее, проверьте VIN (17 знаков) или пришлите фото СТС.")
     if st == "catalog_error":
         return "Каталог сейчас не отвечает, подберём вручную."
     if st == "no_quick_groups":
@@ -1572,7 +1588,9 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         if extra:
             lines += ["", extra]
     lines.append("")
-    lines.append("Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем." if found
+    said = " ".join((res.get("request") or {}).get("chunks") or [])
+    ordered = bool(D.STATUS.search(said) or _ORDERED.search(said))   # «уже заказал», «оплачено»: оформлять нечего
+    lines.append(("Цены и сроки на сегодня." if ordered else "Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем.") if found
                  else "Уточним по позициям и напишем.")
     lines.append(ANYTHING_ELSE)
     return "\n".join(lines).strip("\n")
@@ -1642,6 +1660,7 @@ def differ_lines(d: dict, called: dict[str, str], numbers: bool = False) -> list
 
 # Что в примечании каталога клиент может сравнить сам: размер («314x25mm», «Ø280», «300 мм») и комплектация.
 # Остальное (коды PR, номера лет, названия заводов) — шум, его не показываем
+_ORDERED = re.compile(r"уже\s+(?:заказ|оплат)|оплачен|заказал\w*|когда\s+(?:придёт|придет|ожидать)", re.I)
 _NOTE_SIZE = re.compile(r"(?:Ø|d\s*=\s*)?\d{2,3}\s*[xх×]\s*\d{1,3}(?:\s*(?:mm|мм))?|(?:Ø|d\s*=\s*)\d{2,3}(?:\s*(?:mm|мм))?|\b\d{3}\s*(?:mm|мм)\b", re.I)
 _NOTE_KIT = re.compile(r"спортивн\w*|усилен\w*|с\s+датчик\w*|без\s+датчик\w*|с\s+abs|без\s+abs|4x4|4wd|полный\s+привод|"
                        r"невентил\w*|вентил\w*|с\s+индик\w*|без\s+индик\w*", re.I)   # «Тормозной диск (вентилир.)»

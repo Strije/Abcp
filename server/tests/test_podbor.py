@@ -1246,3 +1246,28 @@ def test_article_fits_and_line():
     p["article"]["fit"] = {"oem": "06J115403Q", "original": False}
     assert "подходит: поставщики ведут его как аналог оригинала" in article_line(p)
     assert "у поставщиков не нашли" in article_line({"article": {"number": "X1", "desc": ""}})
+
+
+def test_quick_wins_both_axes_ordered_and_short_brand(monkeypatch):
+    from types import SimpleNamespace
+    from app import brands as AB
+    from app.podbor.engine import Engine, _ORDERED, draft, load_rules
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    # обе оси в одной фразе — две позиции
+    got = eng._both_axes("колодки передние задние")
+    assert [(q, s.axis) for q, s in got] == [("колодки передние", "front"), ("колодки задние", "rear")]
+    assert eng._both_axes("колодки передние") == [] and eng._both_axes("передние задние") == []
+    # «масленный» — опечатка «масляный»
+    assert T.expand("Масленный фильтр") == "масляный фильтр"
+    # «уже заказал» и «оплачено» — оформлять нечего
+    assert _ORDERED.search("Уже заказал, когда придёт?") and _ORDERED.search("уже оплатил")
+    assert not _ORDERED.search("нужны колодки")
+    # короткое «GE» — не фирма
+    fake = AB.Brands({"brands": {"GE": ["ge"], "BOSCH": ["bosch"]}})
+    monkeypatch.setattr(AB, "get", lambda: fake)
+    _, asks = eng._split_brands([("двигатель GE", T.Side()), ("свечи bosch", T.Side())], SimpleNamespace(brand="MAZDA"))
+    assert [a["word"] for a in asks] == ["bosch"]
+    # машина не нашлась — не «проверьте VIN», а менеджер подберёт
+    text = draft({"status": "vehicle_not_found", "request": {"ident": "L123", "chunks": []}})
+    assert "Менеджер подберёт" in text
