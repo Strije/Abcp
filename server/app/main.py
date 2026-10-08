@@ -423,6 +423,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     def podbor_auth(request: Request) -> None:
         """Страница и подбор — только для своих: вход браузера (Basic), имя любое, пароль PODBOR_PASSWORD.
         Каждый подбор тратит запросы Laximo по тарифу магазина. Без пароля в настройках — подбора нет."""
+        if state["s"].podbor_open:
+            return   # массовое тестирование: PODBOR_OPEN=1 — без пароля (тратит Laximo и модель, держать включённым недолго)
         password = state["s"].podbor_password
         if not password:
             raise HTTPException(404, "Not Found")
