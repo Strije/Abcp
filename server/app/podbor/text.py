@@ -119,7 +119,7 @@ def parse(text: str) -> Request:
 def split_chunks(body: str) -> list[str]:
     """Позиции: по строкам, «;» и нумерации «1.»/«2)». Запятые — потом, когда понятно, где деталь."""
     parts = re.split(r"[\n;]+|(?:(?<=\s)|^)\d{1,2}[.)](?=\s)", body)
-    return [p.strip(" ,.-—–\t") for p in parts if p and p.strip(" ,.-—–\t")]
+    return [p.strip(" ,.-—–*•\t") for p in parts if p and p.strip(" ,.-—–*•\t")]   # «* деталь» — маркер списка
 
 
 # Сокращения через «/» и «к-т» — раскрываем до разбора, иначе «/» режет позицию пополам:

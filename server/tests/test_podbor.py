@@ -1056,10 +1056,11 @@ def test_vague_generic_word_is_asked_not_guessed():
     from app.podbor.engine import Engine, load_rules
     eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
     st = lambda w: T.stems(T.expand(w), eng.stop)   # noqa: E731
-    assert "какая именно деталь" in eng._vague(st("ремкомплект"), "ремкомплект")
-    assert "какая именно деталь" in eng._vague(st("Комплект"), "Комплект")
+    assert "что именно нужно" in eng._vague(st("ремкомплект"), "ремкомплект")
+    assert "что именно нужно" in eng._vague(st("Комплект"), "Комплект")
+    assert "расширительный" in eng._vague(st("Peugeot-Citroen БАЧОК"), "Peugeot-Citroen БАЧОК")   # фирма рядом — деталь не названа
     assert "только признак" in eng._vague(st("наружный"), "наружный")
-    for ok in ("комплект ГРМ", "подшипник ступицы", "ГБЦ и клапаны", "свечи", "тормозные колодки", "клапаны", "ремень",
+    for ok in ("комплект ГРМ", "бачок омывателя", "подшипник ступицы", "ГБЦ и клапаны", "свечи", "тормозные колодки", "клапаны", "ремень",
                "шланг сцепления", "шланг радиатора"):
         assert eng._vague(st(ok), ok) == "", ok
 
@@ -1375,3 +1376,13 @@ def test_compare_model_survives_non_numeric_manufactured_year():
     assert compare_model("Ford Focus 2015 год", v2) == ["В заявке 2015 год, по VIN — 2010"]
     v3 = SimpleNamespace(attrs={"manufactured": "2011", "date": "", "engine": "1.6 L"})
     assert compare_model("Focus 2012", v3) == []                                  # разница в год допустима
+
+
+def test_vague_question_reaches_the_client_and_list_bullet_is_stripped():
+    from app.podbor.engine import draft
+    assert T.split_chunks("* Peugeot-Citroen БАЧОК\n• фара") == ["Peugeot-Citroen БАЧОК", "фара"]
+    note = "«бачок» — это может быть разное. Уточните, пожалуйста, что именно нужно: расширительный, омывателя или что-то другое?"
+    res = {"status": "ok", "vehicle": {"short": "Peugeot 3008", "summary": "Peugeot 3008"}, "warnings": [], "request": {"chunks": []},
+           "positions": [{"query": "бачок", "kind": "part", "status": "not_found", "note": note, "groups": [], "variants": [], "question": ""}]}
+    text = draft(res)
+    assert "Уточните, пожалуйста, что именно нужно" in text and "не нашли" not in text
