@@ -16,6 +16,7 @@ from typing import Any
 from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
+from . import emb as EMB
 from . import article as A
 from . import differ as DF
 from . import reviews as R
@@ -451,7 +452,9 @@ class Engine:
         по нему тем же поиском; берём результат модели, только если он заметно лучше (оценка группы выше)."""
         if not self.llm or not getattr(self.llm, "enabled", False):
             return
-        weak = [i for i, p in enumerate(positions) if self._weak(p, tree)][:MAX_ARBITER]
+        emb = EMB.get()
+        handled = await self._arbitrate_emb(emb, v, tree, positions) if emb is not None else set()
+        weak = [i for i, p in enumerate(positions) if i not in handled and self._weak(p, tree)][:MAX_ARBITER]
         if not weak:
             return
         parsed = await asyncio.gather(*(U.understand(self.llm, positions[i]["query"]) for i in weak),
@@ -476,6 +479,50 @@ class Engine:
                           and self._score(alt) >= self._score(old)):
                 # Слова клиента остаются в заголовке и памяти; что искали по версии модели — в llm_part
                 positions[i] = alt | {"query": old["query"], "llm_part": first["part"], "was_score": self._score(old)}
+
+    async def _arbitrate_emb(self, emb, v: Vehicle, tree: TreeIndex, positions: list[dict]) -> set[int]:
+        """Арбитр с кандидатами «3 от правил + 3 от эмбеддингов» (emb.py). Уверенные правила, чья группа есть в пятёрке
+        эмбеддингов, не трогаем; остальное выбирает модель. «Не деталь / уточнить / менеджеру» — позицию не показываем,
+        её получит менеджер. Возвращает номера разобранных позиций; прочие слабые идут старым путём."""
+        idx = [i for i, p in enumerate(positions)
+               if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop)]
+        vecs = await emb.embed([positions[i]["query"] for i in idx]) if idx else None
+        if not vecs:
+            return set()
+        names = [g.name for g in tree.groups.values()]
+        todo = []
+        for i, vec in zip(idx, vecs):
+            p = positions[i]
+            top = [n for n, _ in emb.top(vec, names, 5)]
+            rules = [g["name"] for g in p.get("groups", [])[:3]]
+            if not top or (rules and rules[0] in top and self._score(p) >= SURE_SCORE and not self._weak(p, tree)):
+                continue
+            todo.append((i, list(dict.fromkeys(rules + top[:3]))))
+        todo = todo[:MAX_ARBITER]
+        picks = await asyncio.gather(*(U.pick_group(self.llm, positions[i]["query"], c) for i, c in todo),
+                                     return_exceptions=True)
+        done = set()
+        for (i, cands), pick in zip(todo, picks):
+            old = positions[i]
+            if not isinstance(pick, str) or not pick:
+                continue
+            if pick in U.PICK_CODES:
+                positions[i] = dict(old, status="not_found", variants=[], groups=[], question="", note="",
+                                    dropped=(old.get("query") or "")[:200], arbiter=pick)
+                done.add(i)
+                continue
+            if old.get("groups") and old["groups"][0]["name"] == pick:
+                done.add(i)   # модель подтвердила правила
+                continue
+            side = T.Side(old["side"].get("axis", ""), old["side"].get("lr", ""))
+            try:
+                alt = await self.position(v, tree, pick, side)
+            except Exception:
+                continue
+            if alt["status"] in ("found", "choose"):
+                positions[i] = alt | {"query": old["query"], "llm_part": pick, "was_score": self._score(old)}
+                done.add(i)
+        return done
 
     def _split_brands(self, items: list[tuple[str, T.Side]], v: Vehicle) -> tuple[list, list[dict]]:
         """Фирмы из текста позиций: (позиции без слов фирмы, что спросить у поставщиков). Фирма машины («Ниссан»)
@@ -1947,6 +1994,7 @@ def check_attrs(pos: dict) -> None:
 
 
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
+SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
 _BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)

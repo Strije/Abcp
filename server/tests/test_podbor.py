@@ -952,6 +952,59 @@ def test_llm_arbiter_replaces_only_clearly_better_weak_result():
     assert "llm_part" not in positions[0]
 
 
+def test_arbiter_with_embedding_candidates(monkeypatch):
+    """Кандидаты «3 от правил + 3 от эмбеддингов»: уверенные правила, подтверждённые эмбеддингами, не трогаем; слабое
+    выбирает модель из списка; «не деталь» снимает позицию (её получит менеджер)."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor import emb as EMB
+    from app.podbor import understand as U
+    from app.podbor.engine import Engine, load_rules
+
+    class FakeEmb:
+        async def embed(self, texts):
+            return list(texts)
+
+        def top(self, vec, names, k=5):
+            return {"тросик ручника": [("Тросы, тяги и рычаги тормозной системы", 0.5), ("Стояночный тормоз", 0.48)],
+                    "колодки": [("Колодки тормозные", 0.6)], "т-банк": [("Термостат", 0.35)]}[vec][:k]
+
+    asked = []
+
+    class Fake:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=0):
+            asked.append(user)
+            return '{"choice": "НЕ"}' if "т-банк" in user else '{"choice": "Тросы, тяги и рычаги тормозной системы"}'
+
+    monkeypatch.setattr(EMB, "get", lambda: FakeEmb())
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules(), llm=Fake())
+    tree = SimpleNamespace(groups={}, fix=lambda s: s)
+
+    async def position(v, tree, q, side, kind=""):
+        return {"query": q, "status": "found", "kind": "part", "note": "", "variants": [{"oem": "X"}], "side": {},
+                "groups": [{"name": q, "score": 1.0}]}
+    eng.position = position
+    ps = [{"query": "тросик ручника", "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+           "groups": [{"name": "Тросик сцепления", "score": 0.62}]},
+          {"query": "колодки", "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+           "groups": [{"name": "Колодки тормозные", "score": 1.1}]},
+          {"query": "т-банк", "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+           "groups": [{"name": "Глушитель в сборе", "score": 1.0}]}]
+    asyncio.run(eng._arbitrate(None, tree, ps))
+    assert ps[0]["llm_part"] == "Тросы, тяги и рычаги тормозной системы" and ps[0]["query"] == "тросик ручника"
+    assert "llm_part" not in ps[1] and ps[1]["status"] == "found"
+    assert ps[2]["status"] == "not_found" and ps[2]["arbiter"] == "НЕ"
+    assert len(asked) == 2   # подтверждённые правила модель не спрашивали
+    # Разбор ответа: номер, название вместо номера, код, мусор
+    c = ["Колодки тормозные", "Диск тормозной"]
+    assert U.parse_pick('{"choice": "2"}', c) == "Диск тормозной"
+    assert U.parse_pick('{"choice": "колодки тормозные"}', c) == "Колодки тормозные"
+    assert U.parse_pick('{"choice":"уточ"}', c) == "УТОЧ"
+    assert U.parse_pick('{"choice": "9"}', c) == "" and U.parse_pick("не знаю", c) == ""
+
+
 def test_lost_head_with_weak_group_is_not_shown():
     from types import SimpleNamespace
     from app.podbor.engine import Engine, load_rules

@@ -203,3 +203,52 @@ async def understand_reply(llm: Any, text: str, mem: dict, analogs: int = 3) -> 
     except Exception:
         return None
     return parse_reply(raw)
+
+
+PICK_CODES = ("НЕ", "УТОЧ", "МЕН", "НЕТ")
+PICK_SYSTEM = """Ты помогаешь магазину автозапчастей разобрать фразу клиента из переписки.
+Дана фраза и пронумерованный список групп каталога запчастей его машины. Определи, о какой группе говорит клиент.
+Клиенты пишут с ошибками и жаргоном: граната — ШРУС; телевизор — рамка радиатора («Крепление радиатора»); сайленты —
+сайлентблоки; лобовина — передняя крышка двигателя (крышка ГРМ); направляшки — направляющие суппорта; аморики — амортизаторы.
+Ответь одним из вариантов:
+- номер группы из списка, если фраза называет деталь именно из этой группы;
+- "НЕ" — во фразе нет автозапчасти (болтовня, оплата, доставка, характеристика машины вроде «механика», «левый руль»);
+- "УТОЧ" — деталь названа слишком общо, нельзя выбрать без вопроса клиенту («фильтр», «датчик», «сальник», «блок»);
+- "МЕН" — масла, жидкости, шины, колёсные диски, аксессуары, инструмент, контрактные агрегаты;
+- "НЕТ" — деталь ясна, но подходящей группы в списке нет.
+Не выбирай группу только из-за совпадения слова: «пару минут» — не «Главная пара», «т-банк» — не глушитель.
+Ответ строго JSON: {"choice": "3" или "НЕ"/"УТОЧ"/"МЕН"/"НЕТ"}"""
+
+
+def parse_pick(txt: str, cands: list[str]) -> str:
+    """Ответ модели → название группы из списка, код (НЕ/УТОЧ/МЕН/НЕТ) или "" (не разобрали). Модель иногда пишет
+    название вместо номера или ответ без JSON — берём и это (на эталоне так терялось 12% ответов)."""
+    m = re.search(r"\{.*?\}", txt or "", re.S)
+    choice = ""
+    if m:
+        try:
+            choice = str(json.loads(m.group(0)).get("choice", "")).strip()
+        except ValueError:
+            choice = ""
+    if not choice:
+        m = re.search(r'"choice"\s*:\s*"?([^",}\n]+)', txt or "")
+        choice = m.group(1).strip() if m else (txt or "").strip().strip('".')
+    if choice.isdigit():
+        return cands[int(choice) - 1] if 1 <= int(choice) <= len(cands) else ""
+    up = choice.upper()
+    if up in PICK_CODES:
+        return up
+    low = {c.lower(): c for c in cands}
+    return low.get(choice.lower().rstrip("."), "")
+
+
+async def pick_group(llm: Any, query: str, cands: list[str]) -> str:
+    """Арбитр: из кандидатов «3 от правил + 3 от эмбеддингов» выбрать группу (или код). Ошибка модели — ""."""
+    if not llm or not getattr(llm, "enabled", False) or not cands:
+        return ""
+    user = f"Фраза: «{query[:200]}»\nГруппы:\n" + "\n".join(f"{k}. {n}" for k, n in enumerate(cands, 1))
+    try:
+        txt = await llm.chat(PICK_SYSTEM, user, max_tokens=300)
+    except Exception:  # noqa: BLE001
+        return ""
+    return parse_pick(txt, cands)
