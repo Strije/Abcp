@@ -226,7 +226,7 @@ class Engine:
         if not meta:
             if llm is not False:
                 await self._arbitrate(v, tree, res["positions"])
-            self._drop_lost(res["positions"])
+            self._drop_lost(res["positions"], tree)
         if not meta:
             for p, (k, attrs) in zip(res["positions"], reqs):
                 p["want_qty"], p["want_attrs"] = k, attrs
@@ -291,6 +291,11 @@ class Engine:
         out = res.setdefault("handoff", [])
         for p in res.get("positions", []):
             kind = p.get("kind", "")
+            if p.get("dropped"):   # нашлась лишь часть слов клиента, модель лучше не нашла — менеджеру
+                item = f"{p['query']} — подбор неуверенный, передано менеджеру"
+                if item not in out:
+                    out.append(item)
+                continue
             if p.get("status") == "not_found" and (kind in MANAGER_KINDS or "не деталь каталога" in (p.get("note") or "")):
                 label = MANAGER_KINDS.get(kind, "не из каталога автомобиля")
                 item = f"{p['query']} — {label}"
@@ -390,35 +395,55 @@ class Engine:
             return f"«{query}» — это может быть разное. Уточните, пожалуйста, что именно нужно: {examples} или что-то другое?"
         return ""
 
-    def _drop_lost(self, positions: list[dict]) -> None:
-        """Главное слово клиента не нашлось в каталоге и группа оценена слабо («кольцо подвесного» → уплотнения
-        форсунки): показывать чужую деталь хуже, чем честно «уточним и напишем» — менеджер получит позицию."""
+    def _drop_lost(self, positions: list[dict], tree: TreeIndex | None = None) -> None:
+        """Главное слово клиента не нашлось в каталоге и группа оценена слабо («кольцо подвесного» → уплотнения форсунки) или
+        нашлась только часть слов («тормозной бачок» → бачок омывателя): показывать чужую деталь хуже, чем честно передать
+        менеджеру. Модель уже посмотрела (арбитраж) и лучше не нашла."""
         for i, p in enumerate(positions):
-            if p.get("kind", "") in ("", "part") and p["status"] != "not_found" and self._score(p) < WEAK_SCORE                     and "уточним по каталогу отдельно" in (p.get("note") or "") and "llm_part" not in p:
-                positions[i] = dict(p, status="not_found", variants=[], groups=[], question="", note="", dropped=p["note"][:200])
+            if p.get("kind", "") not in ("", "part") or p["status"] == "not_found" or "llm_part" in p or "qualifier_from" in p:
+                continue
+            lost = self._score(p) < WEAK_SCORE and "уточним по каталогу отдельно" in (p.get("note") or "")
+            if lost or self._partial(p, tree):
+                positions[i] = dict(p, status="not_found", variants=[], groups=[], question="", note="",
+                                    dropped=(p.get("note") or p.get("query") or "")[:200])
 
     @staticmethod
     def _score(p: dict) -> float:
         return max((g.get("score", 0) for g in p.get("groups", [])), default=0.0)
 
-    def _weak(self, p: dict) -> bool:
-        """Правила нашли группу слабо: оценка низкая или главное слово клиента потеряно («Кольцо» уточним отдельно)."""
+    def _weak(self, p: dict, tree: TreeIndex | None = None) -> bool:
+        """Правила нашли частично: оценка низкая, главное слово потеряно («Кольцо» уточним отдельно) или в названии группы и
+        вариантов нет части слов клиента («тормозной бачок» → бачок омывателя): такое проверяет модель, а не показываем сразу."""
         if p.get("kind", "") not in ("", "part"):
             return False
         if p["status"] == "not_found" and not p.get("groups"):
             # Правила ничего не нашли («крышка омывателя фар», «кожух замка капота»): модель переведёт в название каталога
             return bool(T.stems(p.get("query", ""), self.stop))
-        return self._score(p) < WEAK_SCORE or "уточним по каталогу отдельно" in (p.get("note") or "")             or self._coverage(p) < 0.5
+        return self._score(p) < WEAK_SCORE or "уточним по каталогу отдельно" in (p.get("note") or "")             or self._partial(p, tree)
 
-    def _coverage(self, p: dict) -> float:
-        """Какая доля значимых слов клиента нашлась в названии группы и вариантов: у «крышка омывателя фар» → «Крышка
-        клапанная» совпало одно слово из трёх. Меньше половины — результат подозрителен, его проверяет модель."""
-        words = [s for s in T.stems(p.get("query", ""), self.stop) if not T.side_of_word(s) and not s.endswith(".")]
+    def _coverage_info(self, p: dict, tree: TreeIndex | None = None) -> tuple[float, int]:
+        """(доля значимых слов клиента, нашедшихся в названиях группы, её синонимах и вариантов; сколько слов всего)."""
+        words = [s for s in T.stems(T.expand(p.get("query", "")), self.stop) if not T.side_of_word(s) and not s.endswith(".")]
+        if tree is not None:
+            words = [tree.fix(s) for s in words]   # «подшибник» = «подшипник»: опечатка — не потерянное слово
         if len(words) < 2 or p.get("status") == "not_found":
-            return 1.0
+            return 1.0, len(words)
         have = [s for g in p.get("groups", []) for s in T.stems(g.get("name", ""), self.stop)]
+        if tree is not None:
+            for g in p.get("groups", []):
+                grp = tree.groups.get(g.get("id"))
+                have += [s for ph, _ in (grp.phrases if grp else []) for s in ph]
         have += [s for v in p.get("variants", [])[:6] for s in T.stems(v.get("name", ""), self.stop)]
-        return sum(1 for w in words if any(T.same(w, h) for h in have)) / len(words)
+        return sum(1 for w in words if any(T.same(w, h) for h in have)) / len(words), len(words)
+
+    def _coverage(self, p: dict, tree: TreeIndex | None = None) -> float:
+        return self._coverage_info(p, tree)[0]
+
+    def _partial(self, p: dict, tree: TreeIndex | None = None) -> bool:
+        """Нашлась лишь часть слов клиента. В короткой фразе («тормозной бачок», 2–3 слова) не хватает любого слова — это
+        другая деталь; в длинной допускаем потерю до половины (лишние слова, марка, год)."""
+        ratio, n = self._coverage_info(p, tree)
+        return ratio < (0.67 if n <= 3 else 0.5)
 
     async def _arbitrate(self, v: Vehicle, tree: TreeIndex, positions: list[dict]) -> None:
         """Слабый результат правил проверяем моделью: «кольцо подвесного» правила вели в уплотнения форсунки, а
@@ -426,7 +451,7 @@ class Engine:
         по нему тем же поиском; берём результат модели, только если он заметно лучше (оценка группы выше)."""
         if not self.llm or not getattr(self.llm, "enabled", False):
             return
-        weak = [i for i, p in enumerate(positions) if self._weak(p)][:MAX_ARBITER]
+        weak = [i for i, p in enumerate(positions) if self._weak(p, tree)][:MAX_ARBITER]
         if not weak:
             return
         parsed = await asyncio.gather(*(U.understand(self.llm, positions[i]["query"]) for i in weak),
@@ -1644,6 +1669,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 lines.append("   " + p["note"])   # «нашёлся только внутренний вариант — нужный уточним»
             elif "Уточните, пожалуйста, что именно нужно" in p["note"] or "это только признак" in p["note"]:
                 lines.append("   " + p["note"])   # «бачок», «комплект»: деталь не названа — спрашиваем, а не гадаем
+            elif p.get("dropped"):
+                lines.append("   Не смогли уверенно подобрать эту деталь по каталогу — передали менеджеру, он уточнит и напишет.")
             else:
                 lines.append("   В каталоге для вашей машины сразу не нашли — уточним и напишем.")
             continue

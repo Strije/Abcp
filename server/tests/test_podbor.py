@@ -1386,3 +1386,26 @@ def test_vague_question_reaches_the_client_and_list_bullet_is_stripped():
            "positions": [{"query": "бачок", "kind": "part", "status": "not_found", "note": note, "groups": [], "variants": [], "question": ""}]}
     text = draft(res)
     assert "Уточните, пожалуйста, что именно нужно" in text and "не нашли" not in text
+
+
+def test_partial_match_goes_to_model_then_manager_not_shown():
+    """«Тормозной бачок» → бачок омывателя: нашлась лишь часть слов клиента — не показываем, передаём менеджеру."""
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, draft, load_rules
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    p = {"query": "тормозной бачок", "kind": "part", "status": "choose", "note": "", "question": "",
+         "groups": [{"id": 1, "name": "Бачок омывателя", "score": 0.8}], "variants": [{"name": "БАЧОК СТЕКЛООМЫВАТЕЛЯ"}], "side": {}}
+    assert eng._partial(p) and eng._weak(p)                       # модель посмотрит первой (арбитраж)
+    full = dict(p, query="бачок омывателя")
+    assert not eng._partial(full)
+    typo = dict(p, query="подшибник ступицы", groups=[{"id": 1, "name": "Подшипник ступичный", "score": 0.9}],
+                variants=[{"name": "Подшипник ступицы"}])
+    positions = [dict(p), full, typo]
+    eng._drop_lost(positions)                                     # модель лучше не нашла
+    assert positions[0]["status"] == "not_found" and positions[0]["dropped"]
+    assert positions[1]["status"] == "choose"                     # полное совпадение — остаётся
+    res = {"status": "ok", "vehicle": {"short": "Peugeot", "summary": "Peugeot"}, "warnings": [], "request": {"chunks": []},
+           "positions": [positions[0]]}
+    Engine._manager_handoff(res)
+    assert res["handoff"] == ["тормозной бачок — подбор неуверенный, передано менеджеру"]
+    assert "передали менеджеру" in draft(res)
