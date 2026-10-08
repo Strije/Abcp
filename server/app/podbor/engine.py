@@ -22,7 +22,8 @@ from . import reviews as R
 from . import understand as U
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
-from .offers import _offer, axis_vote, bkey, brand_candidates, curate, days, lr_vote, oem_brand_for, original_keys
+from .offers import _SMALL as _SMALL_OFFERS
+from .offers import _desc_head, _offer, axis_vote, bkey, brand_candidates, curate, days, lr_vote, oem_brand_for, original_keys
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
 MAX_POSITIONS = 15   # сообщение мастера «по всей подвеске» — до 11–12 позиций
@@ -757,6 +758,7 @@ class Engine:
         if not kept:
             pos["note"] = "По описаниям поставщиков найденные номера относятся к другой стороне."
             return pos
+        kept = prefer_named_offers(kept, q)
         host = _host(q) if any(T.same(T.head(q) or "", b) for b in _BUSH) else None
         if host and not any(is_bushing(c.d.name) and any(T.same(h, s) for h in host[0]
                                                            for s in T.stems(c.d.name, self.stop)) for c in kept):
@@ -1180,6 +1182,35 @@ def _name_head(name: str) -> str:
             continue
         return s
     return ""
+
+
+# Составные части и соседи детали: каталог кладёт их в тот же узел, а поставщики — под тем же номером
+_NEIGHBORS = set(_SMALL_OFFERS) | {T.stem(w) for w in ("рычаг", "корпус", "кожух", "щит", "ограничитель", "крышка", "успокоитель", "башмак", "звездочка", "шестерня")}
+
+
+def prefer_named_offers(kept: list["Candidate"], q: list[str]) -> list["Candidate"]:
+    """«Цепь ГРМ» у Honda: в узле ещё натяжитель и рычаг натяжителя (каталог называет их по-английски, названия не
+    сравнить), а описание оригинала у поставщиков понятное: «Цепь…», «Натяжитель цепи…». Клиент назвал деталь, и по
+    описанию оригинала она есть среди найденного — варианты, где оригинал явно другая деталь (натяжитель, рычаг), убираем."""
+    head = T.head(q) if q else ""
+    if not head or head in T.ADJ or head in _GENERIC_HEADS:
+        return kept
+    aliases = [head] + _PART_ALIASES.get(head, [])
+
+    def desc_head(c: "Candidate") -> str:
+        oem = _key(c.d.oem)
+        for r in c.rows or []:
+            if _key(r.get("numberFix") or r.get("number")) == oem and str(r.get("description") or "").strip():
+                return _desc_head(str(r["description"]))
+        return ""
+
+    def named(c: "Candidate") -> bool:
+        h = desc_head(c)
+        return any(T.same(h, a) for a in aliases) or any(T.same(_name_head(c.d.name), a) for a in aliases)
+    good = [c for c in kept if named(c)]
+    if not good or len(good) == len(kept):
+        return kept
+    return [c for c in kept if c in good or not (desc_head(c) and any(T.same(desc_head(c), n) for n in _NEIGHBORS))]
 
 
 def prefer_named(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:

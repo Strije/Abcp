@@ -1271,3 +1271,28 @@ def test_quick_wins_both_axes_ordered_and_short_brand(monkeypatch):
     # машина не нашлась — не «проверьте VIN», а менеджер подберёт
     text = draft({"status": "vehicle_not_found", "request": {"ident": "L123", "chunks": []}})
     assert "Менеджер подберёт" in text
+
+
+def test_named_part_wins_over_components_and_neighbors():
+    from types import SimpleNamespace
+    from app.podbor.engine import prefer_named_offers
+    from app.podbor.offers import not_the_part
+    # поставщики кроссуют составные части к номеру самой детали — аналогом они не считаются
+    assert not_the_part("Диодный мост генератора", "Генератор") and not_the_part("Выпрямитель Toyota", "Генератор")
+    assert not_the_part("Комплект направляющих тормозного суппорта", "Суппорт задний")
+    assert not_the_part("Защитный комплект амортизатора", "Амортизатор") and not_the_part("Ролик обводной", "Ремень ГРМ")
+    assert not not_the_part("Генератор 100A", "Генератор") and not not_the_part("Комплект ремня ГРМ", "Ремень ГРМ")
+    assert not not_the_part("Диодный мост генератора", "Диодный мост генератора")   # сам мост просили — это он
+
+    def cand(name, oem, desc):
+        return SimpleNamespace(d=SimpleNamespace(name=name, oem=oem), rows=[{"number": oem, "description": desc}])
+    chain, tens, arm = (cand("CHAIN (136L)", "14401", "Цепь ГРМ"), cand("TENSIONER COMP.", "14510", "Натяжитель цепи ГРМ"),
+                        cand("ARM COMP.", "14520", "Успокоитель цепи ГРМ"))
+    q = T.stems("цепь ГРМ")
+    assert prefer_named_offers([chain, tens, arm], q) == [chain]
+    # ничего не названо или названы все — не трогаем
+    assert prefer_named_offers([tens, arm], q) == [tens, arm]
+    chain2 = cand("CHAIN B", "2", "Цепь привода ГРМ")
+    assert prefer_named_offers([chain, chain2], q) == [chain, chain2]
+    # «водительская» — левая, «пассажирская» — правая
+    assert T.side("дверь передняя водительская").lr == "left" and T.side("дверь пассажирская").lr == "right"
