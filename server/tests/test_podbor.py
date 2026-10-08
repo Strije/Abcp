@@ -1319,3 +1319,47 @@ def test_client_requirements_quantity_and_attributes():
     check_attrs(none)
     assert none["attr_check"]["missing"] == ["полиуретановые"]
     assert "не указан" in "\n".join(requirement_lines(none))
+
+
+def test_non_parts_go_to_manager():
+    from app.podbor.engine import Engine, draft
+    res = {"status": "ok", "vehicle": {"short": "Audi A4", "summary": "Audi A4"}, "warnings": [], "request": {"chunks": []},
+           "positions": [
+               {"query": "шины 205/55 R16", "kind": "tire", "status": "not_found", "note": "", "groups": [], "variants": [], "question": ""},
+               {"query": "тормозная жидкость", "kind": "fluid", "status": "not_found", "note": "", "groups": [], "variants": [], "question": ""},
+               {"query": "домкрат", "kind": "tool", "status": "not_found", "note": "", "groups": [], "variants": [], "question": ""},
+               {"query": "чехлы", "kind": "part", "status": "not_found", "note": "Это не деталь каталога автомобиля — подберём по названию.",
+                "groups": [], "variants": [], "question": ""},
+               {"query": "колодки", "kind": "part", "status": "not_found", "note": "", "groups": [], "variants": [], "question": ""}]}
+    Engine._manager_handoff(res)
+    assert res["handoff"] == ["шины 205/55 R16 — шины, диски", "тормозная жидкость — жидкость, масло", "домкрат — инструмент",
+                              "чехлы — не из каталога автомобиля"]   # обычная деталь «не нашли» — не менеджеру автоматически
+    Engine._manager_handoff(res)
+    assert len(res["handoff"]) == 4                                   # повторный вызов не дублирует
+    text = draft(res)
+    assert text.count("менеджер") >= 3
+
+
+def test_quantity_is_always_stated_and_summed_carefully():
+    from app.podbor.engine import need_text, quantity_summary
+    assert need_text({"amount": "2"}) == "на машину нужно 2 шт., цены за штуку"
+    assert need_text({"amount": "01"}) == "на машину нужна 1 шт."
+    assert need_text({"amount": "1", "lr": "left"}) == "1 шт. на эту сторону"
+    assert need_text({"amount": "2", "pair": True}).startswith("левый и правый одинаковые")
+    assert "не указано" in need_text({"amount": ""}) and "не указано" in need_text({})
+
+    def pos(q, *vs, status="found"):
+        return {"query": q, "status": status, "variants": list(vs)}
+    v = lambda amount, axis="", lr="", alt=False: {"amount": amount, "axis": axis, "lr": lr, "alt": alt}  # noqa: E731
+    summary = quantity_summary([
+        pos("втулки стабилизатора", v("2", "front"), v("2", "rear")),                    # обе оси: не складываем
+        pos("рычаг", v("1", "front", "left"), v("1", "front", "right")),                 # левый + правый = 2
+        pos("тяги", v("2")),
+        pos("шаровая", v("1", "front", "left")),                                          # одна сторона
+        pos("амортизатор", v("", "front")),                                               # нет данных каталога
+        pos("не нашли", status="not_found")])
+    text = "\n".join(summary)
+    assert "Втулки" not in text or "по 2 шт. на ось" in text
+    assert "• Рычаг — 2 шт." in text and "• Тяги — 2 шт." in text and "на одну сторону" in text and "уточним по каталогу" in text
+    assert "не нашли" not in text
+    assert quantity_summary([pos("тяги", v("2"))]) == []            # одна позиция — итог не нужен

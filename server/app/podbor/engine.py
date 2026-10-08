@@ -280,8 +280,22 @@ class Engine:
         res["status"] = status
         res["seconds"] = round(time.time() - t0, 1)
         res["memory"] = D.remember(res, prev, replaced)
+        self._manager_handoff(res)
         res["text"] = draft(res)
         return res
+
+    @staticmethod
+    def _manager_handoff(res: dict) -> None:
+        """Не автозапчасти и всё, что бот не оценит сам (шины, инструмент, химия, аксессуары, жидкости без цены в каталоге),
+        — менеджеру: позиция попадает в «Ответьте сами» на странице подбора, клиенту говорим, что передали."""
+        out = res.setdefault("handoff", [])
+        for p in res.get("positions", []):
+            kind = p.get("kind", "")
+            if p.get("status") == "not_found" and (kind in MANAGER_KINDS or "не деталь каталога" in (p.get("note") or "")):
+                label = MANAGER_KINDS.get(kind, "не из каталога автомобиля")
+                item = f"{p['query']} — {label}"
+                if item not in out:
+                    out.append(item)
 
     # ---------- следующая реплика разговора ----------
 
@@ -1262,12 +1276,15 @@ def drop_accessories(tier: list["Candidate"], q: list[str]) -> list["Candidate"]
 # Виды позиций: запчасти ищем в каталоге, масла и жидкости — тоже (у многих марок есть оригинал), остальное —
 # подбираем отдельно, по параметрам или названию
 KIND_TITLE = {0: "Запчасти", 1: "Масла и жидкости", 2: "Аккумулятор", 3: "Шины и диски", 4: "Другое"}
+# Что бот не подбирает сам: передаём менеджеру («Ответьте сами» на странице подбора). Ключ — вид, значение — как назвать
+MANAGER_KINDS = {"fluid": "жидкость, масло", "battery": "аккумулятор", "tire": "шины, диски", "tool": "инструмент",
+                 "chemistry": "автохимия", "accessory": "аксессуары"}
 KIND_NOTE = {
-    "battery": "Аккумулятор подберём по ёмкости, пусковому току, полярности и размерам — напишем варианты.",
-    "tire": "Шины и диски подберём по размеру — напишите размер с боковины шины или пришлите фото.",
-    "tool": "Это не деталь автомобиля — подберём по названию и напишем.",
-    "chemistry": "Это не деталь автомобиля — подберём по названию и напишем.",
-    "accessory": "Это не деталь автомобиля — подберём по названию и напишем.",
+    "battery": "Аккумуляторы подбирает менеджер — передали ему, он напишет вам вариантами.",
+    "tire": "Шины и диски подбирает менеджер по размеру — передали ему; напишите размер с боковины шины или пришлите фото.",
+    "tool": "Это не деталь автомобиля — передали менеджеру, он подберёт и напишет.",
+    "chemistry": "Это не деталь автомобиля — передали менеджеру, он подберёт и напишет.",
+    "accessory": "Это не деталь автомобиля — передали менеджеру, он подберёт и напишет.",
 }
 _KIND_WORDS = {
     "fluid": ("масло", "масла", "антифриз", "тосол", "жидкость", "омывайка", "незамерзайка"),
@@ -1483,6 +1500,48 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
     return out, max(more, 0)
 
 
+def need_text(var: dict) -> str:
+    """Сколько штук нужно — в каждом ответе по каждой позиции: каталог пишет количество на машину («2», «01»); нет данных —
+    говорим честно, а не молчим (клиент не понимал, сколько покупать, когда у одних позиций число было, а у других нет)."""
+    m = re.match(r"\d+", var.get("amount") or "")
+    if not m:
+        return "количество на машину по каталогу не указано — уточним"
+    k = int(m.group(0))
+    if k > 1:
+        text = f"на машину нужно {k} шт., цены за штуку"
+    elif var.get("lr") in ("left", "right"):
+        text = "1 шт. на эту сторону"   # вторая сторона — отдельной строкой
+    else:
+        text = "на машину нужна 1 шт."
+    return f"левый и правый одинаковые, {text}" if var.get("pair") else text
+
+
+def quantity_summary(positions: list[dict]) -> list[str]:
+    """Итог в конце ответа: сколько чего нужно купить. Стороны и оси складываем, варианты одной стороны — не складываем."""
+    out = []
+    for p in positions:
+        groups = [v for v in p.get("variants", []) if not v.get("alt")]
+        if p.get("status") not in ("found", "choose") or not groups:
+            continue
+        title = p["query"][:1].upper() + p["query"][1:]
+        counts = [int(m.group(0)) for v in groups if (m := re.match(r"\d+", v.get("amount") or ""))]
+        sides = [(v.get("axis", ""), v.get("lr", "")) for v in groups]
+        axes = {a for a, _ in sides if a}
+        if len(counts) != len(groups):
+            out.append(f"• {title} — количество уточним по каталогу")
+        elif len(axes) > 1:
+            # И передние, и задние показаны потому, что клиент не сказал, какие нужны: складывать оси нельзя
+            per_axis = set(counts)
+            out.append(f"• {title} — по {min(counts)} шт. на ось: нужны передние или задние?" if len(per_axis) == 1
+                       else f"• {title} — зависит от оси: нужны передние или задние?")
+        elif len(set(sides)) == len(sides):
+            note = " на одну сторону" if len(groups) == 1 and groups[0].get("lr") in ("left", "right") else ""
+            out.append(f"• {title} — {sum(counts)} шт.{note}")
+        else:
+            out.append(f"• {title} — {min(counts)} шт. (количество не зависит от варианта: выберите нужный)")
+    return out if len(out) >= 2 else []
+
+
 def requirement_lines(p: dict) -> list[str]:
     """Что клиент просил кроме детали: сколько штук и признаки («иридиевые», «белый») — и что с этим нашлось."""
     out = []
@@ -1573,9 +1632,9 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             continue
         if p["status"] == "not_found":
             if p.get("kind") == "fluid":
-                lines.append("   Подберём по допуску производителя и объёму заправки — напишем варианты.")
+                lines.append("   Жидкости и масла подбирает менеджер по допуску производителя и объёму заправки — передали ему, он напишет вам с ценами.")
             elif "не деталь каталога" in p["note"]:
-                lines.append("   Это не из каталога автомобиля — подберём по названию и напишем.")
+                lines.append("   Это не деталь автомобиля — передали менеджеру, он подберёт по названию и напишет.")
             elif p["note"].startswith("В каталоге в этой группе нашёлся только"):
                 lines.append("   " + p["note"])   # «нашёлся только внутренний вариант — нужный уточним»
             else:
@@ -1620,11 +1679,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         for n, (var, alts) in enumerate(groups, 1):
             found += 1
             rows, more = _block(var, alts, numbers, analogs if not many else min(analogs, 2), query)
-            amount = re.match(r"\d+", var["amount"] or "")
-            k = int(amount.group(0)) if amount else 1   # каталог пишет и «2», и «01»
-            per = f"на машину нужно {k} шт., цены за штуку" if k > 1 else ""
-            if var.get("pair"):
-                per = f"левый и правый одинаковые, {per}"
+            per = need_text(var)
             if many:
                 side = labels[n - 1]
                 if not side or labels.count(side) > 1:
@@ -1645,6 +1700,9 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         if extra:
             lines += ["", extra]
     lines.append("")
+    summary = quantity_summary(shown_positions)
+    if summary:
+        lines += ["", "Сколько нужно купить на машину:"] + summary
     said = " ".join((res.get("request") or {}).get("chunks") or [])
     ordered = bool(D.STATUS.search(said) or _ORDERED.search(said))   # «уже заказал», «оплачено»: оформлять нечего
     lines.append(("Цены и сроки на сегодня." if ordered else "Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем.") if found
