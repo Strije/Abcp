@@ -1296,3 +1296,26 @@ def test_named_part_wins_over_components_and_neighbors():
     assert prefer_named_offers([chain, chain2], q) == [chain, chain2]
     # «водительская» — левая, «пассажирская» — правая
     assert T.side("дверь передняя водительская").lr == "left" and T.side("дверь пассажирская").lr == "right"
+
+
+def test_client_requirements_quantity_and_attributes():
+    from app.podbor.engine import check_attrs, requirement_lines, strip_qty, want_attrs, want_qty
+    assert want_qty("шатуны 2 шт") == 2 and want_qty("два ролика") == 2 and want_qty("шайба 6 штук") == 6 and want_qty("x2 колодки") == 2
+    for no in ("ремень 2 года", "три двери", "Mazda 6 седан", "масло 5W-30 4 литра", "колодки передние"):
+        assert want_qty(no) is None, no
+    assert strip_qty("иридиевые свечи 4шт") == "иридиевые свечи" and strip_qty("два ролика натяжных") == "ролика натяжных"
+    assert [k for _, k in want_attrs("иридиевые свечи белый бампер")] == ["иридиев", "бел"]
+    # признак есть в описании (латиницей) — такие предложения первыми; нет — честно говорим
+    pos = {"want_attrs": want_attrs("иридиевые свечи"), "want_qty": 4,
+           "variants": [{"offers": {"original": {"price": 900, "description": "Свеча зажигания"},
+                                    "analogs": [{"price": 500, "description": "Свеча зажигания"},
+                                                {"price": 700, "description": "NGK Iridium свеча"}]}}]}
+    check_attrs(pos)
+    assert pos["attr_check"] == {"matched": ["иридиевые"], "missing": []}
+    assert pos["variants"][0]["offers"]["analogs"][0]["price"] == 700
+    text = "\n".join(requirement_lines(pos))
+    assert "4 шт." in text and "от 2" in text and "иридиевые" in text and "первыми" in text
+    none = {"want_attrs": want_attrs("полиуретановые втулки"), "variants": [{"offers": {"original": None, "analogs": [{"price": 1, "description": "Втулка"}]}}]}
+    check_attrs(none)
+    assert none["attr_check"]["missing"] == ["полиуретановые"]
+    assert "не указан" in "\n".join(requirement_lines(none))

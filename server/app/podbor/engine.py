@@ -214,6 +214,8 @@ class Engine:
             return self._done(res, "no_positions", t0)
         # «Фильтр воздушный mann» — фирма названа в первой реплике: ищем деталь без неё, фирму проверяем отдельно
         items, asks = self._split_brands(items if meta else self._all_around(items, any(_AROUND.search(c) for c in req.chunks)), v)
+        reqs = [(want_qty(q), want_attrs(q)) for q, _ in items]
+        items = [(strip_qty(q) or q, side) for q, side in items]   # «4 шт», «два» — не часть названия детали
         kinds = [m.get("kind", "") for m in meta] + [""] * len(items)   # «в круг» растит items только без модели
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s, kinds[i])
                                                        for i, (q, s) in enumerate(items[:MAX_POSITIONS]))))
@@ -225,6 +227,10 @@ class Engine:
             if llm is not False:
                 await self._arbitrate(v, tree, res["positions"])
             self._drop_lost(res["positions"])
+        if not meta:
+            for p, (k, attrs) in zip(res["positions"], reqs):
+                p["want_qty"], p["want_attrs"] = k, attrs
+                check_attrs(p)
         for p, m in zip(res["positions"], meta):
             # «под вопросом», «вместо рычага в сборе — отдельно шаровые» — клиенту видно, что это не обязательно
             p["llm"] = {"uncertain": m["uncertain"], "note": m["note"], "qty": m["qty"], "lr": m["lr"]}
@@ -572,6 +578,7 @@ class Engine:
     def clean(self, query: str) -> str:
         """«Здравствуйте, вин , нужны передние колодки» → «передние колодки»."""
         query = _PRICE_TAIL.sub("", query)   # «А шаровые сколько стоят?» → «шаровые»
+        query = _PCS_GLUE.sub(lambda m: m.group(1) + "шт", query)   # «4 шт» в конце не срезать как стоп-слово: это количество
         ws = re.split(r"(\s+|,)", query)
         i = 0
         # Пропускаем стоп-слова и связки: «Здравствуйте, можно узнать цену и сроки, масляный фильтр» → «масляный фильтр»
@@ -1476,6 +1483,24 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
     return out, max(more, 0)
 
 
+def requirement_lines(p: dict) -> list[str]:
+    """Что клиент просил кроме детали: сколько штук и признаки («иридиевые», «белый») — и что с этим нашлось."""
+    out = []
+    k = p.get("want_qty")
+    prices = [x["price"] for var in p.get("variants", []) for x in
+              ([(var.get("offers") or {}).get("original")] + list((var.get("offers") or {}).get("analogs") or [])) if x and x.get("price")]
+    if k and prices and len(p.get("variants", [])) == 1:
+        out.append(f"   Вы просили {k} шт.: цены ниже за штуку, на {k} шт. — от {money(min(prices) * k)}.")
+    elif k:
+        out.append(f"   Вы просили {k} шт.: цены ниже за штуку.")
+    chk = p.get("attr_check") or {}
+    if chk.get("matched"):
+        out.append(f"   Признак «{', '.join(chk['matched'])}» указан в описании предложений — они показаны первыми.")
+    if chk.get("missing"):
+        out.append(f"   Признак «{', '.join(chk['missing'])}» в описаниях предложений не указан — уточним у поставщиков и напишем.")
+    return out
+
+
 def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     """Ответ клиенту. По позиции: при нескольких вариантах — блоки «Передний:» / «Задний:», в каждом
     «• Фирма — наименование — цена, срок», оригинал первым, дальше аналоги — что привезём быстрее."""
@@ -1540,6 +1565,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             part = axis_of(p)
             lines += ["", AXIS_TITLE[part]]
         lines += ["", f"{i}) {query[:1].upper() + query[1:]}"]
+        lines += requirement_lines(p)
         if p.get("article"):
             lines.append("   " + article_line(p, numbers))
         if p.get("kind") in KIND_NOTE and p["status"] == "not_found":
@@ -1750,6 +1776,82 @@ _LOST_IGNORE = {T.stem(w) for w in ("двигателя", "двигатель", 
 def _word_in(w: str, words) -> bool:
     """Слово — одно из общих: «прокладок» и «прокладка» — одно слово, а основа у них разная."""
     return bool(w) and any(T.same(w, k) for k in words)
+
+
+# ---------- требования клиента: количество и признаки ----------
+
+_QTY_WORDS = {"два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10}
+_QTY_NOT = re.compile(r"^(?:год\w*|лет|дн\w*|день|месяц\w*|час\w*|раз\w*|тысяч\w*|литр\w*|км|минут\w*|недел\w*|суток|сутки|"
+                      r"поколени\w*|двер\w*|мест\w*|цилиндр\w*|ступен\w*)$")
+_QTY_PCS = re.compile(r"(?<![\d.,/-])(\d{1,2})\s*(?:шт\b|шт\.|штук\w*|пар(?:а|ы|у)?\b)", re.I)
+_QTY_X = re.compile(r"(?:^|\s)[xх×]\s*(\d{1,2})(?!\d)", re.I)
+_QTY_WORD = re.compile(r"\b(" + "|".join(_QTY_WORDS) + r")\s+((?:[а-яё]+\s+)?[а-яё]{4,})", re.I)
+
+
+_PCS_GLUE = re.compile(r"(?<![\d.,/-])(\d{1,2})\s+(?:шт\.?|штук\w*)(?![а-яё])", re.I)
+
+
+def want_qty(text: str) -> int | None:
+    """Сколько штук просил клиент: «2 шт», «два ролика», «по 2шт», «x2». Год, объём, число дверей — не количество."""
+    m = _QTY_PCS.search(text) or _QTY_X.search(text)
+    if m and 2 <= int(m.group(1)) <= 40:
+        return int(m.group(1))
+    m = _QTY_WORD.search(text)
+    if m and not _QTY_NOT.match(m.group(2).split()[-1].lower()) and not _QTY_NOT.match(m.group(2).split()[0].lower()):
+        return _QTY_WORDS[m.group(1).lower()]
+    return None
+
+
+# Признаки, которые клиент называет и которые пишут в описаниях поставщиков: ключ — начало слова
+_REQ_ATTRS = ("иридиев", "платинов", "полиуретанов", "керамическ", "перфорирован", "усилен", "спортивн", "хромирован",
+          "подогрев", "обогрев", "бесключев", "антикоррозийн", "белый", "белая", "белое", "белые", "чёрный", "черный", "чёрная", "черная",
+          "серебрист", "красный", "красная", "синий", "синяя")
+_REQ_ATTR_RX = re.compile(r"(?<![а-яё])(" + "|".join(_REQ_ATTRS) + r")[а-яё]*", re.I)
+
+
+def strip_qty(text: str) -> str:
+    """Слова о количестве — не часть названия детали: «иридиевые свечи 4 шт» → «иридиевые свечи»."""
+    t = _QTY_PCS.sub(" ", _QTY_X.sub(" ", text))
+    m = _QTY_WORD.search(t)
+    if m and want_qty(text):
+        t = t[:m.start(1)] + t[m.end(1):]
+    return re.sub(r"\s+", " ", t).strip(" ,.")
+
+
+# Те же признаки латиницей — в описаниях поставщиков они чаще так: «NGK Iridium», «Ceramic», «Sport»
+_ATTR_LATIN = {"иридиев": "iridi", "платинов": "platin", "керамическ": "ceram", "спортивн": "sport", "перфорирован": "perfor|drill",
+               "усилен": "reinforc|heavy", "подогрев": "heated|heating", "обогрев": "heated|heating", "хромирован": "chrom"}
+
+
+def want_attrs(text: str) -> list[tuple[str, str]]:
+    """Признаки из слов клиента: [(как написал, начало слова для поиска в описаниях)] — «иридиевые», «белый», «с подогревом»."""
+    out = []
+    for m in _REQ_ATTR_RX.finditer(text):
+        label, key = m.group(0).lower(), m.group(1).lower().replace("ё", "е")
+        key = key[:3] if key.startswith(("бел", "черн", "красн", "син")) else key   # цвет: «белый» = «белая» = «белых»
+        if (label, key) not in out:
+            out.append((label, key))
+    return out
+
+
+def check_attrs(pos: dict) -> None:
+    """Сверить признаки клиента с описаниями предложений: нашлись — такие предложения идут первыми, нет — скажем честно."""
+    wants = pos.get("want_attrs") or []
+    if not wants or not pos.get("variants"):
+        return
+    seen: dict[str, bool] = {k: False for _, k in wants}
+    for var in pos["variants"]:
+        o = var.get("offers") or {}
+        rows = ([o["original"]] if o.get("original") else []) + list(o.get("analogs") or [])
+        def has(r: dict, k: str) -> bool:
+            d = str(r.get("description") or "").lower().replace("ё", "е")
+            return bool(re.search(r"(?<![а-яё])" + re.escape(k), d) or (k in _ATTR_LATIN and re.search(_ATTR_LATIN[k], d)))
+        for _, k in wants:
+            if any(has(r, k) for r in rows):
+                seen[k] = True
+        if o.get("analogs"):
+            o["analogs"] = sorted(o["analogs"], key=lambda r: not all(has(r, k) for _, k in wants if seen[k]))
+    pos["attr_check"] = {"matched": [lab for lab, k in wants if seen[k]], "missing": [lab for lab, k in wants if not seen[k]]}
 
 
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
