@@ -1378,9 +1378,11 @@ def compare_model(model: str, v: Vehicle) -> list[str]:
     if not model:
         return out
     m = re.search(r"\b(19[89]\d|20[0-4]\d)\b", model)
-    made = v.attrs.get("manufactured") or (re.search(r"(19|20)\d\d", v.attrs.get("date", "")) or [""])[0]
-    if m and made and abs(int(m.group(1)) - int(made[:4])) > 1:
-        out.append(f"В заявке {m.group(1)} год, по VIN — {made[:4]}")
+    # Поле «выпущено» у Laximo бывает и словом («СТАР…»): год берём только если он там есть
+    year = re.search(r"\b(?:19|20)\d\d\b", f"{v.attrs.get('manufactured', '')} {v.attrs.get('date', '')}")
+    made = year.group(0) if year else ""
+    if m and made and abs(int(m.group(1)) - int(made)) > 1:
+        out.append(f"В заявке {m.group(1)} год, по VIN — {made}")
     m = re.search(r"\b(\d)[.,](\d)\b", model)
     eng = " ".join(v.attrs.get(k, "") for k in ("engine", "engine_info"))
     e = re.search(r"\b(\d)[.,](\d)\s*L\b", eng, re.I) or re.search(r"\b(\d)(\d)\d\d\s*CC\b", eng, re.I)

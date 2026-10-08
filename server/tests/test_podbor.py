@@ -1363,3 +1363,15 @@ def test_quantity_is_always_stated_and_summed_carefully():
     assert "• Рычаг — 2 шт." in text and "• Тяги — 2 шт." in text and "на одну сторону" in text and "уточним по каталогу" in text
     assert "не нашли" not in text
     assert quantity_summary([pos("тяги", v("2"))]) == []            # одна позиция — итог не нужен
+
+
+def test_compare_model_survives_non_numeric_manufactured_year():
+    """500 на /v1/podbor: поле «выпущено» у Laximo бывает словом («СТАР…») — int() падал."""
+    from types import SimpleNamespace
+    from app.podbor.engine import compare_model
+    v = SimpleNamespace(attrs={"manufactured": "СТАРЫЙ ВЫПУСК", "date": "", "engine": "1.6 L"})
+    assert compare_model("Модель авто: Ford Focus 2012 год", v) == []            # года нет — не сравниваем, не падаем
+    v2 = SimpleNamespace(attrs={"manufactured": "СТАР", "date": "03.05.2010", "engine": ""})
+    assert compare_model("Ford Focus 2015 год", v2) == ["В заявке 2015 год, по VIN — 2010"]
+    v3 = SimpleNamespace(attrs={"manufactured": "2011", "date": "", "engine": "1.6 L"})
+    assert compare_model("Focus 2012", v3) == []                                  # разница в год допустима
