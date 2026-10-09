@@ -486,7 +486,8 @@ class Engine:
             return
         emb = EMB.get()
         handled = await self._arbitrate_emb(emb, v, tree, positions) if emb is not None else set()
-        weak = [i for i, p in enumerate(positions) if i not in handled and self._weak(p, tree)][:MAX_ARBITER]
+        weak = [i for i, p in enumerate(positions)
+                if i not in handled and not p.get("parts") and self._weak(p, tree)][:MAX_ARBITER]
         if not weak:
             return
         parsed = await asyncio.gather(*(U.understand(self.llm, positions[i]["query"]) for i in weak),
@@ -516,8 +517,9 @@ class Engine:
         """Арбитр с кандидатами «3 от правил + 3 от эмбеддингов» (emb.py). Уверенные правила, чья группа есть в пятёрке
         эмбеддингов, не трогаем; остальное выбирает модель. «Не деталь / уточнить / менеджеру» — позицию не показываем,
         её получит менеджер. Возвращает номера разобранных позиций; прочие слабые идут старым путём."""
+        # Детали узла по позициям схемы (Audi: все рычаги) — структура каталога надёжнее мнения модели: не трогаем
         idx = [i for i, p in enumerate(positions)
-               if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop)]
+               if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop) and not p.get("parts")]
         vecs = await emb.embed([positions[i]["query"] for i in idx]) if idx else None
         if not vecs:
             return set()
@@ -543,8 +545,8 @@ class Engine:
                                     dropped=(old.get("query") or "")[:200], arbiter=pick)
                 done.add(i)
                 continue
-            if old.get("groups") and old["groups"][0]["name"] == pick:
-                done.add(i)   # модель подтвердила правила
+            if any(g.get("name") == pick for g in old.get("groups") or []):
+                done.add(i)   # модель подтвердила одну из групп правил
                 continue
             side = T.Side(old["side"].get("axis", ""), old["side"].get("lr", ""))
             try:
