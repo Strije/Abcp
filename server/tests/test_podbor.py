@@ -1583,3 +1583,10 @@ def test_by_suppliers_splits_numbers_of_one_kind():
     assert by_suppliers(kinds, ["датчик", "распредва"])["pulse"] == [cam]
     # слово стороны не решает: её проверили по ценам
     assert by_suppliers(kinds, ["датчик", "передн"])["pulse"] == [cam, crank]
+
+
+def test_long_shaft_names_in_sensor_requests():
+    from app.podbor import text as T
+    assert T.expand("Датчик положения коленчатого вала") == "Датчик положения коленвала"
+    assert T.expand("датчики распределительного вала") == "датчики распредвала"
+    assert T.expand("сальник коленчатого вала") == "сальник коленчатого вала"
