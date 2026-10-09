@@ -1591,3 +1591,14 @@ def test_long_shaft_names_in_sensor_requests():
     assert T.expand("Датчик положения коленчатого вала") == "Датчик положения коленвала"
     assert T.expand("датчики распределительного вала") == "датчики распредвала"
     assert T.expand("сальник коленчатого вала") == "сальник коленчатого вала"
+
+
+def test_journal_keeps_model_substitution_for_synonyms():
+    from app.podbor.journal import brief
+    res = {"status": "ok", "positions": [
+        {"query": "кольцо подвесного", "status": "found", "llm_part": "подшипник подвесной", "was_score": 0.4,
+         "groups": [{"name": "Подшипник подвесной"}, {"name": "Уплотнения"}], "variants": []},
+        {"query": "колодки", "status": "found", "groups": [{"name": "Колодки"}], "variants": []}]}
+    p1, p2 = brief(res)["positions"]
+    assert p1["llm_part"] == "подшипник подвесной" and p1["groups"][0] == "Подшипник подвесной"
+    assert "llm_part" not in p2 and p2["groups"] == ["Колодки"]

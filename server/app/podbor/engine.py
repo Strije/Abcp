@@ -2054,7 +2054,7 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 if diffs[n - 1]:
                     lines.append(f"   Отличие по каталогу: {diffs[n - 1]}.")   # размер, фирма, комплектация из примечаний
             elif per:
-                lines.append(f"   {per[:1].upper() + per[1:]}.")
+                lines.append(f"   {per[:1].upper() + per[1:].rstrip('.')}.")   # «1 шт.» — без второй точки
             lines += ["   " + r for r in rows]
             if more:
                 lines.append(f"   Есть ещё {more} {plural(more, 'вариант', 'варианта', 'вариантов')} — подберём под бюджет.")

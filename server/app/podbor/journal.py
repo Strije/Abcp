@@ -29,6 +29,10 @@ def brief(res: dict) -> dict:
         "car": (res.get("vehicle") or {}).get("short") or (res.get("vehicle") or {}).get("summary") or "",
         "positions": [{"query": p.get("query"), "kind": p.get("kind", ""), "status": p.get("status"),
                        "question": p.get("question", ""),
+                       # Что подставила модель вместо слов клиента и какие группы давали правила — запас для словаря
+                       # синонимов: повторяющиеся подтверждённые пары переносим в podbor_rules.json, модель им не нужна
+                       **({"llm_part": p["llm_part"], "was_score": p.get("was_score")} if p.get("llm_part") else {}),
+                       "groups": [g.get("name") for g in (p.get("groups") or [])[:3]],
                        "variants": [[v.get("oem"), v.get("name")] for v in p.get("variants", [])[:4]]}
                       for p in res.get("positions", [])],
         "reply": {"kind": reply.get("kind"), "picks": len(reply.get("picks") or []),
