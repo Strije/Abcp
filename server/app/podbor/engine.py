@@ -454,7 +454,9 @@ class Engine:
 
     def _coverage_info(self, p: dict, tree: TreeIndex | None = None) -> tuple[float, int]:
         """(доля значимых слов клиента, нашедшихся в названиях группы, её синонимах и вариантов; сколько слов всего)."""
-        words = [s for s in T.stems(T.expand(p.get("query", "")), self.stop) if not T.side_of_word(s) and not s.endswith(".")]
+        # «Комплект», «набор» — не слова детали: «Комплект передних рычагов» без них снимался как частичное совпадение
+        words = [s for s in T.stems(T.expand(p.get("query", "")), self.stop)
+                 if not T.side_of_word(s) and not s.endswith(".") and s not in _GENERIC_HEADS]
         if tree is not None:
             words = [tree.fix(s) for s in words]   # «подшибник» = «подшипник»: опечатка — не потерянное слово
         if len(words) < 2 or p.get("status") == "not_found":
@@ -718,6 +720,11 @@ class Engine:
                    for nc in self.not_catalog)
 
     async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
+        kit = _KIT_OF.match(query)
+        if kit:
+            # Ищем сами детали («передних рычагов»), в заголовке — слова клиента; «все» решит node_parts/wants_all
+            pos = await self.position(v, tree, kit.group(1), want, kind)
+            return pos | {"query": query}
         pos = await self._position(v, tree, query, want, kind)
         if pos["status"] == "not_found" and want.axis == "rear" and _DISC.search(query):
             # «Диски задние» на машине с барабанами: дисков в каталоге нет — даём барабаны и говорим об этом
@@ -954,6 +961,28 @@ class Engine:
             R.annotate(var, [query])
             pos["variants"].append(var)
             pos["note"] = (pos["note"] + " " if pos["note"] else "") + note2
+        if pos["question"].startswith("В каталоге несколько вариантов") and not pos.get("asked") \
+                and node_parts(pos["variants"]):
+            # Разные позиции одной схемы — разные детали, а не выбор: «сравните со снятой» тут не к месту
+            pos["parts"] = True
+            pos.pop("differ", None)
+            if wants_all(query, self.stop):
+                try:
+                    extra = await self._complete_node(v, groups, pool, kept, want)
+                except Exception:
+                    extra = []   # добор — подсказка: из-за него подбор не падает
+                pos["variants"] += [self._variant(c, v, alt=False) for c in extra]
+                # «РЫЧАГ» 8K0407509A без «перед» в примечании — в узле передней подвески: ось как у остальных деталей узла
+                axes = {x["axis"] for x in pos["variants"]} - {""}
+                if len(axes) == 1:
+                    for x in pos["variants"]:
+                        x["axis"] = x["axis"] or next(iter(axes))
+                pos["status"], pos["question"] = "found", ""
+                pos["note"] = ("Это разные детали узла, на машине стоят все — у каждой своя позиция на схеме."
+                               + (" " + pos["note"] if pos["note"] else ""))
+            else:
+                pos["question"] = ("Это разные детали узла — на машине стоят все, у каждой своя позиция на схеме. "
+                                   "Какую меняете? Можно написать номер позиции.")
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
             self.catalog.learn(main.d.group_id, main.d.name)
         return pos
@@ -1164,6 +1193,35 @@ class Engine:
                 f"других фирм, которые подходят к вашей машине. Можно поменять и {what[0]} целиком — "
                 f"напишите «{what[2]}».")
         return c, note
+
+    async def _complete_node(self, v: Vehicle, groups: list, pool: list[Detail], kept: list[Candidate],
+                             want: T.Side) -> list[Candidate]:
+        """«Передние рычаги» у Audi A4: группы каталога дали несущий и верхние рычаги, а подрулевой (направляющий) лежит в том
+        же узле под другой группой. Клиент просит все — добираем из узла детали с тем же главным словом на других позициях;
+        мелочь узла («Кронштейн рычага», болты) — нет. Больше шести — это уже не «все рычаги», а что-то не то."""
+        heads = {_name_head(c.d.name) for c in kept} - {""}
+        units = {c.d.unit_id for c in kept}
+        if len(heads) != 1 or len(units) != 1:
+            return []
+        head, unit = next(iter(heads)), next(iter(units))
+        have = {str(c.d.code_on_image) for c in kept} | {_key(c.d.oem) for c in kept}
+        mine = [g for g, _ in groups if g.id in {c.d.group_id for c in kept}] or [g for g, _ in groups]
+        lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g in mine), return_exceptions=True)
+        every = list(pool) + [d for x in lists if isinstance(x, list) for d in x]
+        others = _NEIGHBORS - {head}
+        extra: dict[str, Candidate] = {}
+        for d in every:
+            if d.unit_id != unit or not d.code_on_image or _key(d.oem) in have or str(d.code_on_image) in have:
+                continue
+            st = T.stems(T.expand(d.name), self.stop)
+            if not any(T.same(head, s) for s in st) or any(T.same(n, s) for n in others for s in st):
+                continue
+            side = T.side(d.context, self.pr_axis)
+            if not want.conflicts(side):
+                extra.setdefault(_key(d.oem), Candidate(d, 1.0, 1.0, True, side, "каталог" if side.axis else ""))
+        if not extra or len(extra) > 6:
+            return []
+        return await self._check_sides(v, list(extra.values()), want)
 
     async def _second_bushing(self, v: Vehicle, groups: list, pool: list[Detail], kept: list[Candidate], want: T.Side,
                               host: tuple) -> tuple[Candidate, str] | None:
@@ -1563,6 +1621,44 @@ def _has_original(c: Candidate, v: Vehicle) -> bool:
     return bool(o["original"])
 
 
+def node_parts(variants: list[dict]) -> bool:
+    """Найденное — разные детали одного узла, а не варианты на выбор: у Audi A4 спереди несущий, верхний передний и
+    верхний задний рычаги — на схеме узла у каждого своя позиция, на машине стоят все. Варианты на выбор (комплектация,
+    замена номера) стоят на одной позиции. Нет позиции у кого-то, повтор позиции или разные узлы — не решаем, как раньше."""
+    by_side: dict[tuple, list[dict]] = {}
+    for v in variants:
+        if not v.get("alt"):
+            by_side.setdefault((v.get("axis", ""), v.get("lr", "")), []).append(v)
+    multi = [vs for vs in by_side.values() if len(vs) > 1]
+    if not multi:
+        return False
+    for vs in multi:
+        codes = [str((v.get("scheme") or {}).get("code") or "").strip() for v in vs]
+        units = {(v.get("scheme") or {}).get("unit_id") for v in vs}
+        if not all(codes) or len(set(codes)) != len(codes) or len(units) != 1:
+            return False
+    return True
+
+
+_ALL_WORDS = re.compile(r"(?<![а-яё])(?:комплект\w*|набор\w*|все|вс[её]|в\s+круг|полностью)(?![а-яё])", re.I)
+
+
+def wants_all(query: str, stop: frozenset[str]) -> bool:
+    """Клиент просит все такие детали: «рычаги», «передних рычагов», «комплект», «все», «в круг» — а не одну («рычаг»)."""
+    if _ALL_WORDS.search(query):
+        return True
+    st = T.stems(T.expand(query), stop)
+    head = T.head(st) if st else None
+    word = next((w for w in T.words(query) if head and T.stem(w) == head), "")
+    return bool(re.search(r"(?:[иы]|ов|ев|ей)$", word.lower()))
+
+
+# «Комплект передних рычагов», «набор сайлентблоков»: у производителя такой детали нет — это все такие детали узла
+# (поштучно у VAG, комплектом — у других фирм). «Комплект сцепления/ГРМ/прокладок» — настоящие группы каталога, не трогаем
+_KIT_OF = re.compile(r"^\s*(?:комплект\w*|набор\w*)\s+((?:[а-яё]+\s+){0,2}(?:рычаг|сайлентблок|сайлент|амортизатор|стоек|стойк|"
+                     r"пружин|опор|втул|тяг|наконечник|свеч|катуш|форсун|шаров)[а-яё]*.*)$", re.I)
+
+
 def verdict(kinds: list[tuple[str, str, str]], want: T.Side, query: str = "") -> tuple[str, str]:
     if len(kinds) == 1:
         return "found", ""
@@ -1734,6 +1830,8 @@ def quantity_summary(positions: list[dict]) -> list[str]:
         axes = {a for a, _ in sides if a}
         if len(counts) != len(groups):
             out.append(f"• {title} — количество уточним по каталогу")
+        elif p.get("parts") and p.get("status") == "found":
+            out.append(f"• {title} — {sum(counts)} шт. (все детали узла, по позициям выше)")   # разные детали — складываем
         elif len(axes) > 1:
             # И передние, и задние показаны потому, что клиент не сказал, какие нужны: складывать оси нельзя
             per_axis = set(counts)
@@ -1869,18 +1967,24 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 groups.append((var, []))
         # Сначала передние, потом задние; левые перед правыми — как читает клиент
         side_order = {"front": 0, "": 1, "rear": 2}   # не «order»: тот — порядок разделов, нужен следующим позициям
-        groups.sort(key=lambda g: (side_order.get(g[0]["axis"], 1), {"left": 0, "": 1, "right": 2}.get(g[0]["lr"], 1)))
+        def pos_no(var: dict) -> int:   # детали узла — по номеру позиции на схеме: 1, 7, 10, 11, а не 1, 10, 11, 7
+            m = re.match(r"\d+", str((var.get("scheme") or {}).get("code") or "")) if p.get("parts") else None
+            return int(m.group(0)) if m else 0
+        groups.sort(key=lambda g: (side_order.get(g[0]["axis"], 1), {"left": 0, "": 1, "right": 2}.get(g[0]["lr"], 1),
+                                   pos_no(g[0])))
         many = len(groups) > 1
         labels = [T.side_label(query, var["axis"], var["lr"]) for var, _ in groups]
         seen: dict[str, int] = {}
         diffs = note_diffs([g[0] for g in groups]) if many else []
         # Как каждый вариант назван в ответе («Задние, вариант 2») — чтобы объяснение ссылалось на то же
         called, cnt = {}, {}
+        code = lambda var: str((var.get("scheme") or {}).get("code") or "").strip()  # noqa: E731
         for n, (var, _) in enumerate(groups, 1):
             side = labels[n - 1]
             if not side or labels.count(side) > 1:
                 cnt[side] = cnt.get(side, 0) + 1
-                called[var["oem"]] = f"вариант {cnt[side]}" if side else f"вариант {n}"
+                called[var["oem"]] = (f"поз. {code(var)}" if p.get("parts")
+                                      else f"вариант {cnt[side]}" if side else f"вариант {n}")
             else:
                 called[var["oem"]] = side.lower()
         if many and p.get("differ"):
@@ -1895,7 +1999,11 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                     # Несколько вариантов на одной стороне: «Задняя, вариант 2 — «Скоба»»
                     seen[side] = seen.get(side, 0) + 1
                     name = ru_name(base_name(var["name"]))
-                    side = (f"{side}, вариант {seen[side]}" if side else f"Вариант {n}") + f" — «{name}»"
+                    if p.get("parts"):
+                        # Разные детали узла: номер позиции на схеме — по нему клиент и скажет, что нужно
+                        side = (f"{side}, поз. {code(var)}" if side else f"Поз. {code(var)}") + f" — «{name}»"
+                    else:
+                        side = (f"{side}, вариант {seen[side]}" if side else f"Вариант {n}") + f" — «{name}»"
                 lines += ["", f"   {side}" + (f" ({per})" if per else "") + ":"]
                 if diffs[n - 1]:
                     lines.append(f"   Отличие по каталогу: {diffs[n - 1]}.")   # размер, фирма, комплектация из примечаний

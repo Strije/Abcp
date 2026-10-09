@@ -1523,3 +1523,27 @@ def test_ball_joint_from_lever_crosses():
     assert eng._part_of_assembly(v, kept, T.stems("шаровые", eng.stop)) is None
     # Клиент просил рычаг — не трогаем
     assert eng._part_of_assembly(v, [lever("45201-62J00", "right")], T.stems("рычаг передний", eng.stop)) is None
+
+def test_node_parts_are_not_choices():
+    """Audi A4 09.10: несущий и верхние рычаги — разные позиции одной схемы: это разные детали (стоят все), а не
+    «варианты на выбор, сравните со снятой». Одна позиция под разными номерами — по-прежнему варианты."""
+    from app.podbor.engine import _KIT_OF, node_parts, quantity_summary, wants_all
+    from app.podbor.measure import STOP
+
+    def var(oem, code, lr="left", unit=1, alt=False):
+        return {"oem": oem, "axis": "front", "lr": lr, "alt": alt, "amount": "1",
+                "scheme": {"code": code, "unit_id": unit}}
+    levers = [var("8K0407151D", "3"), var("8K0407505A", "1"), var("8K0407152D", "3", "right"), var("8K0407506A", "1", "right")]
+    assert node_parts(levers)
+    assert not node_parts([var("A", "3"), var("B", "3")])                  # одна позиция — варианты (комплектация)
+    assert not node_parts([var("A", "3"), var("B", "")])                   # нет позиции — не решаем
+    assert not node_parts([var("A", "3"), var("B", "1", unit=2)])          # разные узлы — не решаем
+    assert not node_parts([var("A", "3", "left"), var("B", "3", "right")])  # левый и правый — это стороны, не позиции
+    assert wants_all("передние рычаги", STOP) and wants_all("передних рычагов", STOP)
+    assert wants_all("колодки в круг", STOP) and not wants_all("рычаг передний нижний", STOP)
+    assert _KIT_OF.match("Комплект передних рычагов").group(1) == "передних рычагов"
+    assert _KIT_OF.match("комплект рычагов передний")
+    assert not _KIT_OF.match("комплект сцепления") and not _KIT_OF.match("комплект ГРМ") and not _KIT_OF.match("комплект прокладок")
+    p = {"query": "передние рычаги", "status": "found", "parts": True, "variants": levers}
+    other = {"query": "фильтр", "status": "found", "variants": [var("X", "1", "")]}
+    assert "4 шт. (все детали узла" in quantity_summary([p, other])[0]
