@@ -1626,11 +1626,16 @@ def by_suppliers(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> dic
                 kinds = {k: cs for k, cs in kinds.items() if share.get(k, 1.0) >= 0.05}
     out = {}
     for k, cs in kinds.items():
-        per = {id(c): _share(d, words) for c in cs if len(d := _descs([c])) >= 5}
-        top = max(per.values(), default=0.0)
-        # Номер, который поставщики почти не зовут словом клиента, когда соседа зовут: 06H906433 — «распредвал» в 17 из
-        # 86 описаний, 07L905163B — в 63 из 82. Номер без описаний не трогаем
-        out[k] = [c for c in cs if top < 0.3 or per.get(id(c), 1.0) * 3 >= top] if len(per) >= 2 else cs
+        descs = {id(c): d for c in cs if len(d := _descs([c])) >= 5}
+        # Каждое слово отдельно: «положения» поставщики пишут у обоих датчиков — оно не решает, решает «коленвал»
+        for w in words if len(descs) >= 2 else []:
+            per = {id(c): _share(descs[id(c)], [w]) for c in cs if id(c) in descs}
+            top = max(per.values(), default=0.0)
+            # Номер, который поставщики почти не зовут словом клиента, когда соседа зовут: 06H906433 — «распредвал» в 17
+            # из 86 описаний, 07L905163B — в 63 из 82. Номер без описаний не трогаем
+            if top >= 0.3:
+                cs = [c for c in cs if per.get(id(c), 1.0) * 3 >= top]
+        out[k] = cs
     return out
 
 

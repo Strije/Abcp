@@ -1581,6 +1581,7 @@ def test_by_suppliers_splits_numbers_of_one_kind():
     kinds = {"pulse": [cam, crank]}
     assert by_suppliers(kinds, ["датчик", "коленва"])["pulse"] == [crank]
     assert by_suppliers(kinds, ["датчик", "распредва"])["pulse"] == [cam]
+    assert by_suppliers(kinds, ["датчик", "положен", "коленва"])["pulse"] == [crank]
     # слово стороны не решает: её проверили по ценам
     assert by_suppliers(kinds, ["датчик", "передн"])["pulse"] == [cam, crank]
 
