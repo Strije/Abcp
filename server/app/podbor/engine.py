@@ -1204,7 +1204,9 @@ class Engine:
             # В каталоге сама деталь есть отдельно — обычный путь
             if not kept or any(any(T.same(w, s) for w in desc_words for s in T.stems(c.d.name, self.stop)) for c in kept):
                 return None
-            if not all(any(T.same(_name_head(c.d.name), h) for h in hosts) for c in kept):
+            # В «Рычагах и тягах подвески» рядом с рычагом — тяги: деталь берём из кроссов самих рычагов
+            kept = [c for c in kept if any(T.same(_name_head(c.d.name), h) for h in hosts)]
+            if not kept:
                 return None
             rows, seen = [], set()
             for c in kept:
