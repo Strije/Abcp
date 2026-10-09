@@ -335,6 +335,9 @@ class Engine:
                 hp = D.from_llm(parsed, mem, analogs, text)
                 if hp["reply"] or hp["jobs"] or hp["handoff"]:
                     plan = hp
+        arts = A.find(text, limit=6)
+        if arts and plan["kind"] not in ("pick", "answer"):
+            return await self._follow_articles(res, text, arts, plan, mem, positions, v, tree, t0)
         if plan["kind"] == "llm":
             res["handoff"] = plan["handoff"]
             if plan["reply"]:
@@ -359,6 +362,33 @@ class Engine:
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
         return self._done(res, "ok", t0, mem, replaced)
+
+    async def _follow_articles(self, res: dict, text: str, arts: list[str], plan: dict, mem: dict, positions: list[dict],
+                               v: Vehicle, tree: TreeIndex, t0: float) -> dict:
+        """Номера деталей в продолжении разговора («LEMFORDER 3394401 две штуки, CB0349 две штуки»): номер, который уже
+        показывали, — это выбор (с количеством); новый номер проверяем как номер, а не ищем словами по каталогу
+        (08.10: робот искал «LEMFORDER 3394401» как название, писал «не нашли», и на «все вместе» оформлять было нечего)."""
+        lines = [x for x in re.split(r"[\n;]", text) if x.strip()] or [text]
+        picks, new = [], []
+        for a in arts:
+            line = next((x for x in lines if A.norm(a) in A.norm(x)), text)
+            hit = next(((p, x) for p in positions for x in D.all_offers(p)
+                        if A.norm(str(x["offer"].get("number") or "")) == A.norm(a)), None)
+            if hit:
+                picks.append(D._pick(hit[0], hit[1], False, want_qty(line) or 0))
+            else:
+                new.append((a, line))
+        found = [await self._article(v, tree, a, "", None) for a, _ in new]
+        res["positions"] = [p | {"want_qty": want_qty(line)} for p, (_, line) in zip(found, new) if p is not None]
+        # Остальные детали из той же реплики («…и ещё масляный фильтр») — как обычно, без строк с номерами
+        jobs = [(q, s) for q, s in (plan.get("jobs") or [])
+                if not any(A.norm(a) in A.norm(q) for a in arts) and self._partish(q, tree)]
+        res["positions"] += list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
+        if picks:
+            res["reply"] = await self._reply({"kind": "order", "picks": picks, "unclear": []}, positions, v)
+        if not res["positions"]:
+            return self._done(res, "order" if picks else "chat", t0, mem)
+        return self._done(res, "ok", t0, mem)
 
     def _word(self, s: str, tree: TreeIndex) -> bool:
         """Слово из словаря каталога этой машины (опечатку правим только в слово словаря: «масленный» — да,

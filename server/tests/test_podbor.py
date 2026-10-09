@@ -1462,3 +1462,33 @@ def test_partial_match_goes_to_model_then_manager_not_shown():
     Engine._manager_handoff(res)
     assert res["handoff"] == ["тормозной бачок — подбор неуверенный, передано менеджеру"]
     assert "передали менеджеру" in draft(res)
+
+
+def test_followup_article_numbers_pick_shown_and_check_new():
+    """08.10, Suzuki Swift: «LEMFORDER 3394401 две штуки / CB0349 две штуки» после показанного «Lemforder 33944 01» —
+    показанный номер оформляем (2 шт.), новый проверяем как номер, а не ищем словами по каталогу."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor.engine import Engine, load_rules
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    offer = {"brand": "Lemforder", "number": "33944 01", "name": "Сайлентблок", "price": 1300.0, "days": 7, "tags": []}
+    mem_pos = [{"query": "Сайлентблоки передних рычагов", "turn": 6, "kind": "part", "side": {"axis": "front", "lr": ""},
+                "variants": [{"oem": "45530-62J00", "name": "Сайлентблок", "axis": "front", "lr": "",
+                              "offers": {"original": None, "analogs": [offer]}}]}]
+    checked = []
+
+    async def article(v, tree, number, hint="", positions=None):
+        checked.append(number)
+        return {"query": f"Шаровая опора ({number})", "status": "found", "kind": "part", "groups": [], "variants": [],
+                "side": {"axis": "", "lr": ""}, "note": "", "question": ""}
+    eng._article = article
+    eng._done = lambda res, status, t0, prev=None, replaced=None: res | {"status": status}
+    res = {"positions": [], "reply": None, "warnings": []}
+    text = "LEMFORDER\t3394401 две штуки\nCB0349 две штуки"
+    from app.podbor import article as A
+    out = asyncio.run(eng._follow_articles(res, text, A.find(text), {"jobs": []}, {}, mem_pos, None, None, 0))
+    assert checked == ["CB0349"]
+    assert out["reply"]["kind"] == "order" and len(out["reply"]["picks"]) == 1
+    assert out["reply"]["picks"][0]["qty"] == 2 and out["reply"]["picks"][0]["offer"]["number"] == "33944 01"
+    assert out["positions"][0]["want_qty"] == 2 and out["status"] == "ok"
