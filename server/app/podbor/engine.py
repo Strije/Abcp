@@ -548,6 +548,11 @@ class Engine:
             if any(g.get("name") == pick for g in old.get("groups") or []):
                 done.add(i)   # модель подтвердила одну из групп правил
                 continue
+            if self._score(old) >= SURE_SCORE and not self._weak(old, tree):
+                # Уверенные правила модель может подтвердить или снять («т-банк» → глушитель), но не заменить: на «лямбда»
+                # (Датчик кислорода, 1.0) она выбирала «Электронику двигателя, датчики» — и в ответ попадал датчик детонации
+                done.add(i)
+                continue
             side = T.Side(old["side"].get("axis", ""), old["side"].get("lr", ""))
             try:
                 alt = await self.position(v, tree, pick, side)
