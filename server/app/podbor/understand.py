@@ -60,7 +60,7 @@ _CARD = re.compile(r"\b(?:\d[ -]?){16}\b")
 def mask(text: str) -> str:
     """Перед отправкой модели: без телефонов, почты, карт и VIN — ей нужен только текст про детали."""
     t = _CARD.sub("[карта]", _MAIL.sub("[почта]", _PHONE.sub("[тел]", text)))
-    return T._VIN_TOKEN.sub("[VIN]", t) if hasattr(T, "_VIN_TOKEN") else t
+    return T._VIN_TOKEN.sub("[VIN]", t)
 
 
 def parse(raw: str) -> dict | None:
