@@ -1564,3 +1564,22 @@ def test_by_suppliers_word_only_one_kind_has():
     knock2 = kind([f"датчик детонации коленвала {i}" for i in range(2)] + [f"датчик детонации {i}" for i in range(8)])
     out = by_suppliers({"pulse": pulse, "knock": knock2}, ["датчик", "коленва"])
     assert list(out) == ["pulse", "knock"]
+
+
+def test_by_suppliers_splits_numbers_of_one_kind():
+    """«Датчиком импульсов» Audi зовёт и датчик распредвала, и коленвала — номер берём по описаниям поставщиков
+    («положения коленчатого вала» — тоже коленвал)."""
+    from types import SimpleNamespace as NS
+    from app.podbor.engine import by_suppliers
+
+    def cand(descs):
+        return NS(rows=[{"description": d} for d in descs])
+    cam = cand([f"датчик положения распредвала {i}" for i in range(60)] + [f"датчик коленвала {i}" for i in range(3)]
+               + [f"датчик холла {i}" for i in range(20)])
+    crank = cand([f"датчик положения коленчатого вала {i}" for i in range(50)]
+                 + [f"датчик распредвала {i}" for i in range(17)] + [f"датчик {i}" for i in range(19)])
+    kinds = {"pulse": [cam, crank]}
+    assert by_suppliers(kinds, ["датчик", "коленва"])["pulse"] == [crank]
+    assert by_suppliers(kinds, ["датчик", "распредва"])["pulse"] == [cam]
+    # слово стороны не решает: её проверили по ценам
+    assert by_suppliers(kinds, ["датчик", "передн"])["pulse"] == [cam, crank]

@@ -1582,27 +1582,56 @@ def needs_llm(chunks: list[str]) -> bool:
     return (len(chunks) >= 3 or len(body) > 120 or bool(re.search(r":\s*$|:\s|\+|\bлибо\b|\(", body, re.M)))
 
 
+_LONG_SHAFT = ((re.compile(r"коленчат\w*\s+вал\w*"), "коленвал"), (re.compile(r"распределит\w*\s+вал\w*"), "распредвал"))
+
+
+def _descs(cs: list["Candidate"]) -> set[str]:
+    out = set()
+    for c in cs:
+        for r in c.rows or []:
+            d = str(r.get("description") or "").lower()
+            for rx, short in _LONG_SHAFT:   # «датчик положения коленчатого вала» — тот же «датчик коленвала»
+                d = rx.sub(short, d)
+            if d:
+                out.add(d)
+    return out
+
+
+def _share(descs: set[str], words: list[str]) -> float:
+    return sum(1 for d in descs if any(T.same(w, s) for w in words for s in T.stems(d))) / len(descs)
+
+
 def by_suppliers(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> dict[tuple, list["Candidate"]]:
     """В группе несколько разных деталей (у VAG в «Электронике двигателя» — «Датчик импульсов», детонации,
     давления), а клиент назвал какую: «датчик коленвала». Оставляем те, у которых поставщики в описаниях
-    пишут это слово («датчик положения коленвала»), если у других его нет совсем."""
-    if len(kinds) < 2 or len(known) < 2:
+    пишут это слово («датчик положения коленвала»), если у других его нет совсем. Потом то же по номерам внутри
+    вида: «Датчиком импульсов» Audi зовёт и датчик распредвала (07L905163B), и коленвала (06H906433)."""
+    if len(known) < 2:
         return kinds
     head = T.head(known)
-    words = [s for s in known if s != head]
-    share = {}
+    words = [s for s in known if s != head and not (T.side(s).axis or T.side(s).lr)]   # сторону уже проверили по ценам
+    if not words:
+        return kinds
+    if len(kinds) >= 2:
+        share = {}
+        for k, cs in kinds.items():
+            descs = _descs(cs)
+            if len(descs) >= 5:
+                share[k] = _share(descs, words)
+        if share:
+            top, rest = max(share.values()), sorted(share.values())[-2] if len(share) > 1 else 0.0
+            # Слово только у одного вида — хватает и 10%: у «Датчика импульсов» Audi «коленвал» в 49 описаниях из 164
+            # (прочие — «распредвала»), у датчиков детонации и давления — ни в одном
+            if top >= 0.3 or (top >= 0.1 and rest == 0):
+                kinds = {k: cs for k, cs in kinds.items() if share.get(k, 1.0) >= 0.05}
+    out = {}
     for k, cs in kinds.items():
-        descs = {str(r.get("description") or "").lower() for c in cs for r in (c.rows or [])} - {""}
-        if len(descs) >= 5:
-            share[k] = sum(1 for d in descs if any(T.same(w, s) for w in words for s in T.stems(d))) / len(descs)
-    if not share:
-        return kinds
-    top, rest = max(share.values()), sorted(share.values())[-2] if len(share) > 1 else 0.0
-    # Слово только у одного вида — хватает и 10%: у «Датчика импульсов» Audi «коленвал» в 49 описаниях из 164 (прочие —
-    # «распредвала»), у датчиков детонации и давления — ни в одном
-    if top < 0.3 and not (top >= 0.1 and rest == 0):
-        return kinds
-    return {k: cs for k, cs in kinds.items() if share.get(k, 1.0) >= 0.05}
+        per = {id(c): _share(d, words) for c in cs if len(d := _descs([c])) >= 5}
+        top = max(per.values(), default=0.0)
+        # Номер, который поставщики почти не зовут словом клиента, когда соседа зовут: 06H906433 — «распредвал» в 17 из
+        # 86 описаний, 07L905163B — в 63 из 82. Номер без описаний не трогаем
+        out[k] = [c for c in cs if top < 0.3 or per.get(id(c), 1.0) * 3 >= top] if len(per) >= 2 else cs
+    return out
 
 
 def share_noun(pieces: list[str], stop: frozenset[str]) -> list[str]:
