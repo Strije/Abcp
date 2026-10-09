@@ -9,7 +9,7 @@ import collections
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -925,6 +925,12 @@ class Engine:
         # Отзывы владельцев о фирмах по этому виду детали — по словам клиента и названиям групп
         for var in pos["variants"]:
             R.annotate(var, [query] + [g.name for g, _ in groups])
+        second = None
+        if host and any(is_bushing(c.d.name) for c in kept):
+            try:
+                second = await self._second_bushing(v, groups, pool, kept, want, host)
+            except Exception:
+                second = None   # подсказка: из-за неё подбор не падает
         pos["status"], pos["question"] = verdict(list(kinds), want, query)
         try:
             await self._explain(v, pos, kept)   # «почему два номера и как выбрать» — из фактов
@@ -941,6 +947,13 @@ class Engine:
         if head_miss and not pos["note"] and re.search(r"[а-яё]", main.d.name, re.I):   # «BOOT KIT…» — не пропуск   # своё пояснение важнее: «подшипник» → «ступица в сборе»
             pos["note"] = (f"«{head_miss[:1].upper() + head_miss[1:]}» уточним по каталогу отдельно, "
                            f"ниже — «{ru_name(main.d.name)}».")
+        if second:
+            c2, note2 = second
+            var = self._variant(c2, v, alt=False)
+            var["via"] = c2.d.oem
+            R.annotate(var, [query])
+            pos["variants"].append(var)
+            pos["note"] = (pos["note"] + " " if pos["note"] else "") + note2
         if pos["status"] == "found" and not main.member and main.prec >= 1.0:
             self.catalog.learn(main.d.group_id, main.d.name)
         return pos
@@ -1151,6 +1164,34 @@ class Engine:
                 f"других фирм, которые подходят к вашей машине. Можно поменять и {what[0]} целиком — "
                 f"напишите «{what[2]}».")
         return c, note
+
+    async def _second_bushing(self, v: Vehicle, groups: list, pool: list[Detail], kept: list[Candidate], want: T.Side,
+                              host: tuple) -> tuple[Candidate, str] | None:
+        """В рычаге Suzuki Swift два сайлентблока: передний есть в каталоге (45530-62J00), задний Suzuki отдельно не
+        продаёт — его номера (Febest SZAB-SX4B, Fenox CAB20018, ASVA 0701-013B) поставщики привязывают только к рычагу.
+        Берём сайлентблоки из кроссов рычага, которых нет среди кроссов известного; меньше двух номеров — случайность."""
+        mine = [g for g, _ in groups if g.id in {c.d.group_id for c in kept}] or [g for g, _ in groups]
+        lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g in mine), return_exceptions=True)
+        every = [d for d in pool if d.group_id in {g.id for g in mine}] + [d for x in lists if isinstance(x, list) for d in x]
+        # Каталог сам продаёт другие сайлентблоки этого узла (у Hyundai передний и задний — свои номера): «второй
+        # отдельно не продаётся» было бы неправдой, а клиент мог просить именно этот
+        own = self._bushings_in_unit(every, want, host)
+        if {_key(c.d.oem) for c in own} - {_key(c.d.oem) for c in kept}:
+            return None
+        found = await self._bushings_by_host(v, every, want, host)
+        if not found:
+            return None
+        c, _ = found
+        num = lambda r: (bkey(r.get("brand")), _key(r.get("numberFix") or r.get("number")))  # noqa: E731
+        known = {num(r) for k in kept for r in k.rows or []} | {("", _key(k.d.oem)) for k in kept}
+        rest = [r for r in c.rows or [] if num(r) not in known and ("", num(r)[1]) not in known]
+        if len({num(r) for r in rest}) < 2:
+            return None
+        c.rows, c.vote = rest, axis_vote(rest)
+        c.d = replace(c.d, name=f"Сайлентблок {host[1][1]}, второй")
+        maker = nice_brand(oem_brand_for(v.brand))
+        return c, (f"Сайлентблоков у {host[1][1]} больше одного: второй {maker} отдельно не продаёт — только {host[1][0]} "
+                   f"в сборе, поэтому ниже он показан отдельно, сайлентблоками других фирм.")
 
     def _part_of_assembly(self, v: Vehicle, kept: list[Candidate], q: list[str]) -> tuple[Candidate, str] | None:
         """Производитель продаёт узел целиком, а другие фирмы — его детали отдельно: на «шаровые» Suzuki Swift каталог дал
