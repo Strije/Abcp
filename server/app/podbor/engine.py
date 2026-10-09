@@ -885,6 +885,13 @@ class Engine:
             pos["note"] = "По описаниям поставщиков найденные номера относятся к другой стороне."
             return pos
         kept = prefer_named_offers(kept, q)
+        part = self._part_of_assembly(v, kept, q)
+        if part:
+            c, note = part
+            pos.update(status="found", question="", note=note, variants=[self._variant(c, v, alt=False)])
+            pos["variants"][0]["via"] = c.d.oem
+            R.annotate(pos["variants"][0], [query])
+            return pos
         host = _host(q) if any(T.same(T.head(q) or "", b) for b in _BUSH) else None
         if host and not any(is_bushing(c.d.name) and any(T.same(h, s) for h in host[0]
                                                            for s in T.stems(c.d.name, self.stop)) for c in kept):
@@ -1145,6 +1152,44 @@ class Engine:
                 f"напишите «{what[2]}».")
         return c, note
 
+    def _part_of_assembly(self, v: Vehicle, kept: list[Candidate], q: list[str]) -> tuple[Candidate, str] | None:
+        """Производитель продаёт узел целиком, а другие фирмы — его детали отдельно: на «шаровые» Suzuki Swift каталог дал
+        только рычаги в сборе (45201/45202-62J00), а среди аналогов рычага есть шаровые опоры (Jikiu JB23562). Клиент
+        назвал деталь — показываем из кроссов узла только её; рычаг целиком — по отдельной просьбе.
+        Описания поставщиков уже есть (_check_sides), новых запросов нет."""
+        for words, desc_words, hosts, (title, what, many, host_what, ask) in _ASSEMBLY_PARTS:
+            if not all(any(T.same(w, s) for s in q) for w in words):
+                continue
+            # В каталоге сама деталь есть отдельно — обычный путь
+            if not kept or any(any(T.same(w, s) for w in desc_words for s in T.stems(c.d.name, self.stop)) for c in kept):
+                return None
+            if not all(any(T.same(_name_head(c.d.name), h) for h in hosts) for c in kept):
+                return None
+            rows, seen = [], set()
+            for c in kept:
+                for r in c.rows or []:
+                    desc = str(r.get("description") or "")
+                    st = T.stems(desc, self.stop)
+                    key = (bkey(r.get("brand")), _key(r.get("numberFix") or r.get("number")))
+                    if key in seen or not any(T.same(w, s) for w in desc_words for s in st) \
+                            or any(T.same(_desc_head(desc), h) for h in hosts):
+                        continue
+                    seen.add(key)
+                    rows.append(r)
+            if not rows:
+                return None
+            unit = kept[0]
+            d = Detail(oem=unit.d.oem, name=title, note="", amount="", match=None, unit=unit.d.unit,
+                       unit_note=unit.d.unit_note, unit_id=unit.d.unit_id, unit_ssd=unit.d.unit_ssd, image=unit.d.image,
+                       code_on_image=unit.d.code_on_image, category=unit.d.category, group_id=unit.d.group_id)
+            c = Candidate(d, 1.0, 1.0, True, T.Side(unit.side.axis, ""), "каталог", brand=unit.brand, rows=rows,
+                          vote=axis_vote(rows))
+            maker = nice_brand(oem_brand_for(v.brand))
+            note = (f"Отдельно {maker} {what} не продаёт — только {host_what} в сборе. Ниже — {many} других фирм, которые "
+                    f"подходят к вашей машине. Можно поменять и {host_what} целиком — напишите «{ask}».")
+            return c, note
+        return None
+
     async def _price(self, v: Vehicle, c: Candidate):
         c.brand, c.rows = "", None
         for attempt in range(2):   # поставщики разово не ответили — иначе «цену и срок уточним» при живых ценах
@@ -1270,6 +1315,16 @@ _HOSTS = [([T.stem("рычаг")], ("рычаг", "рычага", "рычаг"))
           ([T.stem("цапфа"), T.stem("кулак")], ("цапфу", "цапфы", "цапфа задняя")),
           ([T.stem("тяга")], ("тягу", "тяги", "тяга")),
           ([T.stem("балка")], ("балку", "балки", "балка"))]
+
+
+# Деталь, которую производитель продаёт только в узле: (слова клиента, слова детали в описании, узел,
+# (название, деталь в вин. падеже, во мн. числе, узел в вин. падеже, как попросить узел целиком)). Сайлентблоки — отдельно (_bushings_by_host)
+_ASSEMBLY_PARTS = [
+    ([T.stem("шаровая")], [T.stem("шаровая"), T.stem("шаровой")], [T.stem("рычаг")],
+     ("Опора шаровая", "шаровую опору", "шаровые опоры", "рычаг", "рычаг в сборе")),
+    ([T.stem("подшипник"), T.stem("ступица")], [T.stem("подшипник")], [T.stem("ступица")],
+     ("Подшипник ступицы", "подшипник ступицы", "подшипники ступицы", "ступицу", "ступица в сборе")),
+]
 
 
 def _host(q: list[str]) -> tuple[list[str], tuple[str, str, str]] | None:

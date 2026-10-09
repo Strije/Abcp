@@ -1492,3 +1492,34 @@ def test_followup_article_numbers_pick_shown_and_check_new():
     assert out["reply"]["kind"] == "order" and len(out["reply"]["picks"]) == 1
     assert out["reply"]["picks"][0]["qty"] == 2 and out["reply"]["picks"][0]["offer"]["number"] == "33944 01"
     assert out["positions"][0]["want_qty"] == 2 and out["status"] == "ok"
+
+def test_ball_joint_from_lever_crosses():
+    """Suzuki Swift 08.10: на «шаровые» каталог дал только рычаги в сборе, а среди их аналогов есть шаровые опоры —
+    показываем только шаровые (рычаги и оригинал рычага — нет) и честно пишем, что отдельно производитель не продаёт."""
+    from types import SimpleNamespace
+    from app.podbor import text as T
+    from app.podbor.catalog import Detail
+    from app.podbor.engine import Candidate, Engine, load_rules
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+
+    def lever(oem, lr):
+        d = Detail(oem=oem, name="Рычаг передней подвески", note="", amount="", match=None, unit="", unit_note="",
+                   unit_id=0, unit_ssd="", image="", code_on_image="", category="", group_id=1)
+        rows = [{"brand": "Suzuki", "number": oem, "description": "Рычаг передней подвески", "price": 9000},
+                {"brand": "Jikiu", "number": "JB23562", "description": "Опора шаровая opel agila suzuki swift", "price": 1370},
+                {"brand": "Sufix", "number": "SH-1557", "description": "Рычаг подвески перед лев", "price": 2400}]
+        return Candidate(d, 1.0, 1.0, True, T.Side("front", lr), "каталог", brand="SUZUKI", rows=rows, vote=None)
+    kept = [lever("45201-62J00", "right"), lever("45202-62J00", "left")]
+    v = SimpleNamespace(brand="SUZUKI")
+    got = eng._part_of_assembly(v, kept, T.stems("шаровые", eng.stop))
+    assert got is not None
+    c, note = got
+    assert [r["number"] for r in c.rows] == ["JB23562"] and c.d.name == "Опора шаровая"
+    assert "только рычаг в сборе" in note and "шаровые опоры других фирм" in note
+    # Сама шаровая есть в каталоге отдельно — обычный путь
+    kept[0].d = Detail(oem="X", name="Опора шаровая", note="", amount="", match=None, unit="", unit_note="", unit_id=0,
+                       unit_ssd="", image="", code_on_image="", category="", group_id=1)
+    assert eng._part_of_assembly(v, kept, T.stems("шаровые", eng.stop)) is None
+    # Клиент просил рычаг — не трогаем
+    assert eng._part_of_assembly(v, [lever("45201-62J00", "right")], T.stems("рычаг передний", eng.stop)) is None
