@@ -323,6 +323,38 @@ async function rate(ti, good) {
 function retry(ti) { if (ti === chat.turns.length - 1) go(null, chat.turns[ti].text); }
 function pickVehicle(ti, i) { if (ti === chat.turns.length - 1) go(i, chat.turns[ti].text); }
 
+// Схема узла с отмеченной позицией детали. Потерялась при переходе страницы на чат (27d650d) — кнопка вызывала
+// несуществующую функцию: «scheme is not defined»
+async function scheme(ti, pi, vi, btn) {
+  const v = chat.turns[ti].result.positions[pi].variants[vi], s = v.scheme;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `<div class="scheme"><img alt="Схема узла" src="${esc(s.image)}"></div>
+    <div class="scheme-note muted">${s.code ? `Деталь — позиция <b>${esc(s.code)}</b> на схеме, отмечена цветом. ` : ""}Нажмите на схему, чтобы открыть крупно.</div>`;
+  btn.replaceWith(wrap);
+  const box = wrap.querySelector(".scheme"), img = box.querySelector("img"), note = wrap.querySelector(".scheme-note");
+  img.addEventListener("click", () => window.open(s.image, "_blank", "noopener"));
+  if (!s.code) return;
+  try {
+    const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                             body: JSON.stringify({catalog: s.catalog, ssd: s.ssd, unitId: s.unit_id})});
+    const map = await r.json();
+    const hits = (Array.isArray(map) ? map : []).filter(m => String(m.code) === String(s.code));
+    const mark = () => {
+      // Проценты от исходного размера: отметка остаётся на месте при любом масштабе и повороте экрана
+      const W = img.naturalWidth, H = img.naturalHeight;
+      for (const m of hits) {
+        const h = document.createElement("div"); h.className = "hit";
+        Object.assign(h.style, {left: m.x1 / W * 100 + "%", top: m.y1 / H * 100 + "%",
+                                width: (m.x2 - m.x1) / W * 100 + "%", height: (m.y2 - m.y1) / H * 100 + "%"});
+        box.appendChild(h);
+      }
+      if (hits.length) box.querySelector(".hit").scrollIntoView({block: "center", behavior: "smooth"});
+      else note.innerHTML = `Деталь — позиция <b>${esc(s.code)}</b> на схеме (каталог не дал её координат). Нажмите на схему, чтобы открыть крупно.`;
+    };
+    img.complete && img.naturalWidth ? mark() : img.addEventListener("load", mark);
+  } catch (e) { /* схема без подсветки — тоже полезна, номер позиции написан под ней */ }
+}
+
 function copyDraft(ti, btn) {
   navigator.clipboard.writeText($("#draft-" + ti).textContent).then(() => { btn.textContent = "Скопировано"; });
 }
