@@ -1595,7 +1595,12 @@ def by_suppliers(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> dic
         descs = {str(r.get("description") or "").lower() for c in cs for r in (c.rows or [])} - {""}
         if len(descs) >= 5:
             share[k] = sum(1 for d in descs if any(T.same(w, s) for w in words for s in T.stems(d))) / len(descs)
-    if not share or max(share.values()) < 0.3:
+    if not share:
+        return kinds
+    top, rest = max(share.values()), sorted(share.values())[-2] if len(share) > 1 else 0.0
+    # Слово только у одного вида — хватает и 10%: у «Датчика импульсов» Audi «коленвал» в 49 описаниях из 164 (прочие —
+    # «распредвала»), у датчиков детонации и давления — ни в одном
+    if top < 0.3 and not (top >= 0.1 and rest == 0):
         return kinds
     return {k: cs for k, cs in kinds.items() if share.get(k, 1.0) >= 0.05}
 

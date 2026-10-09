@@ -1547,3 +1547,20 @@ def test_node_parts_are_not_choices():
     p = {"query": "передние рычаги", "status": "found", "parts": True, "variants": levers}
     other = {"query": "фильтр", "status": "found", "variants": [var("X", "1", "")]}
     assert "4 шт. (все детали узла" in quantity_summary([p, other])[0]
+
+def test_by_suppliers_word_only_one_kind_has():
+    """«Датчик коленвала» у Audi: «коленвал» в описаниях только у «Датчика импульсов» (29% — прочие «распредвала»),
+    у детонации и давления — ни разу. Этого хватает, чтобы их убрать; слово у двух видов при 29% — не решаем."""
+    from types import SimpleNamespace as NS
+    from app.podbor.engine import by_suppliers
+
+    def kind(descs):
+        return [NS(rows=[{"description": d} for d in descs])]
+    pulse = kind([f"датчик положения коленвала {i}" for i in range(29)] + [f"датчик распредвала {i}" for i in range(71)])
+    knock = kind([f"датчик детонации {i}" for i in range(10)])
+    press = kind([f"датчик давления топлива {i}" for i in range(10)])
+    out = by_suppliers({"pulse": pulse, "knock": knock, "press": press}, ["датчик", "коленва"])
+    assert list(out) == ["pulse"]
+    knock2 = kind([f"датчик детонации коленвала {i}" for i in range(2)] + [f"датчик детонации {i}" for i in range(8)])
+    out = by_suppliers({"pulse": pulse, "knock": knock2}, ["датчик", "коленва"])
+    assert list(out) == ["pulse", "knock"]

@@ -79,9 +79,9 @@
   {"name": "SsangYong: российский VIN — просим корейский", "turns": [
     {"say": "SsangYong Korando Z8UTA0B1SDP000123 колодки", "expect": {"text": ["начинается на букву K"]}}]},
 
-  {"name": "Ford Focus III: подшипник задней ступицы — ступица в сборе", "turns": [
-    {"say": "X9FKXXEEBKCB57566 подшипник задней ступицы", "expect": {"status": "ok", "axis": "rear", "found": ["ступица"],
-                                                                   "text": ["ступиц"]}}]},
+  {"name": "Ford Focus III: подшипник задней ступицы — Ford продаёт ступицей, подшипники других фирм", "turns": [
+    {"say": "X9FKXXEEBKCB57566 подшипник задней ступицы", "expect": {"status": "ok", "axis": "rear", "found": ["подшипник"],
+                                                                   "text": ["только ступицу в сборе", "ступица в сборе"]}}]},
   {"name": "Ford Focus III: колодки передние, термостат, катушка", "turns": [
     {"say": "X9FKXXEEBKCB57566 колодки передние, термостат, катушка зажигания",
      "expect": {"positions": 3, "found": ["колод", "термостат", "катушка"]}}]},
