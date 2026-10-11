@@ -239,10 +239,9 @@ class Engine:
         carless = [(_without_car(q, v), s) if not meta else (q, s) for q, s in items[:MAX_POSITIONS]]
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s, kinds[i])
                                                        for i, (q, s) in enumerate(carless))))
-        if not meta:
-            for p, (q, _) in zip(res["positions"], items):
-                if p.get("query") != q:
-                    p["core"], p["query"] = p.get("query"), q   # «core» — фраза без машины: по ней считаем покрытие слов
+        for p, (q, _), (cq, _) in zip(res["positions"], items, carless):
+            if cq != q and p.get("query") == cq:
+                p["core"], p["query"] = cq, q   # «core» — фраза без машины: по ней считаем покрытие слов
         asks = [a for a in asks if res["positions"][a["position"]].get("variants")]   # «комплект Zekkert» без детали — не про фирму
         if asks:
             res["reply"] = await self._reply({"kind": "answer", "answers": [], "picks": [], "ask_brand": asks},
