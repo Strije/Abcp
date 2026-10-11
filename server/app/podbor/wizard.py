@@ -27,7 +27,7 @@ _NOISE = {"подойдёт", "подойдет", "подходит", "ли", "�
           "vin", "frame", "здравствуйте", "добрый", "день", "вечер", "утро", "нужен", "нужна", "нужно", "есть", "можно",
           "рестайлинг", "дорест", "дорестайлинг", "год", "года", "лет", "объем", "объём", "двигатель", "дизель", "бензин",
           "акпп", "мкпп", "амт", "при", "по", "под", "что", "это", "как", "ваш", "вам", "вас", "если", "данная", "модель",
-          "подходящая", "наличии", "тоже", "уже", "писали"}
+          "подходящая", "наличии", "тоже", "уже", "писали", "вин", "вина", "код", "номер", "фото"}
 
 _CYR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
                 ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "i", "k", "l", "m", "n", "o", "p", "r", "s", "t",
@@ -78,7 +78,8 @@ def tokens(text: str, brand_rx: str = "") -> list[str]:
     """Слова клиента, которые могут быть названием модели: без служебных, самой марки и чисел."""
     out = []
     for w in re.findall(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9-]*", text):
-        if w.lower() in _NOISE or len(w) < 3 or brand_of(w):
+        # Короткие слова и слитые с цифрами («XUUJA2G26P0004388» — это VIN) названием модели не бывают
+        if w.lower() in _NOISE or len(w) < 4 or brand_of(w) or (len(w) >= 8 and re.search(r"\d", w)):
             continue
         out.append(w)
     return out
@@ -88,7 +89,7 @@ def _option_tokens(value: str) -> list[str]:
     return [t for t in re.split(r"[\s/,.()\-]+", value) if len(t) >= 3 and re.search(r"[A-Za-zА-Яа-я]", t)]
 
 
-def match_options(words: list[str], options: list[dict], need: float = 0.86) -> list[dict]:
+def match_options(words: list[str], options: list[dict], need: float = 0.95) -> list[dict]:
     """Варианты мастера, которые клиент назвал: слово и соседняя пара слов против слов варианта по звуковому ключу.
     Берём лучшие (в пределах 0,02) — «Octavia» и «Octavia A5» оба; слабее порога — ничего."""
     cands = list(words) + [a + b for a, b in zip(words, words[1:])]
@@ -130,3 +131,19 @@ def pick_condition(rows: list, *needles: str) -> dict | None:
         if any(n in str(c.get("name", "")).lower() for n in needles):
             return c
     return None
+
+
+# Рынок варианта и откуда машина по VIN: китайский Karoq (SAIC VW) российскому не годится, американскую Forte в Европу не ищем
+_REGION_OF_VIN = {"1": "na", "2": "na", "3": "na", "4": "na", "5": "na", "J": "jp", "K": "kr", "L": "cn"}
+_MARKET = (("na", r"сша|usa|америк|\bus\b|канад|\bcan\b|мексик|\bmex\b"), ("cn", r"китай|china|saic|faw|gac|chery|\bcn\b"),
+           ("jp", r"япон|japan|\bjpn\b"), ("au", r"австрал|\baus\b"))
+
+
+def market_ok(market: str, vin: str = "") -> bool:
+    """Подходит ли рынок варианта машине с таким VIN. Рынок не опознали — допускаем."""
+    low = (market or "").lower()
+    where = next((r for r, rx in _MARKET if re.search(rx, low)), "")
+    if not where:
+        return True
+    home = _REGION_OF_VIN.get((vin or " ")[0].upper(), "eu")
+    return where == home

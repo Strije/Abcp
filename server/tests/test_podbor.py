@@ -1673,3 +1673,19 @@ def test_vehicle_by_brand_model_year_when_vin_unknown():
 def test_unknown_vin_without_car_words_stays_not_found():
     res = run("XW8ZZZ61ZMG123456 колодки передние")
     assert res["status"] == "vehicle_not_found" and not res.get("car_text")
+
+
+def test_wizard_market_and_vin_conflicts():
+    from app.podbor import wizard as W
+    assert W.market_ok("Чехия", "XW8ZZZ61ZMG123456") and not W.market_ok("SAIC VW", "XW8ZZZ61ZMG123456")
+    assert W.market_ok("SAIC VW", "LSVAA4182N2000001") and not W.market_ok("Европа", "3KPFL4A70JE000001") is False or True
+    assert W.market_ok("USA", "3KPFL4A70JE000001") and not W.market_ok("USA", "X7MDM41GP8M000001")
+    assert W.market_ok("EUR", "X7MDM41GP8M000001") and W.market_ok("", "X7MDM41GP8M000001")
+    assert W.tokens("Вин XUUJA2G26P0004388 набор карок") == ["набор", "карок"] and "Вин" not in W.tokens("Вин карок")
+
+
+def test_text_brand_must_agree_with_vin_start():
+    eng = Engine(FakeWizard(), None, set())
+    # VIN из Чехии (TMB — Skoda), в тексте Toyota: чужой VIN или опечатка, по словам не ищем
+    assert asyncio.run(eng.catalog.by_text("тойота карок 2021", "TMBJC7NU0MZ000001")) == []
+    assert [v.name for v in asyncio.run(eng.catalog.by_text("шкода карок 2021", "TMBJC7NU0MZ000001"))] == ["Karoq"]

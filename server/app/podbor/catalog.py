@@ -507,7 +507,10 @@ class Catalog:
         по звуку, в рынке такой год есть, а если марку клиент не назвал («бампер на карок») — модель нашлась лишь в
         одном из каталогов, подходящих по началу VIN. Не уверены — пусто, робот скажет «пришлите VIN»."""
         brand = W.brand_of(text)
-        brands = [brand] if brand else W.wmi_brands(vin)
+        by_vin = W.wmi_brands(vin)
+        if brand and by_vin and brand not in by_vin:
+            return []   # в тексте одна марка, VIN от другой (опечатка в VIN или чужая машина) — ничему не верим
+        brands = [brand] if brand else by_vin
         if not brands:
             return []
         try:
@@ -546,7 +549,8 @@ class Catalog:
             if any(c.get("allowListVehicles") for c in rows):
                 starts = [(model["key"], rows)]
             elif market and market.get("options") and not market.get("determined"):
-                starts = [(o["key"], await wiz(o["key"])) for o in market["options"][:3]]   # рынок не назван — все
+                starts = [(o["key"], await wiz(o["key"])) for o in market["options"]
+                          if W.market_ok(o.get("value", ""), vin)][:3]   # рынок не назван — все, что подходят по VIN
             else:
                 continue
             for ssd, rws in starts:
@@ -559,8 +563,10 @@ class Catalog:
                 found += await listing(ssd)
         uniq: dict[tuple, Vehicle] = {}
         for v in found:
-            uniq.setdefault((v.vehicle_id, v.name, v.attrs.get("market", ""), v.attrs.get("prodrange", "")), v)
-        return list(uniq.values())
+            if W.market_ok(v.attrs.get("market", ""), vin):
+                uniq.setdefault((v.vehicle_id, v.name, v.attrs.get("market", ""), v.attrs.get("prodrange", "")), v)
+        # Слишком много вариантов («TrailBlazer» — 20 машин разных рынков): выбирать из них клиенту нечем, пусть пришлёт VIN
+        return list(uniq.values()) if len(uniq) <= 6 else []
 
     # --- дерево групп ---
     @staticmethod
