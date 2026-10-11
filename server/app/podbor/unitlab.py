@@ -22,7 +22,7 @@ from .catalog import TreeIndex
 from .engine import UNIT_SCORE, Engine, kind_of, share_noun
 from .fleet import CACHE, _catalog
 from .lab import _MAKES, _has_part, _kind
-from .measure import ENGINE, STOP, _fleet_trees
+from .measure import ENGINE, RULES, STOP
 from .sources import Direct, Remote
 
 SAMPLE = 40
@@ -34,28 +34,6 @@ def _parts(q: str, part) -> list[str]:
     parts = [x for x in parts if part(x)] or parts
     stems_of = lambda x: T.stems(T.expand(x), STOP)   # noqa: E731
     return [x for x in parts if kind_of(stems_of(x)) == "part" and not ENGINE.outside(stems_of(x))]
-
-
-async def _unit_trees(src, ready: list[dict]) -> dict[str, tuple[TreeIndex, list[dict]]]:
-    """Машина парка → (дерево узлов, список узлов). Берём только то, что уже лежит на диске: сеть — один findVehicle на машину."""
-    cat = _catalog(src)
-    out = {}
-    for f in ready:
-        try:
-            vs = await cat.vehicles(f["vin"])
-            if not vs:
-                continue
-            ut = await cat.unit_tree(vs[0])
-            if ut is None:
-                continue
-            units = await cat.units(vs[0])
-        except Exception as e:   # noqa: BLE001 — одна машина не должна ронять ночной прогон
-            print(f"  {f['make']}: {type(e).__name__} {str(e)[:80]}", file=sys.stderr)
-            continue
-        out[f"{f['make']} {f['name'][:40]}"] = (ut, units)
-        cat._vehicles.clear()
-        await asyncio.sleep(0.2)
-    return out
 
 
 def _head_in(unit: str, part: str) -> bool:
@@ -72,7 +50,7 @@ async def main(argv=None) -> int:
     ap.add_argument("--remote", default="")
     a = ap.parse_args(argv)
     ready = json.loads((CACHE / "fleet_ready.json").read_text(encoding="utf-8"))
-    quick = _fleet_trees()
+    nt = frozenset(T.stem(w) for w in RULES.get("not_typos", {}).get("words", []))
     if a.remote:
         src = Remote(a.remote)
     else:
@@ -81,48 +59,60 @@ async def main(argv=None) -> int:
         lx = Laximo(load())
         lx.usage = Usage(None)
         src = Direct(lx, None, "")
-    try:
-        units = await _unit_trees(src, ready)
-    finally:
-        await src.close() if a.remote else await lx.close()
-    cars = [c for c in quick if c in units]
-    print(f"Машин с быстрыми группами и списком узлов: {len(cars)} из {len(quick)}")
+    cat = _catalog(src)
     rows = []
     for p in a.phrases:
         rows += [x.split("\t")[0] for x in Path(p).read_text(encoding="utf-8").splitlines() if x.strip()]
     rows = list(dict.fromkeys(rows))
     part = _has_part()
-    report, miss_total, saved_total, checked = [], 0, 0, 0
-    emb_jobs = []   # (фраза, часть, машина) для векторов
-    for q in rows:
-        parts = _parts(q, part)
-        if not parts:
+    plan = {q: _parts(q, part) for q in rows}
+    plan = {q: ps for q, ps in plan.items() if ps}
+    # Память: сервер маленький, поэтому машина за машиной — деревья одной машины живут только пока её считаем
+    agg: dict[str, dict] = {q: {"miss": 0, "saved": 0, "suspicious": 0, "units": collections.Counter()} for q in plan}
+    emb_jobs, unit_names, cars, checked = [], {}, 0, 0
+    for f in ready:
+        path = CACHE / "trees" / f"{f['tree']}.json"
+        if not path.exists():
             continue
-        miss = saved = 0
-        names = collections.Counter()
-        suspicious = 0
-        for car in cars:
-            tree, (ut, _) = quick[car], units[car]
+        try:
+            vs = await cat.vehicles(f["vin"])
+            ut = await cat.unit_tree(vs[0]) if vs else None
+            units = await cat.units(vs[0]) if ut else []
+        except Exception as e:   # noqa: BLE001 — одна машина не должна ронять ночной прогон
+            print(f"  {f['make']}: {type(e).__name__} {str(e)[:80]}", file=sys.stderr)
+            continue
+        cat._vehicles.clear()
+        if ut is None:
+            continue
+        tree = TreeIndex(json.loads(path.read_text(encoding="utf-8"))["tree"], STOP, None, RULES["synonyms"], nt)
+        car = f"{f['make']} {f['name'][:40]}"
+        cars += 1
+        unit_names[car] = list(dict.fromkeys(u["name"] for u in units))
+        for q, parts in plan.items():
             for x in parts:
                 st = T.stems(x, STOP)
                 kind, _, _ = _kind(tree.rank(st, T.side(x)), st, tree)
                 checked += 1
                 if kind != "мимо":
                     continue
-                miss += 1
+                g = agg[q]
+                g["miss"] += 1
                 got = ut.rank(st, T.side(x))
                 if got and got[0][1] >= UNIT_SCORE:
-                    saved += 1
-                    names[got[0][0].name] += 1
-                    suspicious += not _head_in(got[0][0].name, x)
+                    g["saved"] += 1
+                    g["units"][got[0][0].name] += 1
+                    g["suspicious"] += not _head_in(got[0][0].name, x)
                 elif a.emb:
                     emb_jobs.append((q, x, car))
-        if miss:
-            report.append({"query": q, "miss": miss, "saved": saved, "suspicious": suspicious, "units": names.most_common(3)})
-            miss_total += miss
-            saved_total += saved
+        await asyncio.sleep(0.2)
+    await src.close() if a.remote else await lx.close()
+    print(f"Машин со списком узлов: {cars}")
+    report = [{"query": q, **{k: v for k, v in g.items() if k != "units"}, "units": g["units"].most_common(3)}
+              for q, g in agg.items() if g["miss"]]
+    miss_total = sum(r["miss"] for r in report)
+    saved_total = sum(r["saved"] for r in report)
     lines = ["# Запасной путь по узлам полного каталога на парке", "",
-             f"Машин: {len(cars)}, фраз: {len(rows)}, проверок «фраза × машина × часть»: {checked}.", "",
+             f"Машин: {cars}, фраз: {len(rows)}, проверок «фраза × машина × часть»: {checked}.", "",
              f"Быстрые группы не нашли деталь («мимо»): {miss_total}. Узлы нашли из них: {saved_total} "
              f"({round(100 * saved_total / max(miss_total, 1))}%). Порог — оценка узла ≥ {UNIT_SCORE}.", ""]
     rescued = sorted((r for r in report if r["saved"]), key=lambda r: -r["saved"])
@@ -133,11 +123,11 @@ async def main(argv=None) -> int:
     lost = sorted((r for r in report if not r["saved"]), key=lambda r: -r["miss"])
     lines += ["", f"## Не нашлось и там ({len(lost)}), по числу машин", ""]
     lines += [f"- {r['query'][:80]} — мимо на {r['miss']} проверках" for r in lost[:80]]
-    (Path(a.out)).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(a.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
     Path(a.out).with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"отчёт: {a.out} · мимо {miss_total}, спасено узлами {saved_total}")
     if a.emb:
-        await _emb(a, units, emb_jobs)
+        await _emb(a, unit_names, emb_jobs)
     return 0
 
 
@@ -163,7 +153,7 @@ async def _emb(a, units, jobs) -> None:
         print("эмбеддинги: ключа или файла векторов групп нет, пропуск")
         return
     np = e.np
-    names = sorted({u["name"] for _, us in units.values() for u in us})
+    names = sorted({n for ns in units.values() for n in ns})
     print(f"эмбеддинги: уникальных названий узлов {len(names)}")
     cache_file = Path(a.out).with_name("unit_names.npz")
     have: dict[str, object] = {}
@@ -195,7 +185,7 @@ async def _emb(a, units, jobs) -> None:
         if seen[q] >= 3 or shown >= 200:
             continue
         seen[q] += 1
-        own = list(dict.fromkeys(u["name"] for u in units[car][1]))
+        own = units[car]
         sims = np.stack([have[n] for n in own]) @ pvec[part]
         j = int(np.argmax(sims))
         out.append(f"- {part[:60]} ({car[:26]}) → «{own[j]}» {float(sims[j]):.2f}")
