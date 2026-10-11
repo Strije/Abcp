@@ -313,6 +313,8 @@ class Engine:
         out = res.setdefault("handoff", [])
         for p in res.get("positions", []):
             kind = p.get("kind", "")
+            if (p.get("article") or {}).get("catalog", {}) and p["article"]["catalog"].get("status") == "FULLY":
+                continue   # номер клиента подтверждён каталогом: передавать менеджеру нечего
             if p.get("dropped"):   # нашлась лишь часть слов клиента, модель лучше не нашла — менеджеру
                 item = f"{p['query']} — подбор неуверенный, передано менеджеру"
                 if item not in out:
@@ -2049,6 +2051,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         lines += requirement_lines(p)
         if p.get("article"):
             lines.append("   " + article_line(p, numbers))
+            if p["status"] == "not_found" and (p["article"].get("catalog") or {}).get("status") == "FULLY":
+                continue   # каталог подтвердил номер — «не смогли подобрать деталь» рядом было бы противоречием
         if p.get("kind") in KIND_NOTE and p["status"] == "not_found":
             lines.append("   " + KIND_NOTE[p["kind"]])
             continue

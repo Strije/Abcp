@@ -1852,3 +1852,15 @@ def test_replacements_hide_duplicates_and_useless_lines():
     asyncio.run(eng._confirm_replacements(v, {"variants": [var1, var2]}))
     assert [r["number"] for r in var1["offers"]["replacements"]] == ["B2"]   # B1 дороже и дольше, A2 уже показан вариантом
     assert [r["number"] for r in var2["offers"]["replacements"]] == ["B3"]   # B2 уже взят первым вариантом
+
+
+def test_article_confirmed_by_catalog_is_not_handed_to_manager():
+    from app.podbor.engine import Engine as E, draft
+    res = {"status": "ok", "vehicle": {"short": "Audi A4", "summary": "Audi A4"}, "warnings": [], "handoff": [],
+           "positions": [{"query": "Датчик импульсов (06H906433)", "status": "not_found", "kind": "part", "variants": [],
+                          "groups": [], "question": "", "note": "", "dropped": "датчик", "side": {"axis": "", "lr": ""},
+                          "article": {"number": "06H906433", "desc": "Датчик", "fit": None, "oem": True,
+                                      "catalog": {"status": "FULLY", "where": ["Электрооборудование"]}}}]}
+    E._manager_handoff(res)
+    text = draft(res)
+    assert "подтверждает каталог по VIN" in text and "передали менеджеру" not in text and not res["handoff"]
