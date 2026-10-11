@@ -1944,6 +1944,7 @@ def test_gate_cancels_arbiter_group_when_confident(monkeypatch):
 # ---------- реестр синонимов ----------
 
 def test_synonym_registry_collects_all_sources(tmp_path):
+    import json
     from app.podbor import registry as R
     (tmp_path / "trees").mkdir()
     tree = {"name": "root", "link": False, "children": [
