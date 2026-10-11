@@ -1864,3 +1864,4 @@ def test_article_confirmed_by_catalog_is_not_handed_to_manager():
     E._manager_handoff(res)
     text = draft(res)
     assert "подтверждает каталог по VIN" in text and "передали менеджеру" not in text and not res["handoff"]
+    assert "Уточним по позициям" not in text

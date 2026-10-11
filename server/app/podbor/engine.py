@@ -2145,8 +2145,11 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         lines += ["", "Сколько нужно купить на машину:"] + summary
     said = " ".join((res.get("request") or {}).get("chunks") or [])
     ordered = bool(D.STATUS.search(said) or _ORDERED.search(said))   # «уже заказал», «оплачено»: оформлять нечего
-    lines.append(("Цены и сроки на сегодня." if ordered else "Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем.") if found
-                 else "Уточним по позициям и напишем.")
+    only_confirmed = bool(res["positions"]) and all((p.get("article") or {}).get("catalog", {}) and
+                                                    p["article"]["catalog"].get("status") == "FULLY" for p in res["positions"])
+    if found or not only_confirmed:   # одни подтверждённые каталогом номера: «уточним по позициям» было бы лишним
+        lines.append(("Цены и сроки на сегодня." if ordered else "Цены и сроки на сегодня. Напишите, какие позиции оформить — закажем.") if found
+                     else "Уточним по позициям и напишем.")
     lines.append(ANYTHING_ELSE)
     return "\n".join(lines).strip("\n")
 
