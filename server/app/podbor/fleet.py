@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from . import text as T
-from .catalog import Catalog, LaximoError
+from .catalog import _safe, Catalog, LaximoError
 from .engine import load_rules
 from .sources import Remote
 
@@ -169,9 +169,46 @@ async def details(queries: str, per_query: str = "1", limit: str = "0"):
     print(f"Новых групп скачано: {asked}")
 
 
+async def units():
+    """Списки узлов полного каталога для готовых машин парка (listCategories → listUnits, 8–40 запросов на машину, на диск
+    навсегда). Нужны лаборатории и ночным замерам: поиск по узлам вне быстрых групп (подрамник, поперечина…) считается по ним.
+    Уже сохранённые не спрашиваем: повторный запуск продолжает с места остановки."""
+    ready = json.loads((CACHE / "fleet_ready.json").read_text(encoding="utf-8"))
+    src = Remote("https://109.73.199.217")
+    cat = _catalog(src)
+    done = fresh = total = 0
+    try:
+        for f in ready:
+            try:
+                vs = await cat.vehicles(f["vin"])
+                if not vs:
+                    continue
+                v = vs[0]
+                had = cat._load_any(f"units/{_safe(v.catalog)}/{cat._car(v)}.json.gz") is not None
+                us = await cat.units(v)
+            except Exception as e:   # сеть, лимит прокси — пробуем следующую
+                print(f"  {f['vin'][:3]}…{f['vin'][-4:]}: {type(e).__name__} {e}")
+                await asyncio.sleep(5)
+                continue
+            if not us:
+                print(f"  ✗ {f['family']:<15} узлов нет: {v.summary()[:50]}")
+                continue
+            done += 1
+            total += len(us)
+            fresh += 0 if had else 1
+            print(f"  {'·' if had else '✓'} {f['family']:<15} {v.catalog:<16} узлов {len(us):4}  {v.summary()[:50]}", flush=True)
+            if not had:
+                await asyncio.sleep(2)   # гостевой прокси сервера: не больше 60 запросов в минуту
+    finally:
+        await src.close()
+    print(f"Машин со списком узлов: {done} (новых {fresh}); узлов всего {total}")
+
+
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
-    if cmd == "pick":
+    if cmd == "units":
+        asyncio.run(units())
+    elif cmd == "pick":
         pick(*args)
     elif cmd == "trees":
         asyncio.run(trees())
