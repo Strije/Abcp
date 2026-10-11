@@ -185,6 +185,8 @@ async def units():
     else:
         src = Remote("https://109.73.199.217")
     cat = _catalog(src)
+    if direct:
+        cat.units_pause = 0.5   # ≈120 запросов в минуту из 600 общих: боевой робот и приложение тоже ходят в Laximo
     done = fresh = total = 0
     try:
         for f in ready:

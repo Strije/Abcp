@@ -439,6 +439,8 @@ class Catalog:
         self.folder = folder
         self.stop = stop
         self._vehicles: dict[str, tuple[float, list[Vehicle]]] = {}
+        self.units_pause = 0.0   # пауза между запросами списка узлов; ставит только массовая закачка парка
+        self._pace = asyncio.Lock()
         self._details: dict[tuple, tuple[float, list[Detail]]] = {}
         self._raw: dict[str, tuple[float, Any]] = {}
         self._trees: dict[str, TreeIndex] = {}
@@ -525,7 +527,16 @@ class Catalog:
 
         async def ask(method: str, params: dict):
             async with sem:
-                return check_error(await self.call(method, params))
+                for attempt in range(4):
+                    if self.units_pause:   # массовая закачка: у Laximo общий лимит 600 запросов в минуту на весь сервис
+                        async with self._pace:
+                            await asyncio.sleep(self.units_pause)
+                    try:
+                        return check_error(await self.call(method, params))
+                    except Exception as e:   # noqa: BLE001
+                        if "TOO_MANY_REQUESTS" not in str(e) or attempt == 3:
+                            raise
+                        await asyncio.sleep(15 * (attempt + 1))
 
         async def walk(cat: dict, path: str, depth: int):
             path = f"{path} / {cat.get('name')}" if path else str(cat.get("name") or "")
