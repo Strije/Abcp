@@ -1865,3 +1865,77 @@ def test_article_confirmed_by_catalog_is_not_handed_to_manager():
     text = draft(res)
     assert "подтверждает каталог по VIN" in text and "передали менеджеру" not in text and not res["handoff"]
     assert "Уточним по позициям" not in text
+
+
+# ---------- «замок» эмбеддингов: обученная на эталоне модель «деталь или нет» ----------
+
+def test_gate_class_scores_from_weights(tmp_path):
+    import json
+    import numpy as np
+    from app.podbor.emb import Emb
+    d = 4
+    w = np.zeros((d + 2, 3), dtype=np.float32)
+    w[0, 0] = 1.0      # первый признак вектора говорит «деталь»
+    w[1, 1] = 2.0      # второй — «НЕ»
+    np.savez(tmp_path / "gate.npz", W=w, classes=np.array(json.dumps(["ДЕТАЛЬ", "НЕ", "УТОЧ"])))
+    emb = Emb(["A"], np.zeros((1, d), dtype=np.float32), "k")
+    assert emb.gate([1, 0, 0, 0], 0.5, 0.4) is None            # весов нет — замка нет
+    emb.load_gate(tmp_path / "gate.npz")
+    code, margin = emb.gate([0, 1, 0, 0], 0.5, 0.4)
+    assert code == "НЕ" and abs(margin - 2.0) < 1e-6
+    code, margin = emb.gate([1, 0, 0, 0], 0.5, 0.4)
+    assert margin < 0                                          # сильнее «деталь»
+    assert emb.gate([1, 0, 0], 0.5, 0.4) is None               # чужая размерность — молчим
+    (tmp_path / "broken.npz").write_bytes(b"not a zip")
+    emb2 = Emb(["A"], np.zeros((1, d), dtype=np.float32), "k")
+    emb2.load_gate(tmp_path / "broken.npz")
+    assert emb2.gate([1, 0, 0, 0], 0.5, 0.4) is None           # битый файл не роняет
+
+
+def test_gate_cancels_arbiter_group_when_confident(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor import emb as EMB
+    from app.podbor.engine import Engine, load_rules
+
+    verdict = {"v": ("НЕ", 0.5)}
+
+    class FakeEmb:
+        async def embed(self, texts):
+            return list(texts)
+
+        def top(self, vec, names, k=5):
+            return [("Бак топливный", 0.5)]
+
+        def gate(self, vec, rules_score, emb_sim):
+            return verdict["v"]
+
+    class Llm:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=0):
+            return '{"choice": "1"}'    # арбитр выбирает первую группу из списка
+
+    monkeypatch.setattr(EMB, "get", lambda: FakeEmb())
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules(), llm=Llm())
+    tree = SimpleNamespace(groups={}, fix=lambda s: s)
+    calls = []
+
+    async def position(v, tree, q, side, kind=""):
+        calls.append(q)
+        return {"query": q, "status": "found", "kind": "part", "note": "", "variants": [{"oem": "X"}], "side": {},
+                "groups": [{"name": q, "score": 1.0}]}
+    eng.position = position
+
+    def one():
+        return [{"query": "других баков нет", "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+                 "groups": []}]
+    ps = one()
+    asyncio.run(eng._arbitrate(None, tree, ps))
+    assert ps[0]["status"] == "not_found" and ps[0]["arbiter"] == "НЕ" and ps[0]["gate"] and not calls
+    # замок не уверен (запас меньше порога) или молчит — выбор арбитра остаётся
+    for v in (("НЕ", 0.1), None):
+        verdict["v"] = v
+        ps = one()
+        asyncio.run(eng._arbitrate(None, tree, ps))
+        assert ps[0]["llm_part"] == "Бак топливный" and "gate" not in ps[0]

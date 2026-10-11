@@ -552,12 +552,15 @@ class Engine:
             return set()
         names = [g.name for g in tree.groups.values()]
         todo = []
+        feats: dict[int, tuple] = {}   # для «замка»: вектор фразы, оценка правил, близость лучшей группы эмбеддингов
         for i, vec in zip(idx, vecs):
             p = positions[i]
-            top = [n for n, _ in emb.top(vec, names, 5)]
+            ranked = emb.top(vec, names, 5)
+            top = [n for n, _ in ranked]
             rules = [g["name"] for g in p.get("groups", [])[:3]]
             if not top or (rules and rules[0] in top and self._score(p) >= SURE_SCORE and not self._weak(p, tree)):
                 continue
+            feats[i] = (vec, self._score(p), ranked[0][1])
             todo.append((i, list(dict.fromkeys(rules + top[:3]))))
         todo = todo[:MAX_ARBITER]
         picks = await asyncio.gather(*(U.pick_group(self.llm, positions[i]["query"], c) for i, c in todo),
@@ -567,9 +570,16 @@ class Engine:
             old = positions[i]
             if not isinstance(pick, str) or not pick:
                 continue
+            gated = False
+            if pick not in U.PICK_CODES:
+                # «Замок»: арбитр выбрал группу, а обученная на эталоне модель уверенно говорит «это не деталь» — молчим
+                # («других баков нет» → «Бак топливный»)
+                verdict = emb.gate(*feats[i]) if i in feats and hasattr(emb, "gate") else None
+                if verdict and verdict[1] >= GATE_MARGIN:
+                    pick, gated = verdict[0], True
             if pick in U.PICK_CODES:
                 positions[i] = dict(old, status="not_found", variants=[], groups=[], question="", note="",
-                                    dropped=(old.get("query") or "")[:200], arbiter=pick)
+                                    dropped=(old.get("query") or "")[:200], arbiter=pick, **({"gate": True} if gated else {}))
                 done.add(i)
                 continue
             if any(g.get("name") == pick for g in old.get("groups") or []):
@@ -2369,6 +2379,7 @@ def check_attrs(pos: dict) -> None:
 
 
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
+GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)

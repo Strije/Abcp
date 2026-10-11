@@ -6,6 +6,11 @@
 
 Векторы групп считаются заранее (лаборатория, Giga-Embeddings-instruct-3B) и лежат файлом EMB_VECTORS (names, vecs);
 вектор фразы — один запрос к Cloud.ru (EMB_API_KEY). Нет ключа или файла — выключено, робот работает как раньше.
+
+«Замок» (EMB_GATE, 12.10.2026): линейная модель на векторе фразы решает, деталь это или нет (НЕ / УТОЧ / МЕН / НЕТ).
+Обучена на 550 размеченных фразах (лаборатория, emb_s7b_train.py); при проверке по частям эталона поднимает итог арбитра
+с 80,2% до 82,0% (исправляет 12 ответов, портит 2). Отменяет только выбор группы арбитром, коды арбитра не трогает.
+Нет файла — замка нет, всё как раньше.
 """
 import base64
 import json
@@ -28,6 +33,31 @@ class Emb:
         self.vecs = np.asarray(vecs, dtype=np.float32)
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), transport=transport,
                                       headers={"Authorization": f"Bearer {key}"})
+        self.gate_w = None        # (веса d×k, названия классов): см. load_gate
+        self.gate_classes: list[str] = []
+
+    def load_gate(self, path: Path) -> None:
+        """Веса «замка»: класс 0 — «деталь», остальные — коды арбитра. Битый файл — замка нет."""
+        try:
+            z = self.np.load(path, allow_pickle=False)
+            w, classes = self.np.asarray(z["W"], dtype=self.np.float32), json.loads(str(z["classes"]))
+            if w.shape[1] == len(classes) and classes and classes[0] == "ДЕТАЛЬ":
+                self.gate_w, self.gate_classes = w, classes
+        except Exception:  # noqa: BLE001 — сломанный файл не должен ронять робота
+            self.gate_w, self.gate_classes = None, []
+
+    def gate(self, vec, rules_score: float, emb_sim: float) -> tuple[str, float] | None:
+        """(код не-детали, насколько он сильнее «детали») или None, если замка нет. Признаки те же, что при обучении:
+        вектор фразы, оценка лучшей группы правил, близость лучшей группы эмбеддингов."""
+        if self.gate_w is None or vec is None:
+            return None
+        x = self.np.concatenate([self.np.asarray(vec, dtype=self.np.float32),
+                                 self.np.asarray([rules_score, emb_sim], dtype=self.np.float32)])
+        if x.shape[0] != self.gate_w.shape[0]:
+            return None
+        s = x @ self.gate_w
+        k = int(self.np.argmax(s[1:])) + 1
+        return self.gate_classes[k], float(s[k] - s[0])
 
     async def embed(self, texts: list[str]):
         """Векторы фраз (нормированные) или None, если сервис не ответил — тогда арбитр работает по-старому."""
@@ -68,6 +98,9 @@ def get() -> Emb | None:
                 import numpy as np
                 z = np.load(path, allow_pickle=False)
                 _STATE["emb"] = Emb(json.loads(str(z["names"])), z["vecs"], key)
+                gate = Path(os.environ.get("EMB_GATE", str(path.with_name("emb_gate.npz"))))
+                if gate.exists():
+                    _STATE["emb"].load_gate(gate)
             except Exception:  # noqa: BLE001 — сломанный файл не должен ронять робота
                 _STATE["emb"] = None
     return _STATE["emb"]
