@@ -1963,3 +1963,32 @@ def test_synonym_registry_collects_all_sources(tmp_path):
     assert any(e["source"] == "rules" for e in reg["entries"]) and any(e["source"] == "typos" for e in reg["entries"])
     md = R.render(reg)
     assert "**Фильтр воздушный**: воздухан (laximo)" in md and "Кандидаты на проверку (1)" in md and "Колпачок маслосъёмный" in md
+
+
+# ---------- Вордстат 10.2026: «туманки» и сайлентблок рессоры ----------
+
+def test_spring_bushing_wording_goes_to_catalog_name():
+    """В каталоге Mercedes сайлентблок рессоры — «подушка рессоры»; по слову «втулка» она находится, по «сайлентблок» — нет."""
+    assert T.expand("Сайлентблоки задней рессоры") == "втулки задней рессоры"
+    assert T.expand("сайлентблок рессоры") == "втулки рессоры"
+    assert T.expand("с/б передней рессоры") == "втулки передней рессоры"
+    assert T.expand("сайлентблок рычага") == "сайлентблок рычага"          # остальные сайлентблоки не трогаем
+    assert T.expand("сайлентблок стабилизатора") == "сайлентблок стабилизатора"
+
+
+def test_fog_light_synonyms_and_question():
+    from app.podbor.catalog import TreeIndex
+    from app.podbor.engine import load_rules
+    rules = load_rules()
+    stop = frozenset(w.lower() for w in rules["stop"])
+    tree = [node(0, "Корень", link=False, children=[node(630, "Фара противотуманная"), node(667, "Задняя противотуманная фара"),
+                                                    node(626, "Лампы"), node(7, "Рычаг стеклоочистителя")])]
+    ti = TreeIndex(tree, stop, {}, rules["synonyms"])
+    for q in ("туманки", "туманка", "птф"):
+        top = ti.rank(T.stems(T.expand(q), stop), T.Side())
+        assert top and top[0][0].id == 630, q
+    rear = ti.rank(T.stems(T.expand("задние туманки"), stop), T.Side("rear", ""))
+    assert rear and rear[0][0].id == 667
+    # вопрос «фары или лампочки» — только на голое «туманки»
+    ask = next(a for a in rules["ask"] if a["query"] == ["туманки"])
+    assert "лампочки" in ask["unless"] and "фары" in ask["unless"] and "лампочки к ним" in ask["text"]
