@@ -501,6 +501,39 @@ class Catalog:
         self._vehicles[key] = (time.time(), found)
         return found
 
+    # --- применимость номера к машине (ответ самого каталога) ---
+    async def applicability(self, v: Vehicle, number: str) -> dict | None:
+        """Подходит ли номер этой машине по каталогу (getOEMPartApplicability): FULLY — да, PARTIAL — возможно (машина
+        найдена по словам, комплектация не подтверждена), NONAPPLICABLE — нет или не упоминается в модели. Номер пишут
+        по-разному: регистр и пробелы каталог терпит, дефисы у VAG ломают («06H-906-433»), а у Toyota они обязательны
+        («48068-48020»), поэтому пробуем несколько записей. Не ответил — None."""
+        typed = re.sub(r"\s+", "", number or "").upper()
+        bare = re.sub(r"[\s.\-]", "", typed)
+        forms = [bare, typed]
+        if re.fullmatch(r"\d{10}", bare):
+            forms.append(f"{bare[:5]}-{bare[5:]}")   # Toyota, Honda: 48068-48020
+        answered = False
+        for form in dict.fromkeys(f for f in forms if f):
+            name = f"applic/{_safe(v.catalog)}-{hashlib.sha1(v.ssd.encode()).hexdigest()[:16]}-{_safe(form)}.json"
+
+            async def fetch(form=form):
+                d = await self.call("getOEMPartApplicability", {"catalog": v.catalog, "ssd": v.ssd, "oem": form, "all": "0"})
+                if not isinstance(d, dict):
+                    return d
+                return {"applicability": d.get("applicability"),
+                        "categories": [c.get("name") for c in (d.get("categories") or [])[:3] if isinstance(c, dict)]}
+            try:
+                data = await self._cached(name, DETAILS_TTL, fetch)
+            except Exception:   # noqa: BLE001 — подсказка: не ответил каталог = не знаем, как раньше
+                continue
+            status = data.get("applicability") if isinstance(data, dict) else None
+            if not status:
+                continue
+            answered = True
+            if status != "NONAPPLICABLE":
+                return {"status": status, "where": [w for w in data.get("categories") or [] if w], "oem": form}
+        return {"status": "NONAPPLICABLE", "where": [], "oem": bare} if answered else None
+
     # --- машина по словам клиента, когда VIN каталог не знает ---
     async def by_text(self, text: str, vin: str = "", limit: int = 6) -> list[Vehicle]:
         """Марка, модель и год из слов клиента → мастер подбора Laximo (getWizard2). Только однозначное: модель совпала
@@ -538,6 +571,22 @@ class Catalog:
                                       lambda: self.call("findVehicleByWizard2", {"catalog": code, "ssd": ssd}))
             return parse_vehicles(data)
 
+        hint = W.engine_hint(text)
+
+        async def refine(ssd: str) -> str:
+            """Объём и мощность двигателя, тип коробки — если клиент их назвал и вариант в мастере однозначный."""
+            if hint["volume"]:
+                ec = W.pick_condition(await wiz(ssd), "двигат", "engine")
+                if ec and ec.get("options") and not ec.get("determined"):
+                    o = W.pick_engine(ec["options"], hint)
+                    ssd = o["key"] if o else ssd
+            if hint["gear"]:
+                tc = W.pick_condition(await wiz(ssd), "трансмис", "короб", "transmission", "gearbox")
+                if tc and tc.get("options") and not tc.get("determined"):
+                    o = W.pick_gear(tc["options"], hint["gear"])
+                    ssd = o["key"] if o else ssd
+            return ssd
+
         rows = await wiz("")
         cond = W.pick_condition(rows, "модел")
         models = W.match_options(W.tokens(text), cond["options"]) if cond and cond.get("options") else []
@@ -560,7 +609,9 @@ class Catalog:
                     if not yo:
                         continue   # на этом рынке такого года нет — не показываем всё подряд
                     ssd = yo["key"]
-                found += await listing(ssd)
+                refined = await refine(ssd)
+                got = await listing(refined) if refined != ssd else []
+                found += got or await listing(ssd)   # уточнение двигателем и коробкой ничего не дало — берём без него
         uniq: dict[tuple, Vehicle] = {}
         for v in found:
             if W.market_ok(v.attrs.get("market", ""), vin):

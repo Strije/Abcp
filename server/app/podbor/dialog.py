@@ -104,6 +104,7 @@ def remember(res: dict, prev: dict | None, replaced: list[int] | None = None) ->
     """Память после ответа: позиции этого ответа заменяют уточнённые, остальные дописываются в конец."""
     req = res.get("request") or {}
     mem = dict(prev or {})
+    mem.pop("unknown_vin", None)   # снова ставит Engine.run, пока VIN каталог не знает
     if req.get("ident") or req.get("plate") or not mem:
         if req.get("ident") != mem.get("ident") or req.get("plate") != mem.get("plate"):
             mem = {"positions": []}
@@ -151,6 +152,9 @@ def shown(p: dict, analogs: int = 3) -> list[dict]:
             ao = a.get("offers") or {}
             if ao.get("original"):
                 out.append({"var": a, "offer": dict(ao["original"], number=a["oem"]), "who": "тот же оригинал"})
+        # Замена производителя под другим номером (подтверждена каталогом) — в том же месте, что и в тексте ответа
+        out += [{"var": var, "offer": dict(x), "who": "замена производителя"} for x in (o.get("replacements") or [])
+                if x.get("catalog")]
         out += [{"var": var, "offer": x, "who": ""} for x in (o.get("analogs") or [])[:per]]
     return out
 

@@ -196,6 +196,26 @@ MIN_STARS = (5, 3, 2, 1)   # ступени порога «сколько пос
 ENOUGH_ANALOGS = 3
 
 
+def replacement_candidates(rows: list[dict], oem: str, car_brand: str, name: str = "", limit: int = 2) -> list[dict]:
+    """Оригинал марки под другим номером — возможная замена производителя («8K0407509A» → «8K0407509N»). Поставщики
+    отдают такие строки вместе с номером из каталога, но подходит ли замена этой машине, знает только каталог:
+    без проверки (Engine._confirm_replacements) их не показываем."""
+    okeys, onum = original_keys(car_brand), _key(oem).lstrip("0")
+    best: dict[str, dict] = {}
+    for r in rows or []:
+        if _num(r.get("price")) <= 0 or str(r.get("isUsed") or "0") not in ("0", "", "False", "false"):
+            continue
+        if bkey(r.get("brand")) not in okeys:
+            continue
+        k = _key(r.get("numberFix") or r.get("number")).lstrip("0")
+        if not k or k == onum or (name and not_the_part(str(r.get("description") or ""), name)):
+            continue
+        if k not in best or _speed(r) < _speed(best[k]):
+            best[k] = r
+    return [_offer(r) | {"number": str(r.get("numberFix") or r.get("number") or "").strip()}
+            for _, r in sorted(best.items(), key=lambda kv: _speed(kv[1]))[:limit]]
+
+
 def curate(rows: list[dict], oem: str, car_brand: str, warranty: set[str], limit: int = 5, name: str = "",
            min_stars: tuple[int, ...] = MIN_STARS) -> dict:
     """Оригинал и до `limit` аналогов — по одному на бренд, в порядке «что быстрее привезти».

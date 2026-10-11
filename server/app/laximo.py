@@ -23,10 +23,11 @@ METHODS = {
     "listCategories", "listUnits", "listDetailByUnit", "listImageMapByUnit",
     "listQuickGroup", "listQuickDetail",
     "listCatalogs", "getWizard2", "findVehicleByWizard2",   # машина по марке, модели и году, когда VIN каталог не знает
+    "getOEMPartApplicability",                               # подходит ли номер детали машине
 }
 PARAMS = {
     "identString", "countryCode", "plateNumber",
-    "catalog", "ssd", "vehicleId", "categoryId", "unitId", "quickGroupId", "query", "all",
+    "catalog", "ssd", "vehicleId", "categoryId", "unitId", "quickGroupId", "query", "all", "oem",
 }
 
 

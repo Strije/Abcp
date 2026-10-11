@@ -1689,3 +1689,146 @@ def test_text_brand_must_agree_with_vin_start():
     # VIN из Чехии (TMB — Skoda), в тексте Toyota: чужой VIN или опечатка, по словам не ищем
     assert asyncio.run(eng.catalog.by_text("тойота карок 2021", "TMBJC7NU0MZ000001")) == []
     assert [v.name for v in asyncio.run(eng.catalog.by_text("шкода карок 2021", "TMBJC7NU0MZ000001"))] == ["Karoq"]
+
+
+# ---------- применимость номера: ответ самого каталога ----------
+
+class FakeApplicability(Fake):
+    """getOEMPartApplicability: VAG-номер без дефисов подходит, Toyota — только с дефисом."""
+
+    def __init__(self):
+        super().__init__()
+        self.asked: list[str] = []
+
+    def answer(self, method, params):
+        if method == "getOEMPartApplicability":
+            self.asked.append(params["oem"])
+            ok = params["oem"] in ("06H906433", "48068-48020")
+            return {"applicability": "FULLY" if ok else "NONAPPLICABLE",
+                    "categories": [{"name": "Электрооборудование"}] if ok else []}
+        return super().answer(method, params)
+
+
+def test_applicability_tries_number_forms_and_caches():
+    from app.podbor.catalog import Vehicle
+    fake = FakeApplicability()
+    eng = Engine(fake, None, set())
+    v = Vehicle("AU1587", "0", "SSD", "AUDI", "A4", {})
+    got = asyncio.run(eng.catalog.applicability(v, "06h 906 433"))
+    assert got["status"] == "FULLY" and got["where"] == ["Электрооборудование"] and fake.asked == ["06H906433"]
+    # с дефисами VAG не находит, но запись без них — находит; Toyota без дефиса — третья запись «48068-48020»
+    assert asyncio.run(eng.catalog.applicability(v, "06H-906-433"))["status"] == "FULLY"
+    assert asyncio.run(eng.catalog.applicability(v, "4806848020"))["status"] == "FULLY"
+    # нет в каталоге машины — NONAPPLICABLE, каталог не ответил — None
+    assert asyncio.run(eng.catalog.applicability(v, "1K0407151"))["status"] == "NONAPPLICABLE"
+
+    class Broken(Fake):
+        def answer(self, method, params):
+            raise RuntimeError("нет связи")
+    assert asyncio.run(Engine(Broken(), None, set()).catalog.applicability(v, "06H906433")) is None
+
+
+def test_article_line_uses_catalog_answer():
+    from app.podbor.engine import article_line
+
+    def line(catalog, **art):
+        a = {"number": "06H906433", "brand": "VAG", "desc": "Датчик", "fit": None, "oem": False, "catalog": catalog} | art
+        return article_line({"variants": [{"oem": "X"}], "article": a})
+    assert "подтверждает каталог по VIN (раздел «Электрооборудование»)" in line({"status": "FULLY", "where": ["Электрооборудование"]})
+    assert "в каталоге вашей машины по VIN его нет" in line({"status": "NONAPPLICABLE", "where": []}, oem=True)
+    assert "не значится — скорее всего не подойдёт" in line({"status": "NONAPPLICABLE", "where": []})   # аналог: «нет» не доказательство
+    assert "возможно подойдёт" in line({"status": "PARTIAL", "where": []})
+    assert "не замена ли это" in line(None, oem=True)   # каталог не ответил — как раньше
+    assert "оригинал для вашей машины по VIN" in line({"status": "FULLY", "where": []}, fit={"oem": "X", "original": True})
+
+
+def test_manufacturer_replacements_only_when_catalog_confirms():
+    """Поставщики отдают номер марки рядом с каталожным: подтверждённый каталогом — «замена производителя», нет — молчим."""
+    from app.podbor.engine import draft
+
+    class Replaced(FakeApplicability):
+        async def offers(self, number, brand):
+            rows = list(await super().offers(number, brand))
+            if number == "48068-48020":
+                rows += [offer("TOYOTA", "48068-48021", 14000, 48, "Рычаг передний нижний"),      # подтвердит каталог
+                         offer("TOYOTA", "48068-99999", 9000, 24, "Рычаг передний нижний")]     # каталог не знает
+            return rows
+
+        def answer(self, method, params):
+            if method == "getOEMPartApplicability" and params["oem"] == "48068-48021":
+                self.asked.append(params["oem"])
+                return {"applicability": "FULLY", "categories": []}
+            return super().answer(method, params)
+
+    res = run("XW7BF4FK30S064389 рычаг передний нижний", engine=Engine(Replaced(), None, set()))
+    var = res["positions"][0]["variants"][0]
+    assert [r["number"] for r in var["offers"]["replacements"]] == ["48068-48021"]
+    text = draft(res, numbers=False)
+    assert "замена производителя 48068-48021" in text and "99999" not in text
+    # порядок выбора совпадает с порядком строк: оригинал, замена, аналоги
+    from app.podbor import dialog as D
+    who = [x["who"] for x in D.shown(res["positions"][0])]
+    assert who[:2] == ["оригинал", "замена производителя"]
+
+
+def test_unconfirmed_replacements_are_never_shown():
+    from app.podbor.engine import _block
+    var = {"oem": "X1", "brand": "TOYOTA", "name": "Рычаг", "offers": {
+        "original": None, "analogs": [], "stats": {"articles": 0},
+        "replacements": [{"brand": "TOYOTA", "number": "X2", "description": "Рычаг", "price": 100.0, "days": 1,
+                          "tags": [], "cheaper": None}]}}
+    assert not any("замена" in line for line in _block(var, [], False, 3)[0])
+
+
+# ---------- вопросы клиенту, когда VIN каталог не знает ----------
+
+class FakeEngines(FakeWizard):
+    """У Karoq в мастере после года идут «Двигатель» и «Трансмиссия»; без уточнения — пустой список машин."""
+
+    def answer(self, method, params):
+        ssd = params.get("ssd", "")
+        engines = [{"key": "E14", "value": "DJK (4 zyl. / 1400CC / 150 hp / 110 kW )"},
+                   {"key": "E10", "value": "CHZ (3 zyl. / 999CC / 115 hp / 85 kW )"}]
+        if method == "getWizard2" and params.get("catalog") == "SK1119":
+            if ssd == "K1M1Y2021":
+                return [{"name": "Двигатель", "determined": False, "allowListVehicles": True, "options": engines}]
+            if ssd == "E14":
+                return [{"name": "Трансмиссия", "determined": False, "allowListVehicles": True,
+                         "options": [{"key": "E14G1", "value": "АКПП 7 ступеней"}, {"key": "E14G2", "value": "МКПП 6 ступеней"}]}]
+        if method == "findVehicleByWizard2" and ssd in ("VK1M1Y2021", "K1M1Y2021"):
+            return [{"catalog": "SK1119", "brand": "SKODA", "name": "Karoq", "vehicleId": "77", "ssd": "ANY",
+                     "attributes": []}]
+        if method == "findVehicleByWizard2" and ssd in ("E14", "E14G1"):
+            return [{"catalog": "SK1119", "brand": "SKODA", "name": "Karoq", "vehicleId": "77", "ssd": "ENG" + ssd,
+                     "attributes": [{"key": "engine", "value": "1.4 TSI"}]}]
+        return super().answer(method, params)
+
+
+def test_wizard_narrows_by_engine_and_gearbox():
+    eng = Engine(FakeEngines(), None, set())
+    vin = "XW8ZZZ61ZMG123456"
+    # объём 1.4 + 150 л.с. однозначно ведёт к одному мотору, «автомат» — к одной коробке
+    got = asyncio.run(eng.catalog.by_text("шкода карок 2021, 1.4, 150 л.с., автомат", vin))
+    assert [v.ssd for v in got] == ["ENGE14G1"]
+    # объём не назван — берём без мотора, как раньше
+    got = asyncio.run(eng.catalog.by_text("шкода карок 2021", vin))
+    assert [v.ssd for v in got] == ["ANY"]
+
+
+def test_unknown_vin_asks_for_car_then_continues_the_request():
+    vin = "XW8ZZZ61ZMG123456"
+    eng = Engine(FakeEngines(), None, set())
+    first = run(f"{vin} колодки передние", engine=eng)
+    assert first["status"] == "vehicle_not_found"
+    text = first["text"]
+    assert "марку и модель, год выпуска, объём двигателя" in text and "автомат или механика" in text
+    assert first["memory"]["unknown_vin"] == vin and "колодки передние" in first["memory"]["pending"]
+    # клиент описал машину без VIN — просьба про колодки не потерялась, машина найдена по словам
+    second = run("Шкода Карок 2021, 1.4 автомат", engine=eng, memory=first["memory"])
+    assert second["status"] != "vehicle_not_found" and second["vehicle"]["brand"] == "SKODA"
+    assert any("колод" in p["query"].lower() for p in second["positions"])
+    assert "unknown_vin" not in second["memory"] and second["memory"]["car_text"]
+    # описание не помогло — спрашиваем ещё раз и ничего не теряем
+    third = run("не знаю, обычная машина", engine=eng, memory=first["memory"])
+    assert third["status"] == "vehicle_not_found" and third["memory"]["unknown_vin"] == vin
+    assert "колодки передние" in third["memory"]["pending"]

@@ -147,3 +147,51 @@ def market_ok(market: str, vin: str = "") -> bool:
         return True
     home = _REGION_OF_VIN.get((vin or " ")[0].upper(), "eu")
     return where == home
+
+
+# ---------- двигатель и коробка из слов клиента ----------
+
+_VOL = re.compile(r"(?<![\d.,])([1-9])[.,](\d)(?!\d)")
+_CC = re.compile(r"(\d{3,4})\s*(?:cc|cm3|см3|куб)", re.I)
+_HP = re.compile(r"(\d{2,3})\s*(?:hp|ps|л\.?\s*с\b|лс\b)", re.I)
+_AUTO = re.compile(r"автомат|акпп|\bat\b|робот|dsg|вариатор|cvt|tiptronic|multitronic|powershift", re.I)
+_MANUAL = re.compile(r"механик|мкпп|\bmt\b|ручн", re.I)
+
+
+def engine_hint(text: str) -> dict:
+    """Что клиент сказал про мотор и коробку: объём («1.6», «1,4 TSI»), мощность («150 л.с.»), АКПП или МКПП.
+    Год и номера не путаем с объёмом: нужна точка или запятая между однозначными цифрами."""
+    low = text or ""
+    m = _VOL.search(low)
+    hp = _HP.search(low)
+    gear = "auto" if _AUTO.search(low) else "manual" if _MANUAL.search(low) else ""
+    return {"volume": f"{m.group(1)}.{m.group(2)}" if m else "", "hp": hp.group(1) if hp else "", "gear": gear}
+
+
+def option_volume(value: str) -> str:
+    """Объём двигателя в варианте мастера: «AEE (4 zyl. / 1600CC / 75 hp)» → 1.6; «1.6 L» → 1.6; «G4FC 1.6» → 1.6."""
+    cc = _CC.search(value or "")
+    if cc:
+        return f"{round(int(cc.group(1)) / 1000, 1):.1f}"
+    m = _VOL.search(value or "")
+    return f"{m.group(1)}.{m.group(2)}" if m else ""
+
+
+def pick_engine(options: list[dict], hint: dict) -> dict | None:
+    """Единственный вариант «Двигатель», подходящий под слова клиента; несколько или ни одного — не выбираем."""
+    if not hint.get("volume"):
+        return None
+    cands = [o for o in options if option_volume(o.get("value", "")) == hint["volume"]]
+    if hint.get("hp") and len(cands) > 1:
+        by_hp = [o for o in cands if re.search(rf"(?<!\d){hint['hp']}\s*(?:hp|ps|л\.?\s*с)", o.get("value", ""), re.I)]
+        cands = by_hp or cands
+    return cands[0] if len(cands) == 1 else None
+
+
+def pick_gear(options: list[dict], gear: str) -> dict | None:
+    """Вариант «Трансмиссия», в котором коробка названа словами; у VAG там коды («DTQ (5S)») — тогда не выбираем."""
+    if not gear:
+        return None
+    rx = _AUTO if gear == "auto" else _MANUAL
+    cands = [o for o in options if rx.search(o.get("value", ""))]
+    return cands[0] if len(cands) == 1 else None

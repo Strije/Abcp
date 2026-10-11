@@ -24,7 +24,8 @@ from . import understand as U
 from . import text as T
 from .catalog import Catalog, Detail, LaximoError, TreeIndex, Vehicle, image_url
 from .offers import _SMALL as _SMALL_OFFERS
-from .offers import _desc_head, _offer, axis_vote, bkey, brand_candidates, curate, days, lr_vote, oem_brand_for, original_keys
+from .offers import (_desc_head, _offer, axis_vote, bkey, brand_candidates, curate, days, lr_vote, oem_brand_for,
+                     original_keys, replacement_candidates)
 
 RULES_FILE = Path(__file__).resolve().parent.parent / "data" / "podbor_rules.json"
 MAX_POSITIONS = 15   # сообщение мастера «по всей подвеске» — до 11–12 позиций
@@ -133,6 +134,11 @@ class Engine:
             # «Хорошие фильтры на машину» без VIN, следом — только VIN: просьба не теряется, продолжаем её
             text = pending + "\n" + text
             req, memory = T.parse(text), None
+        unknown = (memory or {}).get("unknown_vin") or ""
+        if unknown and pending and not req.ident and not req.plate:
+            # Просили описать машину (VIN каталог не знает): ответ «Шкода Рапид 2019, 1.6, автомат» — к прежней просьбе и тому же VIN
+            text = pending + "\n" + text + "\n" + unknown
+            req, memory = T.parse(text), None
         if memory and (memory.get("ident") or memory.get("plate")) and not req.ident and not req.plate:
             return await self._follow(text, req, memory, analogs, t0, llm is not False)
         res: dict[str, Any] = {"request": {"ident": req.ident, "plate": req.plate, "model": req.model,
@@ -155,7 +161,11 @@ class Engine:
                 res["car_text"] = text[:400]
                 res["warnings"].append(BY_TEXT_WARNING)
         if not found:
-            return self._done(res, "vehicle_not_found", t0)
+            out = self._done(res, "vehicle_not_found", t0)
+            if req.ident:   # просьба и VIN не теряются: клиент опишет машину словами, и подбор продолжится
+                out["memory"]["pending"] = text[-1500:]
+                out["memory"]["unknown_vin"] = req.ident
+            return out
         if len(found) > 1 and vehicle is None:
             res["vehicles"] = [v.public() for v in found]
             return self._done(res, "choose_vehicle", t0)
@@ -264,6 +274,11 @@ class Engine:
         oem = any(bkey(r.get("brand")) in own and re.search(r"[а-яё]{4,}", str(r.get("description") or ""), re.I)
                   and not re.search(r"аналог|analog|замена\s+для", str(r.get("description") or ""), re.I) for r in rows)
         info = {"number": number, "brand": brand, "desc": desc, "fit": None, "oem": oem}
+        try:
+            # Ответ самого каталога: подходит ли номер этой машине (по VIN) — надёжнее догадок по аналогам поставщиков
+            info["catalog"] = await self.catalog.applicability(v, number)
+        except Exception:   # noqa: BLE001
+            info["catalog"] = None
         # Деталь клиент назвал сам — ищем по его словам: у V758424680 поставщики пишут «вентиляционная решётка»
         name = self.clean(hint) if hint else A.name_of(desc)
         head = _name_head(name) if name else ""
@@ -750,8 +765,11 @@ class Engine:
                 alt["query"] = "Барабаны тормозные задние"
                 alt["note"] = ("Сзади у вашей машины барабанные тормоза, тормозных дисков там нет — "
                                "вместо дисков стоят барабаны (колодки к ним — барабанные).")
+                await self._confirm_replacements(v, alt)
                 return alt
-        return await self._qualifier(v, tree, query, want, kind, pos) or pos
+        out = await self._qualifier(v, tree, query, want, kind, pos) or pos
+        await self._confirm_replacements(v, out)
+        return out
 
     async def _qualifier(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str, pos: dict) -> dict | None:
         """«Подшипник маховика» → группа «Подшипник коленвала»: слово-уточнение (маховик) в группе не нашлось, это другая
@@ -1346,9 +1364,33 @@ class Engine:
             "vote": {"front": c.vote[1], "rear": c.vote[2]}, "warning": c.warning, "score": round(c.score, 2),
             "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
                        "image": image_url(d.image) if d.image else "", "code": d.code_on_image},
-            "offers": curate(c.rows, d.oem, v.brand, self.warranty, name=d.name) if c.rows else None,
+            "offers": self._offers_of(c, v),
             "facts": desc_facts(c.rows or []),
         }
+
+    def _offers_of(self, c: Candidate, v: Vehicle) -> dict | None:
+        if not c.rows:
+            return None
+        o = curate(c.rows, c.d.oem, v.brand, self.warranty, name=c.d.name)
+        # Замены производителя — только кандидаты; клиенту идут после проверки каталогом (_confirm_replacements)
+        o["replacements"] = replacement_candidates(c.rows, c.d.oem, v.brand, name=c.d.name)
+        return o
+
+    async def _confirm_replacements(self, v: Vehicle, pos: dict) -> None:
+        """Номер марки под другим номером подходит этой машине, только если так говорит каталог (getOEMPartApplicability):
+        8K0407509N у Audi A4 не подошёл — показывать его как замену нельзя. Не подтверждено или каталог молчит — убираем."""
+        todo = [(var, rp) for var in pos.get("variants", [])[:MAX_VARIANTS] for rp in (var.get("offers") or {}).get("replacements") or []]
+        if not todo:
+            return
+        answers = await asyncio.gather(*(self.catalog.applicability(v, rp["number"]) for _, rp in todo), return_exceptions=True)
+        keep: dict[int, list[dict]] = {}
+        for (var, rp), ans in zip(todo, answers):
+            if isinstance(ans, dict) and ans.get("status") in ("FULLY", "PARTIAL"):
+                keep.setdefault(id(var), []).append(rp | {"catalog": ans["status"]})
+        for var in pos.get("variants", []):
+            o = var.get("offers")
+            if o and "replacements" in o:
+                o["replacements"] = keep.get(id(var), [])
 
     def _note(self, q: list[str], query: str, c: Candidate, tree: TreeIndex) -> str:
         """Чего из запроса нет в найденной детали: «подшипник» → в каталоге «Ступица колеса»."""
@@ -1853,6 +1895,10 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
         if ao and ao["original"]:
             x = dict(ao["original"], number=a["oem"])
             out.append(_offer_line(x, numbers, nice_name(x["description"], x["brand"], x["number"]), who))
+    for rp in (o or {}).get("replacements") or []:
+        if rp.get("catalog"):   # только подтверждённые каталогом по VIN: см. Engine._confirm_replacements
+            out.append(_offer_line(rp, numbers, nice_name(rp["description"], rp["brand"], rp["number"]) or catalog_name,
+                                   f"замена производителя {rp['number']}"))
     more = 0
     if o and o["analogs"]:
         shown = o["analogs"][:analogs]
@@ -1939,8 +1985,10 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             return ("У SsangYong российской сборки VIN в каталоге не ищется. Пришлите, пожалуйста, корейский VIN — "
                     "он начинается на букву K: в ПТС в «Особых отметках» (номер шасси) или на табличке "
                     "в проёме водительской двери.")
-        return ("По этому VIN машина в каталоге не нашлась — возможно, эта марка в нём не представлена. Менеджер подберёт "
-                "вручную и напишет; чтобы быстрее, проверьте VIN (17 знаков) или пришлите фото СТС.")
+        return ("По этому VIN машина в каталоге не нашлась — возможно, в VIN опечатка или такой модели там нет. "
+                "Напишите, пожалуйста: марку и модель, год выпуска, объём двигателя (например, 1.6; бензин или дизель) "
+                "и коробку (автомат или механика) — найдём по ним. Или пришлите фото СТС, либо проверьте VIN (17 знаков). "
+                "Менеджер подберёт вручную и напишет, если описать машину не получится.")
     if st == "catalog_error":
         return "Каталог сейчас не отвечает, подберём вручную."
     if st == "no_quick_groups":
@@ -1948,7 +1996,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         return (f"Ваш автомобиль: {(v.get('short') or v['summary']).rstrip('.')}.\n"
                 "По этой машине каталог не даёт быстрый поиск деталей — менеджер подберёт вручную и напишет.")
     if st == "choose_vehicle":
-        lines = ["По VIN нашлось несколько вариантов машины, уточните ваш:"]
+        lines = ["По вашим словам нашлось несколько вариантов машины, уточните ваш (VIN каталог не знает):"
+                 if res.get("car_text") else "По VIN нашлось несколько вариантов машины, уточните ваш:"]
         lines += [f"{i + 1}) {x['summary']}" for i, x in enumerate(res["vehicles"])]
         return "\n".join(lines)
     if st == "no_positions":
@@ -2093,15 +2142,28 @@ def article_line(p: dict, numbers: bool = False) -> str:
     """Что с номером клиента: подходит (оригинал или аналог оригинала по VIN), не значится или не нашли вовсе."""
     a = p["article"]
     who = ""   # фирма «Вы искали» — по самому частому описанию (у HU7008Z выходила «Foton»): клиенту не показываем
-    if not a.get("desc"):
-        return f"Номер {a['number']} у поставщиков не нашли — проверим вручную и напишем."
+    cat = a.get("catalog") or {}
+    where = f" (раздел «{cat['where'][0]}»)" if cat.get("where") else ""
     fit = a.get("fit")
+    if cat.get("status") == "FULLY" and not (fit and fit.get("original")):
+        # Каталог по VIN сам говорит «подходит» — самое надёжное; аналоги поставщиков для этого не нужны
+        return f"Номер {a['number']} подходит вашей машине — это подтверждает каталог по VIN{where}."
+    if not a.get("desc"):
+        if cat.get("status") == "NONAPPLICABLE" and a.get("oem"):
+            return f"Номера {a['number']} в каталоге вашей машины по VIN нет — проверим, не заменён ли он, и напишем."
+        return f"Номер {a['number']} у поставщиков не нашли — проверим вручную и напишем."
     if fit and fit.get("original"):
         return f"Номер {a['number']}{who} — оригинал для вашей машины по VIN, подходит."
+    if cat.get("status") == "PARTIAL":
+        return (f"Номер {a['number']}{who} возможно подойдёт: в каталоге этой модели он есть{where}, но машину мы нашли без VIN, "
+                f"комплектацию не проверили. Пришлите VIN или фото СТС — подтвердим.")
     if fit:
         orig = f" {fit['oem']}" if numbers else ""
         return f"Номер {a['number']}{who} подходит: поставщики ведут его как аналог оригинала{orig} для вашей машины."
     if p.get("variants") and a.get("oem"):
+        if cat.get("status") == "NONAPPLICABLE":
+            return (f"Номер {a['number']} — оригинальный, но в каталоге вашей машины по VIN его нет: либо не подходит, либо "
+                    f"заменён новым номером. Ниже — что ставится по VIN.")
         return (f"Номер {a['number']} — оригинальный, но для вашей машины по VIN каталог даёт другой номер: проверим, "
                 f"не замена ли это. Ниже — что ставится по VIN.")
     if p.get("variants"):
