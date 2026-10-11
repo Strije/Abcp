@@ -2082,3 +2082,22 @@ def test_unit_group_is_not_learned(tmp_path):
     cat = Catalog(None, tmp_path, frozenset())
     cat.learn(-62, "КРОНШТЕЙН ПОДРАМНИКА")
     assert cat.learned == {}
+
+
+class FakeFlatUnits(FakeUnits):
+    """GM у Laximo: на любой запрос категорий отдаётся весь плоский список с родителями (обход шёл по кругу бесконечно)."""
+
+    def answer(self, method, params):
+        if method == "listCategories":
+            self.unit_calls += 1
+            assert self.unit_calls < 50, "обход категорий зациклился"
+            return [{"categoryId": "10", "name": "Кузов", "ssd": "S10", "childrens": True},
+                    {"categoryId": "11", "name": "Передняя часть", "ssd": "S11", "parentCategoryId": "10", "childrens": False}]
+        return super().answer(method, params)
+
+
+def test_flat_category_list_does_not_loop(tmp_path):
+    eng = Engine(FakeFlatUnits(), tmp_path, set())
+    v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
+    units = asyncio.run(eng.catalog.units(v))
+    assert units and units[0]["cat"] == "Кузов / Передняя часть"

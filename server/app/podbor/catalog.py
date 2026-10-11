@@ -538,12 +538,18 @@ class Catalog:
                             raise
                         await asyncio.sleep(15 * (attempt + 1))
 
+        seen: set[str] = set()   # у GM Laximo на любой запрос отдаёт весь плоский список: без этого обход шёл по кругу бесконечно
+
         async def walk(cat: dict, path: str, depth: int):
             path = f"{path} / {cat.get('name')}" if path else str(cat.get("name") or "")
             ssd = cat.get("ssd") or v.ssd
+            cid = str(cat["categoryId"])
             if str(cat.get("childrens")).lower() == "true" and depth < 4:
-                kids = await ask("listCategories", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd})
-                await asyncio.gather(*(walk(k, path, depth + 1) for k in kids if isinstance(k, dict)))
+                kids = await ask("listCategories", base | {"categoryId": cid, "ssd": ssd})
+                kids = [k for k in kids if isinstance(k, dict) and str(k.get("categoryId")) not in seen
+                        and str(k.get("parentCategoryId") or cid) == cid]   # только дети этой категории
+                seen.update(str(k["categoryId"]) for k in kids)
+                await asyncio.gather(*(walk(k, path, depth + 1) for k in kids))
             else:
                 us = await ask("listUnits", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd})
                 for u in us if isinstance(us, list) else []:
@@ -553,7 +559,9 @@ class Catalog:
                                     "image": str(u.get("largeImageUrl") or u.get("imageUrl") or "")})
         try:
             top = await ask("listCategories", base | {"ssd": v.ssd})
-            await asyncio.gather(*(walk(c, "", 0) for c in top if isinstance(c, dict)))
+            roots = [c for c in top if isinstance(c, dict) and str(c.get("parentCategoryId") or "0") == "0"]
+            seen.update(str(c["categoryId"]) for c in roots)
+            await asyncio.gather(*(walk(c, "", 0) for c in roots))
         except Exception:   # noqa: BLE001 — полный каталог запасной: ошибка = узлов нет, как раньше
             return []
         if out:
