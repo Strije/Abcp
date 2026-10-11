@@ -9,6 +9,7 @@ import collections
 import json
 import re
 import time
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -234,8 +235,14 @@ class Engine:
         reqs = [(want_qty(q), want_attrs(q)) for q, _ in items]
         items = [(strip_qty(q) or q, side) for q, side in items]   # «4 шт», «два» — не часть названия детали
         kinds = [m.get("kind", "") for m in meta] + [""] * len(items)   # «в круг» растит items только без модели
+        # Без модели («Свечи ngk для киа пиканто 2») машина названа в самой фразе: ищем деталь без неё, слова клиента — в заголовке
+        carless = [(_without_car(q, v), s) if not meta else (q, s) for q, s in items[:MAX_POSITIONS]]
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s, kinds[i])
-                                                       for i, (q, s) in enumerate(items[:MAX_POSITIONS]))))
+                                                       for i, (q, s) in enumerate(carless))))
+        if not meta:
+            for p, (q, _) in zip(res["positions"], items):
+                if p.get("query") != q:
+                    p["core"], p["query"] = p.get("query"), q   # «core» — фраза без машины: по ней считаем покрытие слов
         asks = [a for a in asks if res["positions"][a["position"]].get("variants")]   # «комплект Zekkert» без детали — не про фирму
         if asks:
             res["reply"] = await self._reply({"kind": "answer", "answers": [], "picks": [], "ask_brand": asks},
@@ -482,7 +489,7 @@ class Engine:
     def _coverage_info(self, p: dict, tree: TreeIndex | None = None) -> tuple[float, int]:
         """(доля значимых слов клиента, нашедшихся в названиях группы, её синонимах и вариантов; сколько слов всего)."""
         # «Комплект», «набор» — не слова детали: «Комплект передних рычагов» без них снимался как частичное совпадение
-        words = [s for s in T.stems(T.expand(p.get("query", "")), self.stop)
+        words = [s for s in T.stems(T.expand(p.get("core") or p.get("query", "")), self.stop)
                  if not T.side_of_word(s) and not s.endswith(".") and s not in _GENERIC_HEADS]
         if tree is not None:
             words = [tree.fix(s) for s in words]   # «подшибник» = «подшипник»: опечатка — не потерянное слово
@@ -2456,6 +2463,41 @@ UNIT_VARIANTS = 14   # сколько деталей узла проверяем
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
+_CAR_RU = {"рено": "renault", "мерс": "mercedes", "мерседес": "mercedes", "бмв": "bmw", "киа": "kia", "кия": "kia",
+           "хундай": "hyundai", "хендай": "hyundai", "хьюндай": "hyundai", "тойота": "toyota", "шкода": "skoda",
+           "фольксваген": "volkswagen", "фольц": "volkswagen", "ниссан": "nissan", "мицубиси": "mitsubishi",
+           "митсубиси": "mitsubishi", "шевроле": "chevrolet", "ситроен": "citroen", "пежо": "peugeot", "вольво": "volvo"}
+
+
+def _without_car(query: str, v: Vehicle) -> str:
+    """Марка и модель машины из самой фразы клиента («свечи для киа пиканто 2» → «свечи»): они не часть названия детали, и
+    правила без модели считали их потерянными словами и отдавали позицию менеджеру. Сравниваем на слух (D._sound):
+    «пиканто» и Picanto, «дастер» и Duster. Предлог перед убранным словом уходит вместе с ним."""
+    car = [D._sound(t) for t in re.findall(r"[A-Za-z]{3,}", f"{v.brand} {v.name}")]
+    car = [c for c in car if len(c) >= 3]
+    if not car:
+        return query
+    kill: set[int] = set()
+    toks = list(re.finditer(r"[A-Za-zА-Яа-яЁё]+", query))
+    for i, m in enumerate(toks):
+        w = m.group(0)
+        if len(w) < 3:
+            continue
+        snd = D._sound(_CAR_RU.get(w.lower(), w))
+        if len(snd) >= 3 and any(snd == c or (len(snd) >= 4 and SequenceMatcher(None, snd, c).ratio() >= 0.8) for c in car):
+            kill.add(i)
+    if not kill:
+        return query
+    rest = query
+    for i in sorted(kill, reverse=True):
+        m = toks[i]
+        rest = rest[:m.start()] + rest[m.end():]
+    rest = re.sub(r"\s+", " ", rest).strip(" ,;.")
+    # За маркой тянутся «для», поколение («пиканто 2») и объём («1.5») — хвост без детали
+    rest = re.sub(r"(?:\s+(?:для|на|от|к|по|\d{1,2}(?:[.,]\d)?))+$", "", rest, flags=re.I).strip(" ,;.")
+    return rest if T.stems(rest, frozenset()) else query
+
+
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
 _BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)

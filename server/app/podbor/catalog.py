@@ -781,6 +781,8 @@ class Catalog:
     def learn(self, group_id: int, detail_name: str):
         """Запоминаем, как называется найденная деталь: в следующий раз такие слова клиента
         сразу приведут в эту группу (вес ниже, чем у названий и синонимов Laximo)."""
+        if group_id < 0:
+            return   # узел полного каталога: номер — порядок в списке именно этой машины, общим знанием он не станет
         names = self.learned.setdefault(str(group_id), [])
         if detail_name and detail_name not in names and len(names) < 200:
             names.append(detail_name)

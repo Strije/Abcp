@@ -2063,3 +2063,22 @@ def test_bushing_of_a_unit_is_not_guessed_and_known_parts_never_use_units():
     fake = FakeUnits()
     res = run("XW7BF4FK30S064389 рычаг передний нижний", engine=Engine(fake, None, set()))
     assert not res["positions"][0].get("via_units") and fake.unit_calls == 0   # нашли быстрыми группами — полный каталог не трогаем
+
+
+def test_car_words_are_not_part_words():
+    from app.podbor.catalog import Vehicle
+    from app.podbor.engine import _without_car
+    kia = Vehicle("KIA202404", "1", "", "KIA", "Morning/Picanto", {})
+    assert _without_car("Свечи для киа пиканто 2", kia) == "Свечи"
+    assert _without_car("свечи киа", kia) == "свечи"
+    assert _without_car("фильтр масляный", kia) == "фильтр масляный"
+    assert _without_car("Duster", Vehicle("R", "1", "", "RENAULT", "Duster", {})) == "Duster"   # одно слово — не стираем
+    assert _without_car("комплект грм рено дастер 1.5", Vehicle("R", "1", "", "RENAULT", "Duster", {})) == "комплект грм"
+    assert _without_car("BMW ДАТЧИККОЛЕНВАЛА", Vehicle("B", "1", "", "BMW", "525i", {})) == "ДАТЧИККОЛЕНВАЛА"
+
+
+def test_unit_group_is_not_learned(tmp_path):
+    from app.podbor.catalog import Catalog
+    cat = Catalog(None, tmp_path, frozenset())
+    cat.learn(-62, "КРОНШТЕЙН ПОДРАМНИКА")
+    assert cat.learned == {}
