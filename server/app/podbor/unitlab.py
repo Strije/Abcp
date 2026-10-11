@@ -76,8 +76,8 @@ async def main(argv=None) -> int:
     if a.remote:
         src = Remote(a.remote)
     else:
-        from .config import load
-        from .laximo import Laximo, Usage
+        from ..config import load
+        from ..laximo import Laximo, Usage
         lx = Laximo(load())
         lx.usage = Usage(None)
         src = Direct(lx, None, "")
