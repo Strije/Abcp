@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from . import text as T
+from . import wizard as W
 
 # Всё, что пришло из Laximo, хранится на диске навсегда и берётся оттуда: это и кэш, и материал для
 # проверок и обучения (название группы → как детали называются у разных марок). Тариф платится раз
@@ -499,6 +500,67 @@ class Catalog:
         found = parse_vehicles(data)
         self._vehicles[key] = (time.time(), found)
         return found
+
+    # --- машина по словам клиента, когда VIN каталог не знает ---
+    async def by_text(self, text: str, vin: str = "", limit: int = 6) -> list[Vehicle]:
+        """Марка, модель и год из слов клиента → мастер подбора Laximo (getWizard2). Только однозначное: модель совпала
+        по звуку, в рынке такой год есть, а если марку клиент не назвал («бампер на карок») — модель нашлась лишь в
+        одном из каталогов, подходящих по началу VIN. Не уверены — пусто, робот скажет «пришлите VIN»."""
+        brand = W.brand_of(text)
+        brands = [brand] if brand else W.wmi_brands(vin)
+        if not brands:
+            return []
+        try:
+            cats = await self._cached("catalogs.json", 30 * 86400, lambda: self.call("listCatalogs", {}))
+            codes = [c for c in (W.catalog_of(b, cats if isinstance(cats, list) else []) for b in brands) if c]
+            found: list[tuple[str, list[Vehicle]]] = []
+            for code in codes:
+                vs = await self._wizard_vehicles(code, text, vin)
+                if vs:
+                    found.append((code, vs))
+            if len(found) != 1:
+                return []   # ни одного или модель есть в нескольких каталогах — не гадаем
+            return found[0][1][:limit]
+        except Exception:   # noqa: BLE001 — поиск «по словам» запасной: ошибка = не нашли, как раньше
+            return []
+
+    async def _wizard_vehicles(self, code: str, text: str, vin: str) -> list[Vehicle]:
+        async def wiz(ssd: str):
+            name = f"wizard/{code}-{hashlib.sha1(ssd.encode()).hexdigest()[:20]}.json"
+            return await self._cached(name, DETAILS_TTL, lambda: self.call("getWizard2", {"catalog": code, "ssd": ssd}))
+
+        async def listing(ssd: str) -> list[Vehicle]:
+            name = f"wizard/{code}-{hashlib.sha1(ssd.encode()).hexdigest()[:20]}-v.json"
+            data = await self._cached(name, DETAILS_TTL,
+                                      lambda: self.call("findVehicleByWizard2", {"catalog": code, "ssd": ssd}))
+            return parse_vehicles(data)
+
+        rows = await wiz("")
+        cond = W.pick_condition(rows, "модел")
+        models = W.match_options(W.tokens(text), cond["options"]) if cond and cond.get("options") else []
+        year = W.year_of(text, vin)
+        found: list[Vehicle] = []
+        for model in models[:3]:
+            rows = await wiz(model["key"])
+            market = W.pick_condition(rows, "рынок")
+            if any(c.get("allowListVehicles") for c in rows):
+                starts = [(model["key"], rows)]
+            elif market and market.get("options") and not market.get("determined"):
+                starts = [(o["key"], await wiz(o["key"])) for o in market["options"][:3]]   # рынок не назван — все
+            else:
+                continue
+            for ssd, rws in starts:
+                yc = W.pick_condition(rws, "год")
+                if year and yc and yc.get("options"):
+                    yo = next((o for o in yc["options"] if str(o.get("value", "")).strip() == year), None)
+                    if not yo:
+                        continue   # на этом рынке такого года нет — не показываем всё подряд
+                    ssd = yo["key"]
+                found += await listing(ssd)
+        uniq: dict[tuple, Vehicle] = {}
+        for v in found:
+            uniq.setdefault((v.vehicle_id, v.name, v.attrs.get("market", ""), v.attrs.get("prodrange", "")), v)
+        return list(uniq.values())
 
     # --- дерево групп ---
     @staticmethod

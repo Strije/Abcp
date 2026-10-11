@@ -22,6 +22,7 @@ METHODS = {
     "findVehicle", "findVehicleByPlateNumber",
     "listCategories", "listUnits", "listDetailByUnit", "listImageMapByUnit",
     "listQuickGroup", "listQuickDetail",
+    "listCatalogs", "getWizard2", "findVehicleByWizard2",   # машина по марке, модели и году, когда VIN каталог не знает
 }
 PARAMS = {
     "identString", "countryCode", "plateNumber",

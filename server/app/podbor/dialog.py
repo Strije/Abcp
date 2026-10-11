@@ -108,6 +108,8 @@ def remember(res: dict, prev: dict | None, replaced: list[int] | None = None) ->
         if req.get("ident") != mem.get("ident") or req.get("plate") != mem.get("plate"):
             mem = {"positions": []}
         mem.update(ident=req.get("ident", ""), plate=req.get("plate", ""), vehicle=req.get("vehicle"))
+    if res.get("car_text"):
+        mem["car_text"] = res["car_text"]   # машина найдена по словам клиента, а не по VIN — в следующих репликах так же
     if res.get("vehicle"):
         mem["car"] = res["vehicle"].get("brand", "")
         mem["summary"] = res["vehicle"].get("short") or res["vehicle"].get("summary", "")

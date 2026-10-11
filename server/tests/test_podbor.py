@@ -1602,3 +1602,74 @@ def test_journal_keeps_model_substitution_for_synonyms():
     p1, p2 = brief(res)["positions"]
     assert p1["llm_part"] == "подшипник подвесной" and p1["groups"][0] == "Подшипник подвесной"
     assert "llm_part" not in p2 and p2["groups"] == ["Колодки"]
+
+
+# ---------- машина по словам клиента, когда VIN каталог не знает ----------
+
+def test_wizard_keys_match_by_ear():
+    from app.podbor import wizard as W
+    opts = [{"key": "a", "value": "Karoq"}, {"key": "b", "value": "Kodiaq"}, {"key": "c", "value": "Fabia/Jingrui"},
+            {"key": "d", "value": "Octavia A5"}, {"key": "e", "value": "Rapid"}]
+    pick = lambda text: [o["value"] for o in W.match_options(W.tokens(text), opts)]  # noqa: E731
+    assert pick("шкода карок 2021") == ["Karoq"] and pick("нужен бампер на рапид") == ["Rapid"]
+    assert pick("октавия а5") == ["Octavia A5"] and pick("Kodiaq") == ["Kodiaq"]
+    assert pick("шкода шрус наружный правый") == [] and pick("поло") == []   # слова детали и чужая модель — не модель
+    assert W.brand_of("Шкода Карок") == "SKODA" and W.brand_of("на киа церато") == "KIA" and W.brand_of("колодки") == ""
+    assert W.year_of("Hyundai Elantra (2003—2007)") == "2003" and W.year_of("без года", "XW8ZZZ61ZNG123456") == "2022"
+    assert W.catalog_of("SKODA", [{"code": "SK1119", "brand": "SKODA"}]) == "SK1119"
+    assert W.catalog_of("SKODA", [{"code": "A", "brand": "SKODA"}, {"code": "B", "brand": "SKODA"}]) == ""
+
+
+class FakeWizard(Fake):
+    """Каталог Skoda: рынок → модель → год, как у Laximo (ключ варианта = накопленный SSD)."""
+
+    def answer(self, method, params):
+        ssd = params.get("ssd", "")
+        if method == "listCatalogs":
+            return [{"code": "SK1119", "brand": "SKODA", "name": "Skoda"}, {"code": "TOYOTA00", "brand": "TOYOTA"}]
+        if method in ("getWizard2", "findVehicleByWizard2") and params.get("catalog") != "SK1119":
+            return []   # у Toyota в этом тесте мастера нет
+        if method == "getWizard2":
+            models = [{"key": "K1", "value": "Karoq"}, {"key": "K2", "value": "Kodiaq"}, {"key": "K3", "value": "Fabia"}]
+            if ssd == "":
+                return [{"name": "Рынок", "determined": False, "allowListVehicles": False, "options": [{"key": "M1", "value": "Чехия"}]},
+                        {"name": "Модель", "determined": False, "allowListVehicles": False, "options": models},
+                        {"name": "Год выпуска", "determined": False, "allowListVehicles": False, "options": []}]
+            if ssd == "K1":
+                return [{"name": "Рынок", "determined": False, "allowListVehicles": False, "options": [{"key": "K1M1", "value": "Чехия"}]},
+                        {"name": "Модель", "determined": True, "allowListVehicles": False, "options": []}]
+            if ssd == "K1M1":
+                return [{"name": "Рынок", "determined": True, "allowListVehicles": True, "options": []},
+                        {"name": "Год выпуска", "determined": False, "allowListVehicles": True,
+                         "options": [{"key": "K1M1Y2020", "value": "2020"}, {"key": "K1M1Y2021", "value": "2021"}]}]
+            return []
+        if method == "findVehicleByWizard2":
+            return [{"catalog": "SK1119", "brand": "SKODA", "name": "Karoq", "vehicleId": "77", "ssd": "V" + ssd,
+                     "attributes": [{"key": "prodrange", "value": "2017 - ", "name": "Период"},
+                                    {"key": "market", "value": "Чехия", "name": "Рынок"}]}]
+        return super().answer(method, params)
+
+
+def test_vehicle_by_brand_model_year_when_vin_unknown():
+    eng = Engine(FakeWizard(), None, set())
+    vins = "XW8ZZZ61ZMG123456"
+    found = asyncio.run(eng.catalog.by_text(f"Добрый день, нужен задний бампер на карок 2021 года. Вин {vins}", vins))
+    assert [v.name for v in found] == ["Karoq"] and found[0].catalog == "SK1119"
+    # такого года на рынке нет, неизвестная модель, чужая марка — не гадаем
+    assert asyncio.run(eng.catalog.by_text("шкода карок 2010", vins)) == []
+    assert asyncio.run(eng.catalog.by_text("шкода октавия 2021", vins)) == []
+    assert asyncio.run(eng.catalog.by_text("тойота карок 2021", vins)) == []
+    # марки нет в словах («бампер на карок»), но VIN из Чехии/РФ-сборки VAG: каталоги VW и Skoda, модель нашлась в Skoda
+    assert [v.name for v in asyncio.run(eng.catalog.by_text("задний бампер на карок", vins))] == ["Karoq"]
+    assert asyncio.run(eng.catalog.by_text("задний бампер на карок", "JMZ0000000000000X")) == []   # чужой VIN, марки нет
+    # весь разговор: машина найдена по словам, об этом сказано, следующая реплика находит её снова
+    res = run(f"{vins} шкода карок 2021 колодки", engine=eng)
+    assert res["vehicle"]["brand"] == "SKODA" and any("по марке, модели и году" in w for w in res["warnings"])
+    assert res["memory"]["car_text"]
+    follow = run("а ещё колодки", engine=eng, memory=res["memory"])
+    assert follow["status"] != "vehicle_not_found" and follow["vehicle"]["brand"] == "SKODA"
+
+
+def test_unknown_vin_without_car_words_stays_not_found():
+    res = run("XW8ZZZ61ZMG123456 колодки передние")
+    assert res["status"] == "vehicle_not_found" and not res.get("car_text")

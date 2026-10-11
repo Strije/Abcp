@@ -148,6 +148,12 @@ class Engine:
         except LaximoError as e:
             res["warnings"].append(f"Каталог ответил ошибкой {e.code}")
             return self._done(res, "catalog_error", t0)
+        if not found and req.ident:
+            # VIN каталог не знает (сборка РФ, свежие модели): марка, модель и год из слов клиента → мастер подбора Laximo
+            found = await self.catalog.by_text(text, req.ident)
+            if found:
+                res["car_text"] = text[:400]
+                res["warnings"].append(BY_TEXT_WARNING)
         if not found:
             return self._done(res, "vehicle_not_found", t0)
         if len(found) > 1 and vehicle is None:
@@ -317,6 +323,10 @@ class Engine:
         except LaximoError as e:
             res["warnings"].append(f"Каталог ответил ошибкой {e.code}")
             return self._done(res, "catalog_error", t0, mem)
+        if not found and mem.get("car_text"):
+            found = await self.catalog.by_text(mem["car_text"], mem.get("ident", ""))
+            if found:
+                res["car_text"] = mem["car_text"]
         if not found:
             return self._done(res, "vehicle_not_found", t0, mem)
         v = found[min(mem.get("vehicle") or 0, len(found) - 1)]
@@ -1717,6 +1727,10 @@ def verdict(kinds: list[tuple[str, str, str]], want: T.Side, query: str = "") ->
     return "choose", "В каталоге несколько вариантов — уточните по примечанию или по номеру позиции на схеме."
 
 
+BY_TEXT_WARNING = ("машина подобрана по марке, модели и году из вашего сообщения — VIN каталог не знает, комплектацию "
+                   "не проверяли; для точного подбора пришлите фото СТС")
+
+
 def compare_model(model: str, v: Vehicle) -> list[str]:
     """Клиент выбирает модель из списка руками и ошибается — сверяем только год и объём двигателя."""
     out = []
@@ -1914,7 +1928,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     «• Фирма — наименование — цена, срок», оригинал первым, дальше аналоги — что привезём быстрее."""
     st = res["status"]
     if st == "no_vin":
-        return "Пришлите, пожалуйста, VIN (17 знаков) или номер кузова — подберём точно по вашей машине."
+        return ("Пришлите, пожалуйста, VIN (17 знаков) или frame — номер кузова японских машин, например GX110-1234567. "
+                "Проверим по вашей машине.")
     if st == "vehicle_not_found":
         req = res.get("request") or {}
         if re.match(r"[ZX]", req.get("ident", "")) and \
