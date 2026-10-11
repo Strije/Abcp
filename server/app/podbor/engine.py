@@ -779,9 +779,29 @@ class Engine:
                                "вместо дисков стоят барабаны (колодки к ним — барабанные).")
                 await self._confirm_replacements(v, alt)
                 return alt
+        if pos["status"] == "not_found" and not pos["groups"] and not pos["note"] and pos["kind"] in ("", "part"):
+            # Быстрые группы Laximo (около 680) — урезанный список: подрамника, поперечины и многого другого там нет.
+            # Ищем по узлам полного каталога машины
+            pos = await self._by_units(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
         await self._confirm_replacements(v, out)
         return out
+
+    async def _by_units(self, v: Vehicle, query: str, want: T.Side, kind: str) -> dict | None:
+        """Тот же поиск по узлам полного каталога вместо быстрых групп. Берём только уверенное совпадение с названием узла."""
+        try:
+            ut = await self.catalog.unit_tree(v)
+            if ut is None or any(T.same(T.head(T.stems(T.expand(query), self.stop)) or "", b) for b in _BUSH):
+                return None   # сайлентблок узла: чей именно (рычага, подрамника) по узлу не понять — менеджеру
+            alt = await self._position(v, ut, query, want, kind, unit_mode=True)
+        except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
+            return None
+        if not alt or alt["status"] not in ("found", "choose") or not alt["variants"]                 or max((g["score"] for g in alt["groups"]), default=0.0) < UNIT_SCORE:
+            return None
+        alt["via_units"] = True
+        units = ", ".join(dict.fromkeys(g["name"] for g in alt["groups"][:2]))
+        alt["note"] = alt.get("note") or f"Нашли в полном каталоге машины (узел «{units}»), в быстрых группах такой детали нет."
+        return alt
 
     async def _qualifier(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str, pos: dict) -> dict | None:
         """«Подшипник маховика» → группа «Подшипник коленвала»: слово-уточнение (маховик) в группе не нашлось, это другая
@@ -834,7 +854,8 @@ class Engine:
             out.append((q, side))
         return out
 
-    async def _position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
+    async def _position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "",
+                        unit_mode: bool = False) -> dict:
         q = T.stems(T.expand(query), self.stop)
         kind = kind or kind_of(q)
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
@@ -862,13 +883,13 @@ class Engine:
                                      return_exceptions=True)
         pool = [d for x in lists if isinstance(x, list) for d in x]
         members = {(d.group_id, _key(d.oem)) for d in pool}
-        cands = self._candidates(tree, q, want, groups, pool, members)
+        cands = self._candidates(tree, q, want, groups, pool, members, unit_mode=unit_mode)
         if not cands:
             # В составе группы нужной стороны нет — ищем по словам во всех узлах этих групп
             lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                          return_exceptions=True)
             pool += [d for x in lists if isinstance(x, list) for d in x]
-            cands = self._candidates(tree, q, want, groups, pool, members)
+            cands = self._candidates(tree, q, want, groups, pool, members, unit_mode=unit_mode)
         head_miss = ""
         if cands:
             # «Тормозные барабаны» у Nissan: отдельной группы нет, а «барабанные» в названии группы колодок
@@ -887,8 +908,8 @@ class Engine:
             # а деталь в ней — «Шарнир переднего стабилизатора»; искать «стойку» по узлам — найти «Опору стойки»
             # Сайлентблок — всегда: «сайлентблок задней цапфы» точно привёл в «Рычаги и тяги подвески»,
             # а в составе группы — «Тяга распоры»; сам сайлентблок лежит в узлах группы
-            if (best < 1.0 or lost or head in _DEEP) and head and head not in T.ADJ and head not in _GENERIC_HEADS \
-                    and not any(has(c.d.name) for c in cands):
+            if not unit_mode and (best < 1.0 or lost or head in _DEEP) and head and head not in T.ADJ \
+                    and head not in _GENERIC_HEADS and not any(has(c.d.name) for c in cands):
                 lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                              return_exceptions=True)
                 full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)
@@ -1035,7 +1056,7 @@ class Engine:
         return pos
 
     def _candidates(self, tree: TreeIndex, q: list[str], want: T.Side, groups, pool: list[Detail],
-                    members: set, loose: bool = False) -> list[Candidate]:
+                    members: set, loose: bool = False, unit_mode: bool = False) -> list[Candidate]:
         """loose — пул уже отобран по главному слову клиента (поиск по узлам): считаем только по словам клиента.
         Слова группы там мешают: «Сайлентблок задней цапфы» в «Рычагах и тягах подвески» терял половину веса."""
         gscore = {g.id: s for g, s in groups}
@@ -1099,9 +1120,21 @@ class Engine:
             tier = [c for c in cands.values() if c.score >= 0.85 * top]
         if any(c.d.match for c in tier):
             tier = [c for c in tier if c.d.match]
+        if unit_mode:
+            return self._unit_tier(cands, q)
         tier = drop_accessories(tier, q)
         tier = prefer_named(tier, q)
         return sorted(tier, key=lambda c: -c.score)[:MAX_VARIANTS]
+
+    def _unit_tier(self, cands: dict[str, Candidate], q: list[str]) -> list[Candidate]:
+        """Узел полного каталога: главная деталь называется по-своему («Поперечная балка в сборе» в узле «Подрамник»), слова
+        клиента есть в названии узла и крепежа. Берём все значимые детали узла (не крепёж): какая из них та, что просили,
+        решает название у поставщиков (prefer_named по ценам)."""
+        small = [*_SMALL, *(T.stem(w) for w in ("винт", "хомут", "шплинт", "шпилька", "накладка", "подушка", "планка"))]
+        head = T.head(q)
+        big = [c for c in cands.values() if not any(T.same(_name_head(c.d.name), x) for x in small)]
+        named = [c for c in big if head and T.same(_name_head(c.d.name), head)]
+        return sorted(named or big, key=lambda c: -c.score)[:UNIT_VARIANTS]
 
     def _foreign(self, tree: TreeIndex, name: list[str], q: list[str], chosen: set[int], near: list[str]) -> bool:
         """Название детали целиком — название другой группы, и в той есть слово, которого нет ни в запросе,
@@ -2379,6 +2412,8 @@ def check_attrs(pos: dict) -> None:
 
 
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
+UNIT_VARIANTS = 12   # сколько деталей узла проверяем по ценам, чтобы найти главную
+UNIT_SCORE = 0.7    # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)

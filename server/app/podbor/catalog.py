@@ -5,6 +5,7 @@
 к Laximo. Машину по VIN и списки деталей держим в памяти несколько часов: менеджер часто
 спрашивает по той же машине ещё раз.
 """
+import asyncio
 import gzip
 import hashlib
 import json
@@ -437,6 +438,8 @@ class Catalog:
         self._details: dict[tuple, tuple[float, list[Detail]]] = {}
         self._raw: dict[str, tuple[float, Any]] = {}
         self._trees: dict[str, TreeIndex] = {}
+        self._unit_trees: dict[str, TreeIndex | None] = {}      # узлы полного каталога как «группы» с отрицательными номерами
+        self._unit_ids: dict[str, dict[int, dict]] = {}
         self.learned: dict[str, list[str]] = self._load("learned.json") or {}
 
     # --- диск ---
@@ -500,6 +503,88 @@ class Catalog:
         found = parse_vehicles(data)
         self._vehicles[key] = (time.time(), found)
         return found
+
+    # --- полный каталог: узлы вне быстрых групп (подрамник, поперечина…) ---
+    def _car(self, v: Vehicle) -> str:
+        return hashlib.sha1(f"{v.vehicle_id}|{v.ssd}".encode()).hexdigest()[:16]
+
+    async def units(self, v: Vehicle) -> list[dict]:
+        """Все узлы полного каталога машины (listCategories → listUnits): у Kia Ceed 7 категорий и 303 узла за 8 запросов.
+        Хранится на диске навсегда. [{id, name, code, ssd, cat, image}]; сбой Laximo — пусто, поиск идёт как раньше."""
+        name = f"units/{_safe(v.catalog)}/{self._car(v)}.json.gz"
+        saved = self._load_any(name) if self.folder else None
+        if saved:
+            return saved["units"]
+        base = {"catalog": v.catalog, "vehicleId": v.vehicle_id}
+        out: list[dict] = []
+
+        async def walk(cat: dict, path: str, depth: int):
+            path = f"{path} / {cat.get('name')}" if path else str(cat.get("name") or "")
+            ssd = cat.get("ssd") or v.ssd
+            if str(cat.get("childrens")).lower() == "true" and depth < 4:
+                kids = check_error(await self.call("listCategories", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd}))
+                await asyncio.gather(*(walk(k, path, depth + 1) for k in kids if isinstance(k, dict)))
+            else:
+                us = check_error(await self.call("listUnits", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd}))
+                for u in us if isinstance(us, list) else []:
+                    if isinstance(u, dict) and u.get("unitId") and u.get("name"):
+                        out.append({"id": str(u["unitId"]), "name": str(u["name"]).strip(), "code": str(u.get("code") or ""),
+                                    "ssd": str(u.get("ssd") or ""), "cat": path,
+                                    "image": str(u.get("largeImageUrl") or u.get("imageUrl") or "")})
+        try:
+            top = check_error(await self.call("listCategories", base | {"ssd": v.ssd}))
+            await asyncio.gather(*(walk(c, "", 0) for c in top if isinstance(c, dict)))
+        except Exception:   # noqa: BLE001 — полный каталог запасной: ошибка = узлов нет, как раньше
+            return []
+        if out:
+            self._save(name, {"saved": time.time(), "units": out})
+        return out
+
+    async def unit_tree(self, v: Vehicle) -> TreeIndex | None:
+        """Узлы полного каталога как «быстрые группы» с отрицательными номерами: поиск по словам и всё, что за ним
+        (стороны, цены, варианты), работает тем же кодом. None — узлов нет."""
+        key = self.tree_key(v) + "-u"
+        if key in self._unit_trees:
+            return self._unit_trees[key]
+        units = await self.units(v)
+        if not units:
+            self._unit_trees[key] = None
+            return None
+        ids: dict[int, dict] = {}
+        by_cat: dict[str, list[dict]] = {}
+        for i, u in enumerate(units, 1):
+            ids[-i] = u
+            by_cat.setdefault(u["cat"], []).append({"name": u["name"], "quickGroupId": -i, "synonyms": "", "link": True,
+                                                    "children": []})
+        tree = {"name": "units", "link": False,
+                "children": [{"name": c, "link": False, "children": ch} for c, ch in by_cat.items()]}
+        self._unit_ids[key] = ids
+        self._unit_trees[key] = TreeIndex(tree, self.stop, {}, [], self.not_typos)
+        return self._unit_trees[key]
+
+    async def _unit_details(self, v: Vehicle, group_id: int) -> list[Detail]:
+        u = (self._unit_ids.get(self.tree_key(v) + "-u") or {}).get(group_id)
+        if not u:
+            return []
+        key = (v.catalog, v.vehicle_id, v.ssd, group_id, False)
+        hit = self._details.get(key)
+        if hit:
+            return hit[1]
+        name = f"unit_details/{_safe(v.catalog)}/{self._car(v)}/{u['id']}.json.gz"
+        data = await self._cached(name, DETAILS_TTL, lambda: self.call("listDetailByUnit", {
+            "catalog": v.catalog, "vehicleId": v.vehicle_id, "ssd": u["ssd"], "unitId": u["id"]}))
+        out = []
+        for d in data if isinstance(data, list) else []:
+            oem = re.sub(r"\s+", " ", str(d.get("oem") or "")).strip()
+            if not oem:
+                continue
+            da = _attrs(d)
+            out.append(Detail(oem=oem, name=_rename(str(d.get("name") or "").strip(), oem), note=da.get("note", ""),
+                              amount=da.get("amount", ""), match=d.get("match"), unit=u["name"], unit_note="",
+                              unit_id=u["id"], unit_ssd=u["ssd"], image=u["image"],
+                              code_on_image=str(d.get("codeOnImage") or ""), category=u["cat"], group_id=group_id))
+        self._details[key] = (time.time(), out)
+        return out
 
     # --- применимость номера к машине (ответ самого каталога) ---
     async def applicability(self, v: Vehicle, number: str) -> dict | None:
@@ -653,6 +738,8 @@ class Catalog:
         """full=False — только детали самой группы (у Ford воздушный фильтр там «Фильтрующий элемент»,
         по словам его не найти). full=True — узлы целиком, запасной путь для поиска по словам,
         когда в составе группы нужной детали нет."""
+        if group_id < 0:
+            return await self._unit_details(v, group_id)
         key = (v.catalog, v.vehicle_id, v.ssd, group_id, full)
         hit = self._details.get(key)
         if hit and time.time() - hit[0] < DETAILS_TTL:
