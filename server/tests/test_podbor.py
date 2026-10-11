@@ -2101,3 +2101,38 @@ def test_flat_category_list_does_not_loop(tmp_path):
     v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
     units = asyncio.run(eng.catalog.units(v))
     assert units and units[0]["cat"] == "Кузов / Передняя часть"
+
+
+def test_this_car_and_price_phrases_are_not_part_words():
+    assert T.expand("Посмотрите колодки передние и задние на этот автомобиль").strip() == "Посмотрите колодки передние и задние"
+    assert T.expand("нужны колодки на мою машину").strip() == "нужны колодки"
+    assert T.expand("подскажите по стоимости фильтр масляный").strip() == "фильтр масляный"
+    assert T.expand("по цене и наличию фильтр масляный").strip() == "фильтр масляный"
+    assert "стоимость диска" in T.expand("стоимость диска")     # просто слово «стоимость» не режем
+
+
+def test_strut_of_shock_absorber_is_the_shock_absorber():
+    assert T.expand("стойки амортизатора") == "амортизаторы"
+    assert T.expand("передняя стойка амортизатора") == "передняя амортизатор"
+    assert T.expand("амортизационные стойки") == "амортизаторы"
+    assert T.expand("стойки стабилизатора") == "стойки стабилизатора"      # стабилизатор — другая деталь
+
+
+def test_car_named_in_text_differs_from_vin_asks_before_searching():
+    from app.podbor import makes as MK
+    assert MK.mismatch("шайбы форсунок сан енг Кайрон", "BMW")[1] == "ssangyong"
+    assert MK.mismatch("шайбы форсунок кайрон", "SSANGYONG") is None
+    assert MK.mismatch("колодки на Тойота Камри", "LEXUS") is None        # одно семейство
+    assert MK.mismatch("оригинал тойота фильтр", "BMW") is None            # фирма детали, а не машина
+    assert MK.mismatch("мастер, добрый день, фильтр", "BMW") is None
+    eng = Engine(Fake(), None, set())
+    first = run("XW7BF4FK30S064389 колодки передние на Фольксваген Поло", engine=eng)           # VIN от Toyota
+    assert first["status"] == "car_mismatch" and not first["positions"]
+    assert "от машины" in first["text"] and "Volkswagen" in first["text"] and "VIN (17 знаков)" in first["text"]
+    assert first["memory"]["unknown_vin"] == "XW7BF4FK30S064389" and "XW7BF4FK30S064389" not in first["memory"]["pending"]
+    # «для неё» — подбираем на машину по VIN и больше не спрашиваем
+    again = run("для неё", engine=eng, memory=first["memory"])
+    assert again["status"] == "ok" and any("колод" in p["query"].lower() for p in again["positions"])
+    # новый VIN — подбираем на него (Polo из VEHICLES), старый VIN в просьбу не попадает
+    other = run("XW8ZZZCKZMG026007", engine=eng, memory=first["memory"])
+    assert other["status"] == "ok" and other["vehicle"]["brand"] == "VOLKSWAGEN"

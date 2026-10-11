@@ -20,6 +20,7 @@ from . import dialog as D
 from . import emb as EMB
 from . import article as A
 from . import differ as DF
+from . import makes as MK
 from . import reviews as R
 from . import understand as U
 from . import text as T
@@ -136,7 +137,9 @@ class Engine:
             text = pending + "\n" + text
             req, memory = T.parse(text), None
         unknown = (memory or {}).get("unknown_vin") or ""
+        confirmed = False   # клиент ответил на «для какой машины?»: марку из его слов больше не сверяем с VIN
         if unknown and pending and not req.ident and not req.plate:
+            confirmed = bool((memory or {}).get("mismatch"))
             # Просили описать машину (VIN каталог не знает): ответ «Шкода Рапид 2019, 1.6, автомат» — к прежней просьбе и тому же VIN
             text = pending + "\n" + text + "\n" + unknown
             req, memory = T.parse(text), None
@@ -173,6 +176,15 @@ class Engine:
         v = found[min(vehicle or 0, len(found) - 1)]
         res["vehicle"] = v.public()
         res["warnings"] += compare_model(req.model, v)
+        said = None if confirmed or res.get("car_text") or not req.ident else MK.mismatch(" ".join(req.chunks), v.brand)
+        if said:
+            # «Шайбы форсунок на сан енг Кайрон» при VIN от BMW: подобрали бы болты для BMW. Сначала спросим, какая машина
+            res["mismatch"] = {"said": said[0], "said_car": MK.FAMILIES[said[1]][0],
+                               "vin_car": res["vehicle"].get("short") or v.summary()}
+            out = self._done(res, "car_mismatch", t0)
+            out["memory"]["pending"] = re.sub(re.escape(req.ident), " ", text, flags=re.I).strip()[-1500:]
+            out["memory"]["unknown_vin"], out["memory"]["mismatch"] = req.ident, True
+            return out
         try:
             tree = await self.catalog.tree(v)
         except LaximoError as e:
@@ -2089,6 +2101,11 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 "Напишите, пожалуйста: марку и модель, год выпуска, объём двигателя (например, 1.6; бензин или дизель) "
                 "и коробку (автомат или механика) — найдём по ним. Или пришлите фото СТС, либо проверьте VIN (17 знаков). "
                 "Менеджер подберёт вручную и напишет, если описать машину не получится.")
+    if st == "car_mismatch":
+        m = res["mismatch"]
+        return (f"VIN в сообщении — от машины {m['vin_car'].rstrip('.')}, а в тексте вы пишете про {m['said_car']} («{m['said']}»). "
+                f"Уточните, пожалуйста, для какой машины нужна деталь. Если для {m['said_car']} — пришлите её VIN (17 знаков). "
+                f"Если для {m['vin_car'].split(',')[0]} — ответьте «для неё», и подберём.")
     if st == "catalog_error":
         return "Каталог сейчас не отвечает, подберём вручную."
     if st == "no_quick_groups":
