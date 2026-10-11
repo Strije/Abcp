@@ -510,13 +510,24 @@ def spec_need(text: str, target: dict) -> list[tuple[str, "T.Side"]]:
     return [(f"{base} {a}", T.Side()) for a in attrs]
 
 
+def shown_side(p: dict, var: dict) -> tuple[str, str]:
+    """Сторона варианта для заголовка ответа — только если она что-то значит: клиент её назвал или у детали есть передние и
+    задние (левые и правые). Иначе «Топливный фильтр передний» (12.10: в каталоге у фильтра стояла ось «перед»)."""
+    side = p.get("side") or {}
+    vs = p.get("variants", [])
+    axis = var["axis"] if side.get("axis") or len({v["axis"] for v in vs} - {""}) > 1 else ""
+    lr = var["lr"] if side.get("lr") or len({v["lr"] for v in vs} - {""}) > 1 else ""
+    return axis, lr
+
+
 def _pick(p: dict, x: dict, cheaper: bool, qty: int) -> dict:
     o = dict(x["offer"])
     if cheaper and o.get("cheaper"):
         o["price"], o["days"] = o["cheaper"]["price"], o["cheaper"]["days"]
     o["cheaper"] = None
+    axis, lr = shown_side(p, x["var"])
     return {"query": p["query"], "name": x["var"]["name"], "who": x["who"], "offer": o, "qty": qty, "kind": p.get("kind", ""),
-            "axis": x["var"]["axis"], "lr": x["var"]["lr"], "amount": x["var"].get("amount", "")}
+            "axis": axis, "lr": lr, "amount": x["var"].get("amount", "")}
 
 
 def _cheapest(p: dict) -> dict | None:

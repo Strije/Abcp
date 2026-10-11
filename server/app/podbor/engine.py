@@ -329,6 +329,9 @@ class Engine:
         """Не автозапчасти и всё, что бот не оценит сам (шины, инструмент, химия, аксессуары, жидкости без цены в каталоге),
         — менеджеру: позиция попадает в «Ответьте сами» на странице подбора, клиенту говорим, что передали."""
         out = res.setdefault("handoff", [])
+        said = [p["adj_default"][:5] for p in res.get("positions", []) if p.get("adj_default")]
+        if said:   # модель спросила «топливный фильтр нужен?» — мы уже ищем его, вопрос клиенту не нужен
+            out[:] = [q for q in out if not any(w in q.lower() for w in said)]
         for p in res.get("positions", []):
             kind = p.get("kind", "")
             if (p.get("article") or {}).get("catalog", {}) and p["article"]["catalog"].get("status") == "FULLY":
@@ -639,9 +642,9 @@ class Engine:
     async def _reply(self, r: dict, positions: list[dict], v: Vehicle) -> dict:
         """Ответ про показанные предложения — в виде, который можно сохранить и пересобрать в текст."""
         def item(kind: str, p: dict, x: dict | None, **extra) -> dict:
+            axis, lr = D.shown_side(p, x["var"]) if x else ("", "")
             out = {"type": kind, "query": p["query"], "name": x["var"]["name"] if x else "",
-                   "who": x["who"] if x else "", "offer": x["offer"] if x else None,
-                   "axis": x["var"]["axis"] if x else "", "lr": x["var"]["lr"] if x else ""}
+                   "who": x["who"] if x else "", "offer": x["offer"] if x else None, "axis": axis, "lr": lr}
             return out | extra | ({"why": x["why"]} if x and x.get("why") else {})
         answers = [item(k if x else "none_" + k, p, x) for k, p, x in r.get("answers", [])]
         for a in r.get("ask_brand", []):
@@ -787,6 +790,15 @@ class Engine:
             # Ищем сами детали («передних рычагов»), в заголовке — слова клиента; «все» решит node_parts/wants_all
             pos = await self.position(v, tree, kit.group(1), want, kind)
             return pos | {"query": query}
+        only = T.stems(query, self.stop)
+        if len(only) == 1 and only[0] in _ADJ_DEFAULT:
+            # «Нужен топливный» — почти всегда фильтр: ищем его и говорим, как поняли (12.10: «Да» на вопрос «фильтр?» уходило в никуда)
+            full = _ADJ_DEFAULT[only[0]]
+            word = next((w for w in T.words(query) if T.stem(w) == only[0]), only[0])
+            pos = await self.position(v, tree, full, want, kind)
+            if pos["status"] in ("found", "choose"):
+                return pos | {"query": full[:1].upper() + full[1:], "adj_default": word.lower(),
+                              "note": f"Поняли «{word.lower()}» как «{full}»; если нужна другая деталь — напишите."}
         pos = await self._position(v, tree, query, want, kind)
         if pos["status"] == "not_found" and want.axis == "rear" and _DISC.search(query):
             # «Диски задние» на машине с барабанами: дисков в каталоге нет — даём барабаны и говорим об этом
@@ -2479,6 +2491,9 @@ UNIT_VARIANTS = 14   # сколько деталей узла проверяем
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
+_ADJ_DEFAULT = {"топливн": "топливный фильтр", "маслян": "масляный фильтр", "воздушн": "воздушный фильтр",
+                "салон": "салонный фильтр"}   # одно прилагательное без детали: самое частое значение
+
 _CAR_RU = {"рено": "renault", "мерс": "mercedes", "мерседес": "mercedes", "бмв": "bmw", "киа": "kia", "кия": "kia",
            "хундай": "hyundai", "хендай": "hyundai", "хьюндай": "hyundai", "тойота": "toyota", "шкода": "skoda",
            "фольксваген": "volkswagen", "фольц": "volkswagen", "ниссан": "nissan", "мицубиси": "mitsubishi",

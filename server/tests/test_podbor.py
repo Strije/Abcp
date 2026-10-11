@@ -2144,3 +2144,20 @@ def test_make_words_do_not_match_ordinary_parts_words():
         assert MK.mentioned(word) == [], word
     assert [f for _, f in MK.mentioned("колодки на Тойоте и у Хонды")] == ["toyota", "honda"]
     assert [f for _, f in MK.mentioned("Polo 2015")] == ["vag"]
+
+
+def test_lone_adjective_means_the_filter_and_says_so():
+    res = run("X9FKXXEEBKCB57566 масляный")
+    p = res["positions"][0]
+    assert p["status"] == "found" and p["query"] == "Масляный фильтр" and "Поняли «масляный» как «масляный фильтр»" in p["note"]
+    assert "это только признак" not in res["text"]
+
+
+def test_side_in_reply_title_only_when_it_means_something():
+    from app.podbor import dialog as D
+    one = {"side": {}, "variants": [{"axis": "front", "lr": ""}]}
+    assert D.shown_side(one, one["variants"][0]) == ("", "")                 # фильтр: ось из каталога клиенту не нужна
+    asked = {"side": {"axis": "front"}, "variants": [{"axis": "front", "lr": ""}]}
+    assert D.shown_side(asked, asked["variants"][0]) == ("front", "")        # клиент сам назвал сторону
+    both = {"side": {}, "variants": [{"axis": "front", "lr": ""}, {"axis": "rear", "lr": ""}]}
+    assert D.shown_side(both, both["variants"][1]) == ("rear", "")           # колодки: передние и задние
