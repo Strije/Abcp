@@ -153,7 +153,7 @@ def shown(p: dict, analogs: int = 3) -> list[dict]:
             if ao.get("original"):
                 out.append({"var": a, "offer": dict(ao["original"], number=a["oem"]), "who": "тот же оригинал"})
         # Замена производителя под другим номером (подтверждена каталогом) — в том же месте, что и в тексте ответа
-        out += [{"var": var, "offer": dict(x), "who": "замена производителя"} for x in (o.get("replacements") or [])
+        out += [{"var": var, "offer": dict(x), "who": "оригинал под другим номером"} for x in (o.get("replacements") or [])
                 if x.get("catalog")]
         out += [{"var": var, "offer": x, "who": ""} for x in (o.get("analogs") or [])[:per]]
     return out

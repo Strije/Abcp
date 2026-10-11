@@ -1383,10 +1383,19 @@ class Engine:
         if not todo:
             return
         answers = await asyncio.gather(*(self.catalog.applicability(v, rp["number"]) for _, rp in todo), return_exceptions=True)
+        own = {_key(var.get("oem")).lstrip("0") for var in pos.get("variants", [])}   # эти номера уже показаны вариантами
+        taken: set[str] = set()
         keep: dict[int, list[dict]] = {}
         for (var, rp), ans in zip(todo, answers):
-            if isinstance(ans, dict) and ans.get("status") in ("FULLY", "PARTIAL"):
-                keep.setdefault(id(var), []).append(rp | {"catalog": ans["status"]})
+            k = _key(rp["number"]).lstrip("0")
+            if not (isinstance(ans, dict) and ans.get("status") in ("FULLY", "PARTIAL")) or k in own or k in taken:
+                continue
+            # Лишние строки клиенту не нужны: замена показывается, если оригинала с ценой нет или она быстрее / заметно дешевле
+            o = var["offers"].get("original")
+            if o and not (rp["days"] < o["days"] or rp["price"] < 0.9 * o["price"]):
+                continue
+            taken.add(k)
+            keep.setdefault(id(var), []).append(rp | {"catalog": ans["status"]})
         for var in pos.get("variants", []):
             o = var.get("offers")
             if o and "replacements" in o:
@@ -1898,7 +1907,7 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
     for rp in (o or {}).get("replacements") or []:
         if rp.get("catalog"):   # только подтверждённые каталогом по VIN: см. Engine._confirm_replacements
             out.append(_offer_line(rp, numbers, nice_name(rp["description"], rp["brand"], rp["number"]) or catalog_name,
-                                   f"замена производителя {rp['number']}"))
+                                   f"оригинал под другим номером {rp['number']}"))
     more = 0
     if o and o["analogs"]:
         shown = o["analogs"][:analogs]

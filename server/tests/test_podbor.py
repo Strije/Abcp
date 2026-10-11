@@ -1764,11 +1764,11 @@ def test_manufacturer_replacements_only_when_catalog_confirms():
     var = res["positions"][0]["variants"][0]
     assert [r["number"] for r in var["offers"]["replacements"]] == ["48068-48021"]
     text = draft(res, numbers=False)
-    assert "замена производителя 48068-48021" in text and "99999" not in text
+    assert "оригинал под другим номером 48068-48021" in text and "99999" not in text
     # порядок выбора совпадает с порядком строк: оригинал, замена, аналоги
     from app.podbor import dialog as D
     who = [x["who"] for x in D.shown(res["positions"][0])]
-    assert who[:2] == ["оригинал", "замена производителя"]
+    assert who[:2] == ["оригинал", "оригинал под другим номером"]
 
 
 def test_unconfirmed_replacements_are_never_shown():
@@ -1777,7 +1777,7 @@ def test_unconfirmed_replacements_are_never_shown():
         "original": None, "analogs": [], "stats": {"articles": 0},
         "replacements": [{"brand": "TOYOTA", "number": "X2", "description": "Рычаг", "price": 100.0, "days": 1,
                           "tags": [], "cheaper": None}]}}
-    assert not any("замена" in line for line in _block(var, [], False, 3)[0])
+    assert not any("другим номером" in line for line in _block(var, [], False, 3)[0])
 
 
 # ---------- вопросы клиенту, когда VIN каталог не знает ----------
@@ -1832,3 +1832,23 @@ def test_unknown_vin_asks_for_car_then_continues_the_request():
     third = run("не знаю, обычная машина", engine=eng, memory=first["memory"])
     assert third["status"] == "vehicle_not_found" and third["memory"]["unknown_vin"] == vin
     assert "колодки передние" in third["memory"]["pending"]
+
+
+def test_replacements_hide_duplicates_and_useless_lines():
+    from app.podbor.catalog import Vehicle
+
+    class AlwaysFits(Fake):
+        def answer(self, method, params):
+            if method == "getOEMPartApplicability":
+                return {"applicability": "FULLY", "categories": []}
+            return super().answer(method, params)
+    eng = Engine(AlwaysFits(), None, set())
+    v = Vehicle("AU1587", "0", "SSD", "AUDI", "A4", {})
+    mk = lambda number, price, days: {"number": number, "price": price, "days": days, "brand": "VAG",   # noqa: E731
+                                      "description": "Деталь", "tags": [], "cheaper": None}
+    var1 = {"oem": "A1", "offers": {"original": {"price": 1000, "days": 3},
+                                    "replacements": [mk("B1", 1200, 5), mk("B2", 800, 5), mk("A2", 900, 1)]}}
+    var2 = {"oem": "A2", "offers": {"original": None, "replacements": [mk("B3", 700, 2), mk("B2", 650, 2)]}}
+    asyncio.run(eng._confirm_replacements(v, {"variants": [var1, var2]}))
+    assert [r["number"] for r in var1["offers"]["replacements"]] == ["B2"]   # B1 дороже и дольше, A2 уже показан вариантом
+    assert [r["number"] for r in var2["offers"]["replacements"]] == ["B3"]   # B2 уже взят первым вариантом
