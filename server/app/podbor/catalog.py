@@ -134,6 +134,7 @@ class Detail:
     code_on_image: str
     category: str
     group_id: int = 0
+    unit_code: str = ""   # код узла полного каталога («60-624»): у Hyundai/Kia номера главных деталей начинаются с «624»
 
     @property
     def context(self) -> str:
@@ -249,7 +250,10 @@ class TreeIndex:
                 self._walk(r, [])
         # Словарь: слова покупателей и прайсов → группы по приоритету. Первой группы у машины нет
         # (шаровая у Focus — часть рычага) — слово уходит в следующую, которая есть.
+        extra_vocab: set[str] = set()   # слова деталей, которых нет в быстрых группах: без них фраза отбрасывается как «не деталь»
         for syn in synonyms or []:
+            if syn.get("vocab"):
+                extra_vocab.update(x for w in syn["words"] for x in T.stems(w, stop))
             gid = next((int(g) for g in syn.get("groups", []) if int(g) in self.groups), None)
             if gid is None:
                 # Только помеченные «strict»: у них перечислены все группы этой детали. У «сайлентблок рычага»
@@ -282,7 +286,7 @@ class TreeIndex:
         n = max(len(self.groups), 1)
         self.idf = {s: math.log((n + 1) / (c + 1)) + 1 for s, c in df.items()}
         self.max_idf = max(self.idf.values(), default=1.0)
-        self.vocab = set(self.idf)
+        self.vocab = set(self.idf) | extra_vocab
         self._fix: dict[str, str] = {}
         self._split: dict[str, list[str]] = {}
 
@@ -582,7 +586,8 @@ class Catalog:
             out.append(Detail(oem=oem, name=_rename(str(d.get("name") or "").strip(), oem), note=da.get("note", ""),
                               amount=da.get("amount", ""), match=d.get("match"), unit=u["name"], unit_note="",
                               unit_id=u["id"], unit_ssd=u["ssd"], image=u["image"],
-                              code_on_image=str(d.get("codeOnImage") or ""), category=u["cat"], group_id=group_id))
+                              code_on_image=str(d.get("codeOnImage") or ""), category=u["cat"], group_id=group_id,
+                              unit_code=u["code"]))
         self._details[key] = (time.time(), out)
         return out
 

@@ -959,7 +959,10 @@ class Engine:
         if not kept:
             pos["note"] = "По описаниям поставщиков найденные номера относятся к другой стороне."
             return pos
-        kept = prefer_named_offers(kept, q)
+        kept = prefer_named_offers(kept, q, strict=unit_mode)
+        if not kept:
+            pos["note"] = "В узле полного каталога нужной детали по описаниям поставщиков не нашли."
+            return pos
         part = self._part_of_assembly(v, kept, q)
         if part:
             c, note = part
@@ -995,7 +998,7 @@ class Engine:
         for c in kept:
             kinds.setdefault(c.kind, []).append(c)
         kinds = by_suppliers(kinds, tree.known(q))
-        pos["variants"] = [self._variant(c, v, alt=i > 0) for cs in kinds.values()
+        pos["variants"] = [self._variant(c, v, alt=i > 0, name_hint=(query if unit_mode else "")) for cs in kinds.values()
                            for i, c in enumerate(sorted(cs, key=lambda c: (not (c.rows and _has_original(c, v)), -c.score)))]
         # Отзывы владельцев о фирмах по этому виду детали — по словам клиента и названиям групп
         for var in pos["variants"]:
@@ -1134,7 +1137,19 @@ class Engine:
         head = T.head(q)
         big = [c for c in cands.values() if not any(T.same(_name_head(c.d.name), x) for x in small)]
         named = [c for c in big if head and T.same(_name_head(c.d.name), head)]
-        return sorted(named or big, key=lambda c: -c.score)[:UNIT_VARIANTS]
+        def mine(c: Candidate) -> int:
+            # Hyundai/Kia: узел «60-624» — главные детали 624051H000, 624762H000… Сначала проверяем их, остальные — после
+            m = re.search(r"-(\d{2,4})", c.d.unit_code or "")
+            return 0 if m and _key(c.d.oem).startswith(m.group(1)) else 1
+        pick = sorted(named or big, key=lambda c: (mine(c), -c.score))
+        # Один код на схеме — одна деталь с разными номерами (у балки Kia три: 624051H000/H020/H021, продаётся третий)
+        seen: collections.Counter = collections.Counter()
+        out = []
+        for c in pick:
+            seen[c.d.code_on_image] += 1
+            if seen[c.d.code_on_image] <= 4:
+                out.append(c)
+        return out[:UNIT_VARIANTS]
 
     def _foreign(self, tree: TreeIndex, name: list[str], q: list[str], chosen: set[int], near: list[str]) -> bool:
         """Название детали целиком — название другой группы, и в той есть слово, которого нет ни в запросе,
@@ -1396,7 +1411,7 @@ class Engine:
                 break
         return brand, rows
 
-    def _variant(self, c: Candidate, v: Vehicle, alt: bool) -> dict:
+    def _variant(self, c: Candidate, v: Vehicle, alt: bool, name_hint: str = "") -> dict:
         d = c.d
         amount = d.amount
         if c.pair:
@@ -1409,14 +1424,25 @@ class Engine:
             "vote": {"front": c.vote[1], "rear": c.vote[2]}, "warning": c.warning, "score": round(c.score, 2),
             "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
                        "image": image_url(d.image) if d.image else "", "code": d.code_on_image},
-            "offers": self._offers_of(c, v),
+            "offers": self._offers_of(c, v, name_hint),
             "facts": desc_facts(c.rows or []),
         }
 
-    def _offers_of(self, c: Candidate, v: Vehicle) -> dict | None:
+    def _offers_of(self, c: Candidate, v: Vehicle, name_hint: str = "") -> dict | None:
         if not c.rows:
             return None
-        o = curate(c.rows, c.d.oem, v.brand, self.warranty, name=c.d.name)
+        # name_hint — слова клиента для узла полного каталога: у главной детали там своё название («Поперечная балка в сборе»),
+        # по нему кросс-мусор («Колодки тормозные» у подрамника) не отсечь, а по слову клиента — можно
+        rows = c.rows
+        if name_hint:
+            # Узел полного каталога: кроссы поставщиков тянут чужое («Колодки тормозные» к подрамнику). Аналог — только если
+            # в его описании есть слово клиента; оригинал (строка с номером каталога) остаётся
+            head = T.head(T.stems(T.expand(name_hint), self.stop))
+            own = _key(c.d.oem)
+            if head:
+                rows = [r for r in c.rows if _key(r.get("numberFix") or r.get("number")) == own
+                        or any(T.same(head, w) for w in T.stems(str(r.get("description") or "")))]
+        o = curate(rows or c.rows, c.d.oem, v.brand, self.warranty, name=name_hint or c.d.name)
         # Замены производителя — только кандидаты; клиенту идут после проверки каталогом (_confirm_replacements)
         o["replacements"] = replacement_candidates(c.rows, c.d.oem, v.brand, name=c.d.name)
         return o
@@ -1583,7 +1609,16 @@ def _name_head(name: str) -> str:
 _NEIGHBORS = set(_SMALL_OFFERS) | {T.stem(w) for w in ("рычаг", "корпус", "кожух", "щит", "ограничитель", "крышка", "успокоитель", "башмак", "звездочка", "шестерня")}
 
 
-def prefer_named_offers(kept: list["Candidate"], q: list[str]) -> list["Candidate"]:
+def _desc_share(rows: list[dict] | None, words: list[str]) -> float:
+    """Доля разных описаний поставщиков по номеру, где есть слово клиента: у балки Kia оригинал в прайсах — «Поперечная балка»,
+    а NTY, Sat, Quattro Freni пишут «Подрамник передний». Меньше пяти описаний — не судим."""
+    descs = {str(r.get("description") or "").lower() for r in rows or []} - {""}
+    if len(descs) < 5:
+        return 0.0
+    return sum(1 for d in descs if any(T.same(w, s) for w in words for s in T.stems(d))) / len(descs)
+
+
+def prefer_named_offers(kept: list["Candidate"], q: list[str], strict: bool = False) -> list["Candidate"]:
     """«Цепь ГРМ» у Honda: в узле ещё натяжитель и рычаг натяжителя (каталог называет их по-английски, названия не
     сравнить), а описание оригинала у поставщиков понятное: «Цепь…», «Натяжитель цепи…». Клиент назвал деталь, и по
     описанию оригинала она есть среди найденного — варианты, где оригинал явно другая деталь (натяжитель, рычаг), убираем."""
@@ -1601,8 +1636,13 @@ def prefer_named_offers(kept: list["Candidate"], q: list[str]) -> list["Candidat
 
     def named(c: "Candidate") -> bool:
         h = desc_head(c)
-        return any(T.same(h, a) for a in aliases) or any(T.same(_name_head(c.d.name), a) for a in aliases)
+        return any(T.same(h, a) for a in aliases) or any(T.same(_name_head(c.d.name), a) for a in aliases)             or (strict and _desc_share(c.rows, aliases) >= 0.3)
     good = [c for c in kept if named(c)]
+    if strict:
+        # Узел полного каталога: в нём и крепёж, и соседние детали. Оставляем только то, что поставщики называют, как клиент,
+        # а подтвердить нечем — не показываем чужое («Подрамник» → рычаги и сайлентблоки узла)
+        sold = {c.d.code_on_image for c in good if c.rows}
+        return [c for c in good if c.rows or c.d.code_on_image not in sold]   # у кода есть продающийся номер — пустые не нужны
     if not good or len(good) == len(kept):
         return kept
     return [c for c in kept if c in good or not (desc_head(c) and any(T.same(desc_head(c), n) for n in _NEIGHBORS))]
@@ -2412,8 +2452,8 @@ def check_attrs(pos: dict) -> None:
 
 
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
-UNIT_VARIANTS = 12   # сколько деталей узла проверяем по ценам, чтобы найти главную
-UNIT_SCORE = 0.7    # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
+UNIT_VARIANTS = 14   # сколько деталей узла проверяем по ценам, чтобы найти главную
+UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
 WEAK_SCORE = 0.65   # оценка группы каталога ниже — результат правил слабый (замер 07.10.2026: хорошие ≥0.69)

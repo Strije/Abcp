@@ -1992,3 +1992,74 @@ def test_fog_light_synonyms_and_question():
     # вопрос «фары или лампочки» — только на голое «туманки»
     ask = next(a for a in rules["ask"] if a["query"] == ["туманки"])
     assert "лампочки" in ask["unless"] and "фары" in ask["unless"] and "лампочки к ним" in ask["text"]
+
+
+# ---------- полный каталог: узлы вне быстрых групп ----------
+
+class FakeUnits(Fake):
+    """Подрамника в быстрых группах нет; в полном каталоге — узел «Подрамник передней подвески», главная деталь называется
+    «Балка поперечная в сборе», а поставщики пишут «Подрамник передний»."""
+
+    def __init__(self):
+        super().__init__()
+        self.unit_calls = 0
+
+    def answer(self, method, params):
+        if method == "listCategories":
+            self.unit_calls += 1
+            return [{"categoryId": "1", "name": "Кузовная", "ssd": "S1", "childrens": "False"}]
+        if method == "listUnits":
+            self.unit_calls += 1
+            return [{"unitId": "11", "name": "Подрамник передней подвески", "code": "60-480", "ssd": "SU11", "imageUrl": ""},
+                    {"unitId": "12", "name": "Бампер передний", "code": "85-100", "ssd": "SU12", "imageUrl": ""}]
+        if method == "listDetailByUnit":
+            self.unit_calls += 1
+            assert params["unitId"] == "11"
+            return [{"name": "БОЛТ", "codeOnImage": "1140DJ", "oem": "1140410186K"},
+                    {"name": "КРОНШТЕЙН ПОДРАМНИКА", "codeOnImage": "48077", "oem": "48077-00001"},
+                    {"name": "Рычаг подвески передний нижний левый", "codeOnImage": "54500", "oem": "48069-00002"},
+                    {"name": "БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ", "codeOnImage": "48099", "oem": "48099-00001"}]
+        return super().answer(method, params)
+
+    async def offers(self, number, brand):
+        self.calls.append(("offers", number, brand))
+        if number == "48099-00001":
+            names = ["Подрамник передний", "Подрамник передней подвески", "Подрамник передний Camry 06-11", "Подрамник Toyota",
+                     "Подрамник передний усиленный", "Подрамник передний в сборе"]
+            return ([offer("TOYOTA", "48099-00001", 40000, 100, "Балка поперечная")]
+                    + [offer(b, f"PD{i}", 9000 + 500 * i, 48, n, 5) for i, (b, n) in enumerate(zip(
+                        ["NTY", "Sat", "Quattro Freni", "Febest", "KYB", "Delo"], names), 1)]
+                    + [offer("Segmatic", "BR1", 800, 200, "Колодки тормозные передние", 5)])   # кросс-мусор поставщиков
+        if number == "48077-00001":
+            return [offer("TOYOTA", "48077-00001", 1500, 100, "Кронштейн подрамника")]
+        return await super().offers(number, brand)
+
+
+def test_full_catalog_units_are_listed_once_and_cached(tmp_path):
+    fake = FakeUnits()
+    eng = Engine(fake, tmp_path, set())
+    v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
+    units = asyncio.run(eng.catalog.units(v))
+    assert [u["name"] for u in units] == ["Подрамник передней подвески", "Бампер передний"] and units[0]["cat"] == "Кузовная"
+    calls = fake.unit_calls
+    again = Engine(fake, tmp_path, set())                      # новый процесс: список берётся с диска
+    assert asyncio.run(again.catalog.units(v)) == units and fake.unit_calls == calls
+
+
+def test_part_outside_quick_groups_is_found_in_full_catalog_by_supplier_names():
+    res = run("XW7BF4FK30S064389 подрамник", engine=Engine(FakeUnits(), None, set()))
+    pos = res["positions"][0]
+    assert pos["status"] == "found" and pos.get("via_units") and "полном каталоге" in pos["note"]
+    names = [v["name"] for v in pos["variants"]]
+    assert names == ["БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ"]                # не болт, не рычаг, не кронштейн: поставщики зовут «Подрамник»
+    analogs = [a["brand"] for a in pos["variants"][0]["offers"]["analogs"]]
+    assert "Segmatic" not in analogs and {"NTY", "Sat"} <= set(analogs)       # колодки-кросс отсечены словом клиента
+
+
+def test_bushing_of_a_unit_is_not_guessed_and_known_parts_never_use_units():
+    eng = Engine(FakeUnits(), None, set())
+    res = run("XW7BF4FK30S064389 сайлентблок подрамника", engine=eng)
+    assert res["positions"][0]["status"] == "not_found" and not res["positions"][0].get("via_units")
+    fake = FakeUnits()
+    res = run("XW7BF4FK30S064389 рычаг передний нижний", engine=Engine(fake, None, set()))
+    assert not res["positions"][0].get("via_units") and fake.unit_calls == 0   # нашли быстрыми группами — полный каталог не трогаем
