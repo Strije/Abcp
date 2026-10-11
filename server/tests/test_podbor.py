@@ -2136,3 +2136,11 @@ def test_car_named_in_text_differs_from_vin_asks_before_searching():
     # новый VIN — подбираем на него (Polo из VEHICLES), старый VIN в просьбу не попадает
     other = run("XW8ZZZCKZMG026007", engine=eng, memory=first["memory"])
     assert other["status"] == "ok" and other["vehicle"]["brand"] == "VOLKSWAGEN"
+
+
+def test_make_words_do_not_match_ordinary_parts_words():
+    from app.podbor import makes as MK
+    for word in ("поршень 57", "полосы на крыло", "витки пружины", "мастер, добрый день", "партнёр по бизнесу"):
+        assert MK.mentioned(word) == [], word
+    assert [f for _, f in MK.mentioned("колодки на Тойоте и у Хонды")] == ["toyota", "honda"]
+    assert [f for _, f in MK.mentioned("Polo 2015")] == ["vag"]

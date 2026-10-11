@@ -34,8 +34,8 @@ FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
 
 # слово клиента → семейство. Русские формы принимают окончания («тойоте»), латинские — как есть.
 _WORDS: dict[str, tuple[str, ...]] = {
-    "vag": ("volkswagen", "vw", "фольксваген", "фольц", "audi", "ауди", "skoda", "шкода", "seat", "сеат", "порше", "гольф", "golf",
-            "поло", "тигуан", "tiguan", "пассат", "passat", "джетта", "jetta", "октавия", "octavia", "рапид", "rapid", "йети", "yeti",
+    "vag": ("volkswagen", "vw", "фольксваген", "фольц", "audi", "ауди", "skoda", "шкода", "seat", "сеат", "порше", "гольф", "golf", "polo",
+            "тигуан", "tiguan", "пассат", "passat", "джетта", "jetta", "октавия", "octavia", "рапид", "rapid", "йети", "yeti",
             "суперб", "superb", "фабия", "fabia"),
     "toyota": ("toyota", "тойота", "тоёта", "lexus", "лексус", "камри", "camry", "королла", "corolla", "рав4", "rav4", "прадо", "prado",
                "ленд крузер", "land cruiser", "виста", "аурис", "auris", "авенсис", "avensis", "хайлендер", "highlander"),
@@ -77,8 +77,14 @@ def _compile() -> tuple[re.Pattern, dict[str, str]]:
     for fam, words in _WORDS.items():
         for w in words:
             forms[w.replace("ё", "е")] = fam
-    alt = "|".join(sorted((re.escape(w).replace(r"\ ", r"[\s\-]*") + (r"[а-я]{0,3}" if re.search("[а-я]", w) else "")
-                           for w in forms), key=len, reverse=True))
+    def one(w: str) -> str:
+        body = re.escape(w).replace(r"\ ", r"[\s\-]*")
+        if not re.search("[а-я]", w):
+            return body
+        if w[-1] in "ая":
+            body = body[:-1]
+        return body + r"(?:а|я|у|ы|е|и|ю|ой|ою|ей|ом|ов|ам|ах|ами)?"
+    alt = "|".join(sorted((one(w) for w in forms), key=len, reverse=True))
     return re.compile(r"(?<![а-яa-z0-9])(?:" + alt + r")(?![а-яa-z0-9])", re.I), forms
 
 
@@ -92,6 +98,7 @@ def family_of_brand(brand: str) -> str:
 
 
 _NORM = {re.sub(r"[\s\-]+", "", k): fam for k, fam in _FORMS.items()}
+_NORM |= {k[:-1]: fam for k, fam in list(_NORM.items()) if re.search("[а-я]", k) and k[-1] in "ая"}
 
 
 def _form_of(word: str) -> str:
