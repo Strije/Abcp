@@ -521,22 +521,27 @@ class Catalog:
             return saved["units"]
         base = {"catalog": v.catalog, "vehicleId": v.vehicle_id}
         out: list[dict] = []
+        sem = asyncio.Semaphore(6)   # у VW сотни категорий: не заваливаем Laximo запросами разом
+
+        async def ask(method: str, params: dict):
+            async with sem:
+                return check_error(await self.call(method, params))
 
         async def walk(cat: dict, path: str, depth: int):
             path = f"{path} / {cat.get('name')}" if path else str(cat.get("name") or "")
             ssd = cat.get("ssd") or v.ssd
             if str(cat.get("childrens")).lower() == "true" and depth < 4:
-                kids = check_error(await self.call("listCategories", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd}))
+                kids = await ask("listCategories", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd})
                 await asyncio.gather(*(walk(k, path, depth + 1) for k in kids if isinstance(k, dict)))
             else:
-                us = check_error(await self.call("listUnits", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd}))
+                us = await ask("listUnits", base | {"categoryId": str(cat["categoryId"]), "ssd": ssd})
                 for u in us if isinstance(us, list) else []:
                     if isinstance(u, dict) and u.get("unitId") and u.get("name"):
                         out.append({"id": str(u["unitId"]), "name": str(u["name"]).strip(), "code": str(u.get("code") or ""),
                                     "ssd": str(u.get("ssd") or ""), "cat": path,
                                     "image": str(u.get("largeImageUrl") or u.get("imageUrl") or "")})
         try:
-            top = check_error(await self.call("listCategories", base | {"ssd": v.ssd}))
+            top = await ask("listCategories", base | {"ssd": v.ssd})
             await asyncio.gather(*(walk(c, "", 0) for c in top if isinstance(c, dict)))
         except Exception:   # noqa: BLE001 — полный каталог запасной: ошибка = узлов нет, как раньше
             return []

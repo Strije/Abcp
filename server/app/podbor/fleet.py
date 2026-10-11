@@ -11,6 +11,7 @@
 import asyncio
 import collections
 import json
+import os
 import re
 import sys
 import time
@@ -19,7 +20,7 @@ from pathlib import Path
 from . import text as T
 from .catalog import _safe, Catalog, LaximoError
 from .engine import load_rules
-from .sources import Remote
+from .sources import Direct, Remote
 
 CACHE = Path(".podbor-cache")
 FLEET = CACHE / "fleet.json"
@@ -174,7 +175,15 @@ async def units():
     навсегда). Нужны лаборатории и ночным замерам: поиск по узлам вне быстрых групп (подрамник, поперечина…) считается по ним.
     Уже сохранённые не спрашиваем: повторный запуск продолжает с места остановки."""
     ready = json.loads((CACHE / "fleet_ready.json").read_text(encoding="utf-8"))
-    src = Remote("https://109.73.199.217")
+    direct = os.environ.get("FLEET_DIRECT") == "1"   # на сервере: напрямую в Laximo, без гостевого прокси (60 запросов в минуту)
+    if direct:
+        from ..config import load
+        from ..laximo import Laximo, Usage
+        lx = Laximo(load())
+        lx.usage = Usage(None)   # счётчик боевого сервиса не трогаем: файл принадлежит службе
+        src = Direct(lx, None, "")
+    else:
+        src = Remote("https://109.73.199.217")
     cat = _catalog(src)
     done = fresh = total = 0
     try:
@@ -197,10 +206,14 @@ async def units():
             total += len(us)
             fresh += 0 if had else 1
             print(f"  {'·' if had else '✓'} {f['family']:<15} {v.catalog:<16} узлов {len(us):4}  {v.summary()[:50]}", flush=True)
-            if not had:
+            cat._vehicles.clear()   # память: сервер маленький, а машин больше двухсот
+            if not had and not direct:
                 await asyncio.sleep(2)   # гостевой прокси сервера: не больше 60 запросов в минуту
     finally:
-        await src.close()
+        if direct:
+            await lx.close()
+        else:
+            await src.close()
     print(f"Машин со списком узлов: {done} (новых {fresh}); узлов всего {total}")
 
 
