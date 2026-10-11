@@ -1939,3 +1939,26 @@ def test_gate_cancels_arbiter_group_when_confident(monkeypatch):
         ps = one()
         asyncio.run(eng._arbitrate(None, tree, ps))
         assert ps[0]["llm_part"] == "Бак топливный" and "gate" not in ps[0]
+
+
+# ---------- реестр синонимов ----------
+
+def test_synonym_registry_collects_all_sources(tmp_path):
+    from app.podbor import registry as R
+    (tmp_path / "trees").mkdir()
+    tree = {"name": "root", "link": False, "children": [
+        {"name": "Фильтр воздушный", "quickGroupId": 7, "link": True, "synonyms": "воздухан, воздушник", "children": []}]}
+    (tmp_path / "trees" / "TOYOTA00-abc.json").write_text(json.dumps({"tree": tree}), encoding="utf-8")
+    (tmp_path / "learned.json").write_text(json.dumps({"7": ["фильтрующий элемент"]}), encoding="utf-8")
+    (tmp_path / "mined_pairs.json").write_text(json.dumps([
+        {"phrase": "сальники клапанов", "group": "Маслосъёмные колпачки", "n": 3, "chunk": "сальники клапанов",
+         "item": "Колпачок маслосъёмный", "cur": "Сальники"}]), encoding="utf-8")
+    reg = R.build(tmp_path)
+    by = {(e["source"], e["phrase"]): e for e in reg["entries"]}
+    assert by[("laximo", "воздухан")]["target"] == "Фильтр воздушный" and by[("laximo", "воздухан")]["catalogs"] == ["TOYOTA00"]
+    assert by[("learned", "фильтрующий элемент")]["target"] == "Фильтр воздушный"
+    prop = by[("proposed", "сальники клапанов")]
+    assert prop["status"] == "proposed" and prop["count"] == 3
+    assert any(e["source"] == "rules" for e in reg["entries"]) and any(e["source"] == "typos" for e in reg["entries"])
+    md = R.render(reg)
+    assert "**Фильтр воздушный**: воздухан (laximo)" in md and "Кандидаты на проверку (1)" in md and "Колпачок маслосъёмный" in md
