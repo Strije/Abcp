@@ -1424,7 +1424,10 @@ class Engine:
             sides.setdefault(_key(d.oem), []).append(T.side(d.context, self.pr_axis))
         def other_side(k: str) -> bool:
             ss = sides.get(k, [])
-            return any(want.conflicts(x) for x in ss) and not any((x.axis or x.lr) and not want.conflicts(x) for x in ss)
+            # По каждому признаку отдельно: «передняя» у записи без «лев/прав» не спасает номер, записанный «правым»
+            lr = want.lr and any(x.lr and x.lr != want.lr for x in ss) and not any(x.lr == want.lr for x in ss)
+            axis = want.axis and any(x.axis and x.axis != want.axis for x in ss) and not any(x.axis == want.axis for x in ss)
+            return bool(lr or axis)
         for d in pool:
             if d.match is False:
                 continue
