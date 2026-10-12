@@ -590,6 +590,12 @@ class Catalog:
         self._unit_trees[key] = TreeIndex(tree, self.stop, {}, [], self.not_typos)
         return self._unit_trees[key]
 
+    def unit_file(self, v: Vehicle, u: dict) -> str:
+        """Файл деталей узла. У Ford, Mercedes, Mazda, Citroen номер узла у всех узлов «0» — узел различает только ssd:
+        без него в файл первого узла попадали все остальные (12.10: «Ремонтные панели» вместо любого узла Ford)."""
+        tag = hashlib.sha1(str(u.get("ssd") or "").encode()).hexdigest()[:12]
+        return f"unit_details/{_safe(v.catalog)}/{self._car(v)}/{_safe(str(u['id']))}-{tag}.json.gz"
+
     async def _unit_details(self, v: Vehicle, group_id: int) -> list[Detail]:
         u = (self._unit_ids.get(self.tree_key(v) + "-u") or {}).get(group_id)
         if not u:
@@ -598,7 +604,7 @@ class Catalog:
         hit = self._details.get(key)
         if hit:
             return hit[1]
-        name = f"unit_details/{_safe(v.catalog)}/{self._car(v)}/{u['id']}.json.gz"
+        name = self.unit_file(v, u)
         data = await self._cached(name, DETAILS_TTL, lambda: self.call("listDetailByUnit", {
             "catalog": v.catalog, "vehicleId": v.vehicle_id, "ssd": u["ssd"], "unitId": u["id"]}))
         out = []

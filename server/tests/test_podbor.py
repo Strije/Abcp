@@ -2179,3 +2179,29 @@ def test_master_cylinder_is_not_shown_for_rear_cylinders():
     res = run("XW7BF4FK30S064389 тормозные цилиндры задние", engine=Engine(FakeMaster(), None, set()))
     pos = res["positions"][0]
     assert not pos.get("via_units") and pos["status"] == "not_found"
+
+
+class FakeSameIds(FakeUnits):
+    """Ford и Mercedes: у всех узлов unitId «0», различает их только ssd."""
+
+    def answer(self, method, params):
+        if method == "listUnits":
+            self.unit_calls += 1
+            return [{"unitId": "0", "name": "Ремонтные панели", "code": "1", "ssd": "SA", "imageUrl": ""},
+                    {"unitId": "0", "name": "Подрамник передней подвески", "code": "2", "ssd": "SB", "imageUrl": ""}]
+        if method == "listDetailByUnit":
+            return ([{"name": "ПАНЕЛЬ РЕМОНТНАЯ", "codeOnImage": "1", "oem": "P-1"}] if params["ssd"] == "SA"
+                    else [{"name": "БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ", "codeOnImage": "1", "oem": "48099-00001"}])
+        return super().answer(method, params)
+
+
+def test_units_with_the_same_id_keep_their_own_details(tmp_path):
+    eng = Engine(FakeSameIds(), tmp_path, set())
+    v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
+    asyncio.run(eng.catalog.unit_tree(v))
+    a = asyncio.run(eng.catalog._unit_details(v, -1))
+    b = asyncio.run(eng.catalog._unit_details(v, -2))
+    assert [d.name for d in a] == ["ПАНЕЛЬ РЕМОНТНАЯ"] and [d.name for d in b] == ["БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ"]
+    again = Engine(FakeSameIds(), tmp_path, set())                     # с диска — тоже свои
+    asyncio.run(again.catalog.unit_tree(v))
+    assert [d.name for d in asyncio.run(again.catalog._unit_details(v, -2))] == ["БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ"]
