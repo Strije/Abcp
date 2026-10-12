@@ -59,12 +59,19 @@ class Emb:
         k = int(self.np.argmax(s[1:])) + 1
         return self.gate_classes[k], float(s[k] - s[0])
 
-    async def embed(self, texts: list[str]):
-        """Векторы фраз (нормированные) или None, если сервис не ответил — тогда арбитр работает по-старому."""
+    async def embed(self, texts: list[str], instruct: str | None = QI):
+        """Векторы фраз (нормированные) или None, если сервис не ответил — тогда арбитр работает по-старому.
+        instruct=None — вектор документа (название узла каталога), без инструкции запроса."""
         try:
-            r = await self.http.post(f"{URL}/embeddings", json={"model": MODEL, "encoding_format": "base64",
-                                                                 "input": [f"Instruct: {QI}\nQuery: {t}" for t in texts]})
-            data = sorted(r.json()["data"], key=lambda x: x["index"]) if r.status_code == 200 else None
+            data = []
+            for i in range(0, len(texts), 32):   # сервис принимает пачками
+                part = [f"Instruct: {instruct}\nQuery: {t}" if instruct else t for t in texts[i:i + 32]]
+                r = await self.http.post(f"{URL}/embeddings", json={"model": MODEL, "encoding_format": "base64",
+                                                                     "input": part})
+                if r.status_code != 200:
+                    data = None
+                    break
+                data += sorted(r.json()["data"], key=lambda x: x["index"])
         except (httpx.HTTPError, ValueError, KeyError):
             data = None
         if not data:

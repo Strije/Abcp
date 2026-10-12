@@ -740,6 +740,10 @@ class Catalog:
         return list(uniq.values()) if len(uniq) <= 6 else []
 
     # --- дерево групп ---
+    def unit_ids(self, v: Vehicle) -> dict[int, dict]:
+        """Узлы полного каталога машины после unit_tree: {отрицательный номер группы: узел}."""
+        return self._unit_ids.get(self.tree_key(v) + "-u") or {}
+
     @staticmethod
     def tree_key(v: Vehicle) -> str:
         """Дерево групп — у каждой машины своё, не у каталога: в TOYOTA00 у Camry 34 группы, которых нет

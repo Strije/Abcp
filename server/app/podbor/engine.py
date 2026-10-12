@@ -893,8 +893,9 @@ class Engine:
             pos = await self._by_units(v, query, want, kind) or pos
         if pos["status"] == "not_found" and pos["kind"] in ("", "part") and not pos.get("via_units") \
                 and not self.outside(qs) and not self._vague(qs, query):
-            # Не нашли ни группами, ни словами по узлам (бывает и с пояснением «шланг уточним отдельно»): узлы выбирает модель
-            pos = await self._by_units_llm(v, query, want, kind) or pos
+            # Не нашли ни группами, ни словами по узлам (бывает и с пояснением «шланг уточним отдельно»): сначала «векторы +
+            # модель» по деталям машины клиента, потом модель выбирает узлы по названиям
+            pos = await self._by_vectors(v, query, want) or await self._by_units_llm(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
         miss = out.get("head_miss") or ""
         glued = T.stem(miss.lower())
@@ -904,11 +905,83 @@ class Engine:
                 and not (re.fullmatch(r"[а-яё]+", miss.lower()) and T._ADJ_END.search(miss.lower())):
             # Главного слова клиента нет ни в одной найденной детали, и узлы полного каталога его не нашли: «соленоиды АКПП»
             # → гидротрансформатор, «сальник распредвала» → распредвал, «барабан» → рычаг ручника (перепрогон 12.10: 11 из 32
-            # «не та деталь»). Соседа не показываем — менеджеру. «Вентилируемый» — признак, а не деталь: такое оставляем
-            out = dict(out, status="not_found", variants=[], groups=[], question="", note="",
-                       dropped=(out.get("note") or query)[:200])
+            # «не та деталь»). Соседа не показываем — менеджеру. «Вентилируемый» — признак, а не деталь: такое оставляем.
+            # Перед этим — «векторы + модель»: «барабан» у Accent лежит в узле «Ступица заднего колеса»
+            out = await self._by_vectors(v, query, want) or dict(out, status="not_found", variants=[], groups=[], question="",
+                                                                   note="", dropped=(out.get("note") or query)[:200])
         await self._confirm_replacements(v, out)
         return out
+
+    async def _unit_vectors(self, v: Vehicle, emb, names: list[str]):
+        """Векторы названий узлов машины (Giga, без инструкции) — один раз на машину, на диск рядом с кэшем каталога."""
+        np = emb.np
+        f = self.catalog.folder / "unit_vecs" / f"{self.catalog.tree_key(v)}.npy" if self.catalog.folder else None
+        if f is not None and f.exists():
+            vec = np.load(f).astype(np.float32)
+            if vec.shape[0] == len(names):
+                return vec
+        got = await emb.embed(names, instruct=None)
+        if not got or len(got) != len(names):
+            return None
+        vec = np.stack(got).astype(np.float32)
+        if f is not None:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            np.save(f, vec.astype(np.float16))
+        return vec
+
+    async def _by_vectors(self, v: Vehicle, query: str, want: T.Side) -> dict | None:
+        """«Векторы + модель» (опыт 12.10, 88 провалов робота): модель переводит слова клиента в названия каталога (ru + en +
+        узел) → векторы Giga выбирают 5 ближайших узлов ЭТОЙ машины → их детали из Laximo (настоящие номера) → модель выбирает
+        одну деталь, узел в сборе или «нет»; второе исполнение («вентилируемый / обычный») — подсказкой «проверьте».
+        Только запасной путь: там, где быстрые группы и узлы по словам не нашли или потеряли главное слово."""
+        emb = EMB.get()
+        if emb is None or not self.llm or not getattr(self.llm, "enabled", False):
+            return None
+        try:
+            if await self.catalog.unit_tree(v) is None:
+                return None
+            ids = self.catalog.unit_ids(v)
+            if not ids:
+                return None
+            names = await U.catalog_names(self.llm, query, v.summary())
+            if not names:
+                return None
+            gids = list(ids)
+            uvec = await self._unit_vectors(v, emb, [ids[g]["name"] for g in gids])
+            qv = await emb.embed(([query, names["part"]] + names["ru"] + names["en"] + names["unit"])[:12], instruct=_UNIT_QI)
+            if uvec is None or not qv:
+                return None
+            np = emb.np
+            best = [gids[i] for i in np.argsort(-(uvec @ np.stack(qv).T).max(axis=1))[:VEC_UNITS]]
+            details: list[Detail] = []
+            for gid in best:
+                for d in await self.catalog.details(v, gid, True):
+                    if d.name and all(d.oem != e.oem for e in details):
+                        details.append(d)
+            details = details[:VEC_DETAILS]
+            labels = [f"{d.name} — {ids[d.group_id]['name'] if d.group_id in ids else d.unit}" for d in details]
+            got = await U.pick_detail(self.llm, v.summary(), query, names["part"], labels)
+            k = got["pick"] if got["pick"] >= 0 else got["assembly"]
+            if k < 0:
+                return None
+            d = details[k]
+            unit = ids[d.group_id]["name"] if d.group_id in ids else d.unit
+            groups = [{"id": d.group_id, "name": unit, "path": "", "score": UNIT_SCORE}]
+            pos = await self._pos_from_details(v, query, want, [d], groups)
+            if not pos:
+                return None
+            notes = [f"Нашли в полном каталоге машины (узел «{ru_name(unit)}»)."]
+            if got["pick"] < 0:
+                notes.append(f"Отдельно эту деталь производитель не продаёт — только в сборе: «{ru_name(d.name)}».")
+            o = got["other"]
+            if 0 <= o < len(details) and o != k:
+                notes.append(f"По каталогу для вашей машины возможен и вариант «{ru_name(details[o].name)}» "
+                             f"({details[o].oem}) — проверьте, какой стоит.")
+            pos["note"] = " ".join(notes)
+            pos["via_vectors"] = True
+            return pos
+        except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
+            return None
 
     async def _by_units(self, v: Vehicle, query: str, want: T.Side, kind: str) -> dict | None:
         """Тот же поиск по узлам полного каталога вместо быстрых групп. Берём только уверенное совпадение с названием узла."""
@@ -2933,6 +3006,8 @@ def check_attrs(pos: dict) -> None:
 MAX_ARBITER = 3     # не больше трёх вызовов модели на сообщение
 UNIT_VARIANTS = 14   # сколько деталей узла проверяем по ценам, чтобы найти главную
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
+VEC_UNITS, VEC_DETAILS = 5, 90   # «векторы + модель»: ближайших узлов машины и деталей из них в список для модели
+_UNIT_QI = "Дана фраза клиента магазина автозапчастей. Найди узел каталога производителя, в котором лежит эта деталь"
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
 _ID_MODS = ("главн", "основн")   # слова в названии узла, которые превращают деталь в другую (главный цилиндр ≠ рабочий)
