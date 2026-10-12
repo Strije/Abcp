@@ -828,6 +828,10 @@ class Engine:
             return None
         if not alt or alt["status"] not in ("found", "choose") or not alt["variants"]                 or max((g["score"] for g in alt["groups"]), default=0.0) < UNIT_SCORE:
             return None
+        said = {w[:5] for w in T.stems(T.expand(query), self.stop)}
+        named = " ".join([g["name"] for g in alt["groups"][:2]] + [x["name"] for x in alt["variants"][:3]]).lower()
+        if any(m in named and m not in said for m in _ID_MODS):
+            return None   # «цилиндры задние» привели в «Главный тормозной цилиндр»: слово, меняющее деталь, клиент не называл (12.10)
         alt["via_units"] = True
         units = ", ".join(dict.fromkeys(g["name"] for g in alt["groups"][:2]))
         alt["note"] = alt.get("note") or f"Нашли в полном каталоге машины (узел «{units}»), в быстрых группах такой детали нет."
@@ -2491,6 +2495,8 @@ UNIT_VARIANTS = 14   # сколько деталей узла проверяем
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
+_ID_MODS = ("главн", "основн")   # слова в названии узла, которые превращают деталь в другую (главный цилиндр ≠ рабочий)
+
 _ADJ_DEFAULT = {"топливн": "топливный фильтр", "маслян": "масляный фильтр", "воздушн": "воздушный фильтр",
                 "салон": "салонный фильтр"}   # одно прилагательное без детали: самое частое значение
 

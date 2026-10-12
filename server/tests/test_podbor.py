@@ -2161,3 +2161,21 @@ def test_side_in_reply_title_only_when_it_means_something():
     assert D.shown_side(asked, asked["variants"][0]) == ("front", "")        # клиент сам назвал сторону
     both = {"side": {}, "variants": [{"axis": "front", "lr": ""}, {"axis": "rear", "lr": ""}]}
     assert D.shown_side(both, both["variants"][1]) == ("rear", "")           # колодки: передние и задние
+
+
+class FakeMaster(FakeUnits):
+    """В полном каталоге только «Главный тормозной цилиндр»: клиент просил задние (рабочие) — его показывать нельзя."""
+
+    def answer(self, method, params):
+        if method == "listUnits":
+            self.unit_calls += 1
+            return [{"unitId": "21", "name": "Главный тормозной цилиндр", "code": "70-100", "ssd": "SU21", "imageUrl": ""}]
+        if method == "listDetailByUnit":
+            return [{"name": "ЦИЛИНДР ТОРМОЗНОЙ ГЛАВНЫЙ", "codeOnImage": "1", "oem": "58510-00001"}]
+        return super().answer(method, params)
+
+
+def test_master_cylinder_is_not_shown_for_rear_cylinders():
+    res = run("XW7BF4FK30S064389 тормозные цилиндры задние", engine=Engine(FakeMaster(), None, set()))
+    pos = res["positions"][0]
+    assert not pos.get("via_units") and pos["status"] == "not_found"
