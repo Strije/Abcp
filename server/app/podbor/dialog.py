@@ -350,7 +350,7 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
     for i, piece in enumerate(pieces):
         scope = [p for p in positions if refers(piece, p, stop)]
         # «Тяги» — про «Рулевую тягу», а не про «Наконечник рулевой тяги»: где слово клиента — главное
-        heads = [p for p in scope if any(T.same(w, T.head(T.stems(p["query"], stop)) or "") for w in T.stems(piece, stop))]
+        heads = [p for p in scope if any(T.same(w, T.head_text(p["query"], stop) or "") for w in T.stems(piece, stop))]
         scope = heads or scope
         named = bool(scope)
         # «Тяги и наконечники давайте зекерт» — фирма из следующей части относится и к этой

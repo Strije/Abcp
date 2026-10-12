@@ -244,6 +244,10 @@ class TreeIndex:
         # Синонимы, чьих групп у машины нет: «свечи накаливания» у бензиновой, «цепь ГРМ» у мотора с ремнём.
         # Такой запрос целиком — не ищем похожее («Свечи зажигания»), а честно не находим
         self.absent: set[tuple[frozenset[str], str]] = set()
+        # Главное слово каждой фразы группы — по форме слов её же текста: «Салонный фильтр» → «фильтр», «Ремень
+        # генератора» → «ремень», даже если где-то в дереве есть «Ременный шкив». Общий T.ADJ теперь только про заявку
+        # клиента (12.10) — раньше он копил прилагательные всех деревьев и ответ зависел от истории службы
+        self.heads: dict[tuple[str, ...], str] = {}
         roots = tree if isinstance(tree, list) else [tree]
         for r in roots:
             if isinstance(r, dict):
@@ -267,6 +271,7 @@ class TreeIndex:
                 st = T.stems(w, stop)
                 if not st:
                     continue
+                self.heads.setdefault(tuple(st), T.head_text(w, stop) or st[0])
                 self.groups[gid].phrases.append((st, 1.0))
                 # Синоним — точная фраза: «ремкомплект грм» не должен ловить любой «ремкомплект»,
                 # «резинка дворника» — любую «резинку». Названия Laximo совпадают и частично.
@@ -278,7 +283,11 @@ class TreeIndex:
         for gid, names in (learned or {}).items():
             g = self.groups.get(int(gid))
             if g:
-                g.phrases += [(st, 0.8) for st in (T.stems(n, stop) for n in names) if st]
+                for n in names:
+                    st = T.stems(n, stop)
+                    if st:
+                        g.phrases.append((st, 0.8))
+                        self.heads.setdefault(tuple(st), T.head_text(n, stop) or st[0])
         df: dict[str, int] = {}
         for g in self.groups.values():
             for s in {s for st, _ in g.phrases for s in st}:
@@ -325,7 +334,12 @@ class TreeIndex:
             gid = None
         if gid is not None and node.get("link") and name and gid not in self.groups:
             texts = [name] + [s.strip() for s in str(node.get("synonyms") or "").split(",") if s.strip()]
-            phrases = [(st, 1.0) for st in (T.stems(t, self.stop) for t in texts) if st]
+            phrases = []
+            for t in texts:
+                st = T.stems(t, self.stop)
+                if st:
+                    phrases.append((st, 1.0))
+                    self.heads.setdefault(tuple(st), T.head_text(t, self.stop) or st[0])
             if phrases and path:
                 # Название раздела уточняет группу: «Компрессор» в «Кондиционере», «Выключатель, датчик»
                 # в «Системе охлаждения». Вес ниже: раздел — контекст, а не название детали.
@@ -333,11 +347,16 @@ class TreeIndex:
                 extra = [s for s in T.stems(path[-1], self.stop) if not any(T.same(s, t) for t in own)]
                 if extra:
                     phrases.append((own + extra, self.PATH_W))
+                    self.heads.setdefault(tuple(own + extra), self.heads.get(tuple(own)) or own[0])
             if phrases:
                 self.groups[gid] = Group(gid, name, " › ".join(path), phrases, T.side(name))
         for ch in node.get("children") or []:
             if isinstance(ch, dict):
                 self._walk(ch, path + [name] if name and gid != 0 else path)
+
+    def head(self, p: list[str]) -> str | None:
+        """Главное слово фразы группы — запомненное по её тексту (см. heads)."""
+        return self.heads.get(tuple(p)) or T.head(p)
 
     def weight(self, s: str) -> float:
         return self.idf.get(s) or next((v for k, v in self.idf.items() if T.same(s, k)), self.max_idf)
@@ -396,14 +415,14 @@ class TreeIndex:
                     continue
                 prec, rec = self.score(q, p)
                 if rec < 0.999 and (g.id, tuple(p)) in self.whole and (
-                        rec < self.WHOLE_REC or not any(T.same(T.head(p), s) for s in q)):
+                        rec < self.WHOLE_REC or not any(T.same(self.head(p), s) for s in q)):
                     continue
                 if prec and rec:
                     f = w * 2 * prec * rec / (prec + rec)
-                    if len(q) == 1 and not T.same(q[0], T.head(p)):
+                    if len(q) == 1 and not T.same(q[0], self.head(p)):
                         f *= 0.8   # «масло» — не «Датчик давления масла»: в группе главное слово другое
                     if head and any(T.same(head, t) for t in p):
-                        f += 0.1 if T.same(head, T.head(p)) else 0.0
+                        f += 0.1 if T.same(head, self.head(p)) else 0.0
                     elif head:
                         f *= 0.7   # главного слова нет — «ремень генератора» не «Генератор»
                     best = max(best, f)

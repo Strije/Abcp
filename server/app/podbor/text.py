@@ -6,6 +6,7 @@
     Запрос состоит из следующих позиций:  Подшипник задней ступицы форд фокус 3
 Свободный текст («вот вин …, нужны передние колодки») разбирается так же, только без шаблона.
 """
+import contextvars
 import json
 import re
 from dataclasses import dataclass, field
@@ -214,27 +215,87 @@ def split_pieces(chunk: str) -> list[str]:
 # «-ей» — только у причастий («охлаждающей»): «ремней», «шестерней», «вкладышей» — существительные.
 _ADJ_END = re.compile(r"(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|его|ому|ему|ую|юю|ым|им|ых|их|ыми|ими)$|(?:ющ|ащ|ящ|ущ)ей$")
 _ADJ_STEM = re.compile(r"(?:н|ск|цк|ов|ев|ющ|ящ|ащ|ущ)$")
-ADJ: set[str] = set()
+
+
+def _load_adj() -> frozenset[str]:
+    try:
+        path = Path(__file__).resolve().parent.parent / "data" / "podbor_adj.json"
+        return frozenset(json.loads(path.read_text(encoding="utf-8")).get("adj", []))
+    except (OSError, ValueError):
+        return frozenset()
+
+
+# Прилагательные для head(). Раньше T.stem копил их по ходу работы службы: «ременный» в любом дереве или реплике делал
+# «ремен» прилагательным навсегда («ремень генератора» → главное «генератор»), а ответ на «Шторка безопасности» зависел от
+# того, писал ли кто-то «безопасный» после перезапуска (12.10). Теперь: постоянный список (основа почти всегда
+# прилагательное — «передн», «топливн»; lab/adj_build.py) + прилагательные из слов ЭТОЙ заявки («салонный фильтр»:
+# «салон» бывает и существительным — решает форма слова у клиента). Заявка — Engine.run: fresh_adj() и mark_adj().
+_ADJ_FIXED = _load_adj()
+_ADJ_HERE: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar("podbor_adj_here", default=None)
+_ADJ_OUTSIDE: set[str] = set()   # вне заявки (скрипты лаборатории, разбор без Engine.run)
+
+
+class _Adjectives:
+    def __contains__(self, s: object) -> bool:
+        if s in _ADJ_FIXED:
+            return True
+        here = _ADJ_HERE.get()
+        return s in (here if here is not None else _ADJ_OUTSIDE)
+
+    def add(self, s: str) -> None:
+        here = _ADJ_HERE.get()
+        (here if here is not None else _ADJ_OUTSIDE).add(s)
+
+
+ADJ = _Adjectives()
+
+
+def fresh_adj() -> None:
+    """Новая заявка: прилагательные из слов прошлых заявок в ней не действуют."""
+    _ADJ_HERE.set(set())
+
+
+def mark_adj(text: str) -> None:
+    """Слова клиента (и запросы позиций) в форме прилагательного — прилагательные в этой заявке."""
+    for w in words(text):
+        s, adj = _stem_info(w)
+        if adj:
+            ADJ.add(s)
 
 
 def norm(word: str) -> str:
     return word.lower().replace("ё", "е").replace("ë", "е").replace("ъ", "ь")
 
 
-@lru_cache(maxsize=20000)
-def stem(word: str) -> str:
+@lru_cache(maxsize=50000)
+def _stem_info(word: str) -> tuple[str, bool]:
     w = norm(word)
     s = _stemmer.stemWord(w)
     # «крепление», «сцепление», «уплотнение» кончаются на «-ие», как «передние», но это существительные
     # (на «-ение»/«-ание»; у прилагательных перед «-ние» согласная или «н»: передние, внутренние)
-    if _ADJ_END.search(w) and _ADJ_STEM.search(s) and len(s) >= 4 and not re.search(r"[еа]ние$", w):
-        ADJ.add(s)
-    return s
+    return s, bool(_ADJ_END.search(w) and _ADJ_STEM.search(s) and len(s) >= 4 and not re.search(r"[еа]ние$", w))
+
+
+def stem(word: str) -> str:
+    return _stem_info(word)[0]
 
 
 def head(q: list[str]) -> str | None:
     """Главное слово фразы: первое не прилагательное («топливный фильтр» → «фильтр»)."""
     return next((s for s in q if s not in ADJ), q[0] if q else None)
+
+
+def adj_forms(text: str) -> set[str]:
+    """Основы слов текста, стоящих в форме прилагательного: «Салонный фильтр» → {«салон»}."""
+    return {s for s, a in (_stem_info(w) for w in words(text)) if a}
+
+
+def head_text(text: str, stop: frozenset[str] = frozenset()) -> str | None:
+    """Главное слово названия по форме его же слов: «Салонный фильтр» → «фильтр», «Фильтр салона» → «фильтр» —
+    без общего списка прилагательных (названия каталога и модели в заявку не отмечаются)."""
+    here = adj_forms(text)
+    q = stems(text, stop)
+    return next((s for s in q if s not in ADJ and s not in here), q[0] if q else None)
 
 
 # «Рем комплект», «рем. комплект» → «ремкомплект»

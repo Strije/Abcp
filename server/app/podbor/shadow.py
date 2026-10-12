@@ -31,7 +31,7 @@ def compare(parsed: dict | None, res: dict) -> dict | None:
     llm = [p["part"] for p in parsed["positions"] if p.get("kind") in ("part", "")]
     miss = []
     for part in llm:
-        head = T.head(T.stems(part))
+        head = T.head_text(part)
         if head and not any(any(T.same(head, s) for s in st) for st in pool):
             miss.append(part)
     agree = not miss and len(llm) >= len(rules)

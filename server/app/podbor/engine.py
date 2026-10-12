@@ -131,6 +131,9 @@ class Engine:
                   llm: bool | None = None) -> dict:
         """Заявка. С памятью прошлого ответа и без VIN в тексте — следующая реплика того же разговора."""
         t0 = time.time()
+        # Прилагательные — из слов этой заявки и памяти разговора, не из прошлых чужих (см. T.ADJ)
+        T.fresh_adj()
+        T.mark_adj(" ".join([text] + [str(p.get("query") or "") for p in (memory or {}).get("positions") or []]))
         req = T.parse(text)
         pending = (memory or {}).get("pending") or ""
         if pending and (req.ident or req.plate):
@@ -831,6 +834,7 @@ class Engine:
                    for nc in self.not_catalog)
 
     async def position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "") -> dict:
+        T.mark_adj(query)   # запрос позиции бывает и от модели («салонный фильтр») — его прилагательные тоже в заявке
         kit = _KIT_OF.match(query)
         if kit:
             # Ищем сами детали («передних рычагов»), в заголовке — слова клиента; «все» решит node_parts/wants_all
@@ -914,7 +918,7 @@ class Engine:
         """Тот же поиск по узлам полного каталога вместо быстрых групп. Берём только уверенное совпадение с названием узла."""
         try:
             ut = await self.catalog.unit_tree(v)
-            if ut is None or any(T.same(T.head(T.stems(T.expand(query), self.stop)) or "", b) for b in _BUSH):
+            if ut is None or any(T.same(T.head_text(T.expand(query), self.stop) or "", b) for b in _BUSH):
                 return None   # сайлентблок узла: чей именно (рычага, подрамника) по узлу не понять — менеджеру
             alt = await self._position(v, ut, query, want, kind, unit_mode=True)
         except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
@@ -973,7 +977,7 @@ class Engine:
             for g in units[:6]:
                 for d in await self.catalog.details(v, g.id, True):
                     name = _ru_words(d.name)
-                    head = T.head(T.stems(name, self.stop)) or ""
+                    head = T.head_text(name, self.stop) or ""
                     axis = _sub_axis(name) or _sub_axis(g.name)
                     if any(T.same(head, p) for p in _SUB_PART):
                         frames.setdefault(_key(d.oem), (d, axis))
@@ -1160,7 +1164,7 @@ class Engine:
         ranked = tree.rank(q, want)
         if not ranked or ranked[0][1] < 0.3:
             return pos
-        if kind == "fluid" and not any(T.same(T.head(T.stems(ranked[0][0].name, self.stop)) or "", T.stem(w))
+        if kind == "fluid" and not any(T.same(T.head_text(ranked[0][0].name, self.stop) or "", T.stem(w))
                                        for w in _KIND_WORDS["fluid"]):
             return pos   # «масло моторное» привело в «Датчик давления масла» — это не масло: подберём по допуску
         best = ranked[0][1]
@@ -1200,7 +1204,7 @@ class Engine:
                 lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                              return_exceptions=True)
                 full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)
-                        and (head not in _PART_ALIASES or any(T.same(a, T.head(T.stems(T.expand(d.name), self.stop)) or "")
+                        and (head not in _PART_ALIASES or any(T.same(a, T.head_text(T.expand(d.name), self.stop) or "")
                                                                for a in aliases))]
                 better = []
                 if head in _NAME_KIN:
@@ -1209,7 +1213,7 @@ class Engine:
                     # названия клиент назвал сам. Таких нет — в узлах ничего не берём (останется герметик или менеджер)
                     own = aliases + [T.stem(w) for w in ("кольцо", "прокладочное")] + list(_GENERIC_HEADS)
                     is_own = lambda w: any(T.same(a, w) for a in own)  # noqa: E731
-                    full = [d for d in full if is_own(T.head(T.stems(T.expand(d.name), self.stop)) or "")
+                    full = [d for d in full if is_own(T.head_text(T.expand(d.name), self.stop) or "")
                             and all(is_own(w) or any(T.same(w, x) for x in q) for w in T.stems(T.expand(d.name), self.stop)
                                     if not w.isdigit() and w not in T.ADJ)]
                     better = [Candidate(d, 0.8, 0.8, True, T.side(d.context, self.pr_axis), "каталог" if T.side(d.context).axis else "")
@@ -1773,7 +1777,7 @@ class Engine:
         if name_hint:
             # Узел полного каталога: кроссы поставщиков тянут чужое («Колодки тормозные» к подрамнику). Аналог — только если
             # в его описании есть слово клиента; оригинал (строка с номером каталога) остаётся
-            head = T.head(T.stems(T.expand(name_hint), self.stop))
+            head = T.head_text(T.expand(name_hint), self.stop)
             own = _key(c.d.oem)
             if head:
                 rows = [r for r in c.rows if _key(r.get("numberFix") or r.get("number")) == own

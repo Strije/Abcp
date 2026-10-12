@@ -2592,3 +2592,33 @@ def test_frame_number_without_dash():
     # машины нет в каталоге — говорим про номер кузова, а не про «VIN 17 знаков»
     text = draft({"status": "vehicle_not_found", "request": {"ident": "L275V-1003754", "chunks": []}, "positions": []})
     assert "номеру кузова" in text and "17 знаков" not in text
+
+
+def test_adjectives_do_not_leak_between_requests():
+    """12.10: T.stem копил прилагательные по ходу работы — «ременный» в одной заявке делал «ремен» прилагательным, и в
+    «ремень генератора» главным словом становился «генератор»; ответ зависел от истории службы."""
+    from app.podbor.catalog import TreeIndex
+    T.fresh_adj()
+    T.mark_adj("ременный шкив, безопасный")
+    assert T.head(T.stems("ременный шкив")) == T.stem("шкив")
+    T.fresh_adj()   # следующая заявка
+    assert T.head(T.stems("ремень генератора")) == T.stem("ремень")
+    assert T.head(T.stems("шторка безопасности")) == T.stem("шторка")
+    # Постоянный список: «передн», «топливн» — прилагательные и без отметок
+    assert T.head(T.stems("передние колодки")) == T.stem("колодки")
+    # Названия каталога — по форме своих же слов: «Салонный фильтр» → фильтр, «Фильтр салона» → фильтр
+    assert T.head_text("Салонный фильтр") == T.stem("фильтр") == T.head_text("Фильтр салона")
+    # В дереве «Ременный шкив» не делает «ремень» прилагательным для «Ремень генератора»
+    tree = TreeIndex(node(0, "Легковые", link=False, children=[node(70, "Ремень генератора"), node(71, "Ременный шкив")]),
+                     frozenset())
+    assert tree.head(T.stems("Ремень генератора")) == T.stem("ремень")
+    assert tree.head(T.stems("Ременный шкив")) == T.stem("шкив")
+
+
+def test_same_answer_regardless_of_history():
+    """Один и тот же запрос до и после чужих заявок — один и тот же ответ."""
+    first = run("X9FKXXEEBKCB57566 ремень генератора, колодки передние")
+    run("X9FKXXEEBKCB57566 ременный шкив, безопасный ремень, салонный")
+    again = run("X9FKXXEEBKCB57566 ремень генератора, колодки передние")
+    brief = lambda r: [(p["query"], p["status"], [v["oem"] for v in p["variants"]]) for p in r["positions"]]  # noqa: E731
+    assert brief(first) == brief(again)
