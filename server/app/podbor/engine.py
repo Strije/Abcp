@@ -810,14 +810,20 @@ class Engine:
                                "вместо дисков стоят барабаны (колодки к ним — барабанные).")
                 await self._confirm_replacements(v, alt)
                 return alt
-        if pos["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (pos.get("note") or "")                 and pos["kind"] in ("", "part"):
+        if pos["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (pos.get("note") or "") \
+                and pos["kind"] in ("", "part"):
             # Нашлось только уточнение («вакуумный насос»), а главного слова («шланг») там нет: деталь ищем внутри узла по
             # уточнению — «Трубка вакуумного насоса», а не сам насос (12.10, L200)
             pos = await self._by_unit_part(v, query, want, kind) or await self._by_units_llm(v, query, want, kind) or pos
         if pos["status"] == "not_found" and not pos["groups"] and not pos["note"] and pos["kind"] in ("", "part"):
             # Быстрые группы Laximo (около 680) — урезанный список: подрамника, поперечины и многого другого там нет.
             # Ищем по узлам полного каталога машины: по словам, а не нашлось — узлы выбирает модель
-            pos = await self._by_units(v, query, want, kind) or await self._by_units_llm(v, query, want, kind) or pos
+            pos = await self._by_units(v, query, want, kind) or pos
+        qs = T.stems(T.expand(query), self.stop)
+        if pos["status"] == "not_found" and pos["kind"] in ("", "part") and not pos.get("via_units") \
+                and not self.outside(qs) and not self._vague(qs, query):
+            # Не нашли ни группами, ни словами по узлам (бывает и с пояснением «шланг уточним отдельно»): узлы выбирает модель
+            pos = await self._by_units_llm(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
         await self._confirm_replacements(v, out)
         return out
@@ -915,7 +921,8 @@ class Engine:
             for gid in gids:
                 for d in await self.catalog.details(v, gid, True):
                     st = T.stems(_ru_words(d.name), self.stop)
-                    if not any(T.same(a, x) for a in aliases for x in st):
+                    if not any(T.same(a, x) for a in aliases for x in st) \
+                            or any(m in d.name.lower() and m not in {w[:5] for w in q} for m in _ID_MODS):
                         continue
                     where = st + T.stems(_ru_words(d.unit), self.stop)
                     if qual and not any(T.same(w, x) for w in qual for x in where):
