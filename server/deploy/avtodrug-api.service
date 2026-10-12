@@ -21,6 +21,9 @@ StateDirectoryMode=0700
 ProtectHome=true
 PrivateTmp=true
 MemoryMax=300M
+# На сервере 889 МБ без swap: при нехватке памяти ядро убивает самый большой процесс — 12.10.2026 трижды это был робот
+# (опыты лаборатории рядом). Сервис — последний кандидат; опыты лаборатории запускаются с OOMScoreAdjust=800
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target
