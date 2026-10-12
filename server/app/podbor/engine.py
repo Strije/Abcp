@@ -693,6 +693,27 @@ class Engine:
 
     # ---------- позиции ----------
 
+    def _share_head(self, pieces: list[str], tree: TreeIndex) -> list[str]:
+        """«Сальник коленвала и распредвала» → «сальник распредвала»: одно слово в родительном падеже берёт главное слово
+        соседа «деталь + чего» (Mercedes C200D, судья 11.10: робот показывал сам распредвал). Только если в каталоге
+        машины такое сочетание и правда есть: «сальник коленвала и помпа» — помпа отдельно."""
+        out = list(pieces)
+        for i in range(1, len(pieces)):
+            words, prev = T.words(pieces[i]), T.words(out[i - 1])
+            st, pst = T.stems(pieces[i], self.stop), T.stems(out[i - 1], self.stop)
+            if len(words) != 1 or len(st) != 1 or st[0] in T.ADJ or len(pst) < 2 or T.stem(words[0]) == words[0]:
+                continue   # «распредвал» в именительном — сама деталь
+            head = T.head(pst)
+            deps = [w for w in prev if T.stem(w) in pst and T.stem(w) != head and T.stem(w) not in T.ADJ]
+            if not head or not deps or T.stem(deps[-1]) == deps[-1]:
+                continue   # у соседа зависимое слово тоже должно быть в родительном: «коленвала»
+            hw = next((w for w in prev if T.stem(w) == head), head)
+            cand = f"{hw} {pieces[i].strip()}"
+            rank = tree.rank(T.stems(cand, self.stop), T.side(cand))
+            if rank and rank[0][1] >= 0.8 and any(T.same(head, t) for ph, _ in rank[0][0].phrases for t in ph):
+                out[i] = cand
+        return out
+
     def split(self, chunks: list[str], tree: TreeIndex) -> list[tuple[str, T.Side]]:
         """«Масляный фильтр, воздушный, салонный» → три позиции; «колодки передние, комплект» → одна.
         «Колодки передние и задние» → две: одно слово стороны повторяет соседнюю деталь."""
@@ -704,7 +725,7 @@ class Engine:
                 segs.pop()
             chunk = ",".join(segs)
             whole = T.side(chunk)
-            pieces = share_noun(T.split_pieces(chunk), self.stop)
+            pieces = self._share_head(share_noun(T.split_pieces(chunk), self.stop), tree)
             if len(pieces) == 1:
                 both = self._both_axes(chunk)
                 if both:
@@ -1278,6 +1299,17 @@ class Engine:
         for c in kept:
             kinds.setdefault(c.kind, []).append(c)
         kinds = by_suppliers(kinds, tree.known(q))
+        shafts = other_shaft(kinds, tree.known(q))
+        if shafts is not None:
+            kinds, asked, other = shafts
+            if not kinds:
+                # Mercedes C200D (судья 11.10): «сальник распредвала» — Laximo сводит его в группу сальников, а там только
+                # сальники коленвала. Отдельной детали нет — честно «не нашли», а не сальник коленвала. settled — арбитр
+                # и узлы иначе вернули бы тот же сальник коленвала
+                pos.update(status="not_found", variants=[], question="", settled=True,
+                           note=f"По каталогу вашей машины здесь только детали {other}, отдельной детали {asked} не нашли — "
+                                "уточним вручную.")
+                return pos
         pos["variants"] = [self._variant(c, v, alt=i > 0, name_hint=(query if unit_mode else "")) for cs in kinds.values()
                            for i, c in enumerate(sorted(cs, key=lambda c: (not (c.rows and _has_original(c, v)), -c.score)))]
         # Отзывы владельцев о фирмах по этому виду детали — по словам клиента и названиям групп
@@ -2010,7 +2042,11 @@ def prefer_named(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
     head = T.head(q) if q else ""
     if not head or head in T.ADJ or head in _GENERIC_HEADS:
         return tier
-    named = [c for c in tier if T.same(_name_head(c.d.name), head)]
+    # Названа и деталь, где есть все слова клиента, хоть и не первым словом: Ford «Блок датч. — положение распредвала»
+    # на «датчик распредвала» (12.10) выпадал, а «Датчик детонации» оставался
+    # Только когда клиент назвал и уточнение: на одно «бампер» и «Гаситель энергии бампера» содержит «всё»
+    full = lambda c: len(q) >= 2 and all(any(T.same(s, t) for t in T.stems(c.d.name)) for s in q)  # noqa: E731
+    named = [c for c in tier if T.same(_name_head(c.d.name), head) or full(c)]
     if not named or len(named) == len(tier):
         return tier
     # Убираем только обвес той же стороны, что и сама деталь: передний подшипник без явной стороны рядом с задней
@@ -2084,6 +2120,35 @@ def needs_llm(chunks: list[str]) -> bool:
 
 
 _LONG_SHAFT = ((re.compile(r"коленчат\w*\s+вал\w*"), "коленвал"), (re.compile(r"распределит\w*\s+вал\w*"), "распредвал"))
+
+
+_SHAFTS = {T.stem("коленвал"): "коленвала", T.stem("распредвал"): "распредвала"}
+
+
+def other_shaft(kinds: dict[tuple, list["Candidate"]], known: list[str]) -> tuple[dict, str, str] | None:
+    """Клиент назвал вал («сальник распредвала»), а вариант — деталь другого вала: так пишет каталог (название, узел,
+    примечание: «УПЛОТНЕНИЕ КОЛЕНЧАТОГО ВАЛА») или большинство поставщиков, а про вал клиента — никто. Такой вариант
+    убираем. by_suppliers этого не умеет: он сравнивает варианты между собой, а тут чужие все. None — клиент вал не назвал."""
+    asked = [k for k in _SHAFTS if any(T.same(k, s) for s in known)]
+    if len(asked) != 1:
+        return None
+    mine, other = asked[0], next(k for k in _SHAFTS if k != asked[0])
+
+    def text_stems(text: str) -> list[str]:
+        t = text.lower()
+        for rx, short in _LONG_SHAFT:
+            t = rx.sub(short, t)
+        return T.stems(t)
+
+    def foreign(c: "Candidate") -> bool:
+        cat = text_stems(f"{c.d.name} {c.d.context}")
+        descs = _descs([c])
+        if any(T.same(mine, s) for s in cat) or (descs and _share(descs, [mine]) >= 0.05):
+            return False
+        return any(T.same(other, s) for s in cat) or (len(descs) >= 3 and _share(descs, [other]) >= 0.3)
+
+    out = {k: [c for c in cs if not foreign(c)] for k, cs in kinds.items()}
+    return {k: cs for k, cs in out.items() if cs}, _SHAFTS[mine], _SHAFTS[other]
 
 
 def _descs(cs: list["Candidate"]) -> set[str]:

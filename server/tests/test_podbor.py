@@ -2529,3 +2529,52 @@ def test_clamp_is_not_an_analog_of_boot():
     from app.podbor.offers import not_the_part
     assert not_the_part("Хомут комплект", "Манжета")         # Febest к манжете рейки — не аналог
     assert not not_the_part("Хомут пыльника ШРУС", "Хомут")   # спрашивали сам хомут — аналог
+
+
+class FakeShafts(Fake):
+    """Mercedes C200D: сальник распредвала Laximo сводит в «Сальники, комплект уплотнений», а там только сальники коленвала;
+    Ford Focus: в «Электронике двигателя» датчик распредвала назван «Блок датч. — положение распредвала»."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[
+                node(30, "Двигатель", link=False, children=[
+                    node(13467, "Сальник коленвала, передний"),
+                    node(33, "Сальники, комплект уплотнений", "Сальник коленвала, Сальник распредвала"),
+                    node(87, "Распредвал"),
+                    node(101, "Электроника двигателя, датчики", "Датчик коленвала, Датчик распредвала")])])
+        if method == "listQuickDetail":
+            gid = int(params["quickGroupId"])
+            if gid == 33:
+                return [cat("Двигатель", unit("УПЛОТНЕНИЕ КОЛЕНЧАТОГО ВАЛА СПЕРЕДИ", [det("A0219977647", "сальник")]),
+                            unit("УПЛОТНЕНИЕ КОЛЕНЧАТОГО ВАЛА СЗАДИ", [det("A0109979047", "уплотнительное кольцо")]))]
+            if gid == 13467:
+                return [cat("Двигатель", unit("Картер ГРМ", [det("A0219977647", "сальник коленвала")]))]
+            if gid == 87:
+                return [cat("Двигатель", unit("Распредвал", [det("A6040510101", "распределительный вал")]))]
+            if gid == 101:
+                return [cat("Двигатель", unit("Блок цилиндров", [det("1141998", "Датчик детонации двигателя"),
+                                                                 det("1110834", "Датчик положения коленвала")]),
+                            unit("Крышка головки цилиндров", [det("1905522", "Блок датч. — положение распредвала")]))]
+        return super().answer(method, params)
+
+
+def test_shared_head_and_other_shaft():
+    """Судья 11.10, Mercedes C200D: «Сальник коленвала и распредвала» → вторая позиция была «распредвала» — сам распредвал.
+    Теперь «сальник распредвала»; у этой машины его нет (в группе только сальники коленвала) — честно «не нашли»."""
+    res = run("X9FKXXEEBKCB57566 Сальник коленвала и распредвала", engine=Engine(FakeShafts(), None, set()))
+    first, second = res["positions"]
+    assert second["query"].lower() == "сальник распредвала"
+    assert first["variants"] and second["status"] == "not_found" and not second["variants"]
+    # «помпа» — отдельная деталь: главное слово соседа не берёт (такого сочетания в каталоге нет)
+    e = Engine(FakeShafts(), None, set())
+    tree = asyncio.run(e.catalog.tree(asyncio.run(e.catalog.vehicles("X9FKXXEEBKCB57566", ""))[0]))
+    assert e._share_head(["Сальник коленвала", "помпа"], tree) == ["Сальник коленвала", "помпа"]
+
+
+def test_sensor_named_after_block_word():
+    """Ford Focus (12.10): «датчик распредвала» → датчики коленвала и детонации, а «Блок датч. — положение распредвала»
+    выпадал: «датч.» перед тире не считалось сокращением, а название начинается с «Блок»."""
+    assert "датч." in T.stems("Блок датч. — положение распредвала")
+    p = run("X9FKXXEEBKCB57566 датчик распредвала", engine=Engine(FakeShafts(), None, set()))["positions"][0]
+    oems = [v["oem"] for v in p["variants"]]
+    assert oems[0] == "1905522" and "1110834" not in oems   # датчик коленвала — чужой вал (детонацию режут описания поставщиков)
