@@ -21,6 +21,9 @@ _TO_LATIN = str.maketrans("АВЕКМНОРСТУХ", "ABEKMHOPCTYX")
 _TO_CYR = str.maketrans("ABEKMHOPCTYX", "АВЕКМНОРСТУХ")
 _VIN_TOKEN = re.compile(r"(?<![0-9A-ZА-Я])[0-9A-ZА-Я]{17}(?![0-9A-ZА-Я])")
 _FRAME = re.compile(r"(?<![0-9A-Z-])[A-Z0-9]{2,8}-\d{4,8}(?![0-9-])")
+# Номер кузова без дефиса: «l275v1003754» (Daihatsu, судья 11.10 — робот просил VIN). Только когда код модели кончается
+# буквой (L275V, ACV30W): тогда ясно, где начинается номер, и это не номер детали вроде A0011592601 или GDB3123
+_FRAME_NODASH = re.compile(r"(?<![0-9A-Z-])([A-Z]{1,3}\d{2,4}[A-Z]{1,3})(\d{6,8})(?![0-9A-Z-])")
 _PLATE = re.compile(r"(?<![0-9А-Я])[АВЕКМНОРСТУХ]\s?\d{3}\s?[АВЕКМНОРСТУХ]{2}\s?\d{2,3}(?!\d)")
 _VIN_OK = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 
@@ -86,7 +89,10 @@ def find_ident(text: str) -> str:
         if v:
             return v
     m = _FRAME.search(text.upper())
-    return m.group(0) if m else ""
+    if m:
+        return m.group(0)
+    m = _FRAME_NODASH.search(text.upper())
+    return f"{m.group(1)}-{m.group(2)}" if m else ""
 
 
 def find_plate(text: str) -> str:
@@ -108,7 +114,7 @@ def parse(text: str) -> Request:
         # Свободный текст: всё, кроме служебных строк и самого VIN
         body = "\n".join(line for line in text.splitlines()
                          if not _MODEL.search(line) and not _IDENT_LINE.search(line))
-        for token in (r.ident, r.plate):
+        for token in (r.ident, r.plate, r.ident.replace("-", "") if "-" in r.ident else ""):
             if token:
                 body = re.sub(re.escape(token), " ", body, flags=re.I)
         body = _VIN_TOKEN.sub(" ", body)

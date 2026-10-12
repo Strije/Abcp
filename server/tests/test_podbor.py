@@ -2578,3 +2578,17 @@ def test_sensor_named_after_block_word():
     p = run("X9FKXXEEBKCB57566 датчик распредвала", engine=Engine(FakeShafts(), None, set()))["positions"][0]
     oems = [v["oem"] for v in p["variants"]]
     assert oems[0] == "1905522" and "1110834" not in oems   # датчик коленвала — чужой вал (детонацию режут описания поставщиков)
+
+
+def test_frame_number_without_dash():
+    """Судья 11.10: клиент прислал «l275v1003754» (Daihatsu), робот снова просил VIN или номер кузова."""
+    from app.podbor.engine import draft
+    r = T.parse("l275v1003754 колодки передние")
+    assert r.ident == "L275V-1003754" and r.chunks == ["колодки передние"]
+    assert T.parse("ACV30W0123456").ident == "ACV30W-0123456"
+    # номера деталей — не номер кузова
+    for art in ("A0011592601", "GDB3123", "фильтр W712952", "N10579702"):
+        assert T.parse(art).ident == "", art
+    # машины нет в каталоге — говорим про номер кузова, а не про «VIN 17 знаков»
+    text = draft({"status": "vehicle_not_found", "request": {"ident": "L275V-1003754", "chunks": []}, "positions": []})
+    assert "номеру кузова" in text and "17 знаков" not in text
