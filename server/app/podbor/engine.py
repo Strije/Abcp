@@ -479,7 +479,7 @@ class Engine:
         нашлась только часть слов («тормозной бачок» → бачок омывателя): показывать чужую деталь хуже, чем честно передать
         менеджеру. Модель уже посмотрела (арбитраж) и лучше не нашла."""
         for i, p in enumerate(positions):
-            if p.get("kind", "") not in ("", "part") or p["status"] == "not_found" or "llm_part" in p or "qualifier_from" in p:
+            if p.get("kind", "") not in ("", "part") or p["status"] == "not_found" or "llm_part" in p or "qualifier_from" in p                     or p.get("via_units"):
                 continue
             lost = self._score(p) < WEAK_SCORE and "уточним по каталогу отдельно" in (p.get("note") or "")
             if lost or self._partial(p, tree):
@@ -493,8 +493,8 @@ class Engine:
     def _weak(self, p: dict, tree: TreeIndex | None = None) -> bool:
         """Правила нашли частично: оценка низкая, главное слово потеряно («Кольцо» уточним отдельно) или в названии группы и
         вариантов нет части слов клиента («тормозной бачок» → бачок омывателя): такое проверяет модель, а не показываем сразу."""
-        if p.get("kind", "") not in ("", "part"):
-            return False
+        if p.get("kind", "") not in ("", "part") or p.get("via_units"):
+            return False   # узел полного каталога выбран по структуре каталога: слабая оценка слов — не повод звать арбитра
         if p["status"] == "not_found" and not p.get("groups"):
             # Правила ничего не нашли («крышка омывателя фар», «кожух замка капота»): модель переведёт в название каталога
             return bool(T.stems(p.get("query", ""), self.stop))
@@ -567,7 +567,8 @@ class Engine:
         её получит менеджер. Возвращает номера разобранных позиций; прочие слабые идут старым путём."""
         # Детали узла по позициям схемы (Audi: все рычаги) — структура каталога надёжнее мнения модели: не трогаем
         idx = [i for i, p in enumerate(positions)
-               if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop) and not p.get("parts")]
+               if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop) and not p.get("parts")
+               and not p.get("via_units")]
         vecs = await emb.embed([positions[i]["query"] for i in idx]) if idx else None
         if not vecs:
             return set()
