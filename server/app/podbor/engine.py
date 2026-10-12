@@ -1149,23 +1149,37 @@ class Engine:
             # «подшибник» — опечатка, словарь сам правит её в «подшипник»: это не потерянное слово
             lost = bool(raw_head) and raw_head not in known and tree.fix(raw_head) not in known                 and raw_head not in T.ADJ and raw_head not in _GENERIC_HEADS
             head = raw_head if lost else T.head(known)
-            aliases = [head] + _PART_ALIASES.get(head, [])
+            aliases = [head] + _PART_ALIASES.get(head, []) + _NAME_KIN.get(head, [])
             has = lambda name: any(T.same(a, s) for a in aliases for s in T.stems(name, self.stop))  # noqa: E731
             # Иначе — только при неполном совпадении с группой: «Стойки стабилизатора» у Toyota совпали точно,
             # а деталь в ней — «Шарнир переднего стабилизатора»; искать «стойку» по узлам — найти «Опору стойки»
             # Сайлентблок — всегда: «сайлентблок задней цапфы» точно привёл в «Рычаги и тяги подвески»,
             # а в составе группы — «Тяга распоры»; сам сайлентблок лежит в узлах группы
-            if not unit_mode and (best < 1.0 or lost or head in _DEEP) and head and head not in T.ADJ \
+            if not unit_mode and (best < 1.0 or lost or head in _DEEP or head in _NAME_KIN) and head and head not in T.ADJ \
                     and head not in _GENERIC_HEADS and not any(has(c.d.name) for c in cands):
                 lists = await asyncio.gather(*(self.catalog.details(v, g.id, True) for g, _ in groups),
                                              return_exceptions=True)
                 full = [d for x in lists if isinstance(x, list) for d in x if has(d.name)
                         and (head not in _PART_ALIASES or any(T.same(a, T.head(T.stems(T.expand(d.name), self.stop)) or "")
                                                                for a in aliases))]
-                better = self._candidates(tree, q + aliases[1:2], want, groups, full, set(), loose=True) if full else []
+                better = []
+                if head in _NAME_KIN:
+                    # «Клапанная крышка с прокладкой» — сама крышка, «Прокладка ГБЦ» — другая прокладка: берём детали, где
+                    # прокладка (или её другое имя, «К-т прокладок», «ПРОКЛАДОЧНОЕ КОЛЬЦО») — главное слово, а прочие слова
+                    # названия клиент назвал сам. Таких нет — в узлах ничего не берём (останется герметик или менеджер)
+                    own = aliases + [T.stem(w) for w in ("кольцо", "прокладочное")] + list(_GENERIC_HEADS)
+                    is_own = lambda w: any(T.same(a, w) for a in own)  # noqa: E731
+                    full = [d for d in full if is_own(T.head(T.stems(T.expand(d.name), self.stop)) or "")
+                            and all(is_own(w) or any(T.same(w, x) for x in q) for w in T.stems(T.expand(d.name), self.stop)
+                                    if not w.isdigit() and w not in T.ADJ)]
+                    better = [Candidate(d, 0.8, 0.8, True, T.side(d.context, self.pr_axis), "каталог" if T.side(d.context).axis else "")
+                              for d in {_key(d.oem): d for d in full}.values()][:4]
+                elif full:
+                    better = self._candidates(tree, q + aliases[1:2], want, groups, full, set(), loose=True)
                 if better:
                     cands = better
-                else:
+                elif not (T.same(head, T.stem("прокладка")) and any(_SEALANT.search(c.d.name) for c in cands)):
+                    # Герметик вместо прокладки — законный ответ на «прокладку» (с пояснением ниже), а не потерянное слово
                     head_miss = next((w for w in T.words(query) if T.same(T.stem(w), head)), head)
         fallback_note = ""
         # «Комплект ГРМ» у мотора с цепью: в группе ремня пусто или нашлось не про ГРМ (у Audi 1.8 TFSI
@@ -1267,8 +1281,18 @@ class Engine:
                 pos["status"] = "choose"
                 pos["question"] = (pos["question"] + " " if pos["question"] else "") + a["text"]
                 pos["asked"] = True
+        seal = [c for c in kept if _SEALANT.search(c.d.name)] if T.same(T.head(q) or "", T.stem("прокладка")) else []
+        if seal:
+            pos["variants"].sort(key=lambda var: bool(_SEALANT.search(var["name"])))   # прокладка — первой, герметик — ниже
         main = next(c for c in kept if c.d.oem == pos["variants"][0]["oem"])
         pos["note"] = fallback_note or self._note(q, query, main, tree)
+        if seal:
+            # VAG D 176 501 A1, Audi AKD 456 000 02: производитель ставит герметик вместо прокладки — без пояснения клиент
+            # видит «клей» в ответ на «прокладку» (Passat 2002, перепрогон 12.10)
+            pos["note"] = (pos["note"] + " " if pos["note"] else "") + (
+                f"По каталогу здесь также используется герметик ({seal[0].d.oem})." if len(seal) < len(kept) else
+                f"На вашей машине производитель ставит здесь не прокладку, а герметик ({ru_name(seal[0].d.name)}, "
+                f"{seal[0].d.oem}). Готовые прокладки других фирм, если продаются, — среди аналогов.")
         if head_miss and not pos["note"] and re.search(r"[а-яё]", main.d.name, re.I):   # «BOOT KIT…» — не пропуск   # своё пояснение важнее: «подшипник» → «ступица в сборе»
             pos["note"] = (f"«{head_miss[:1].upper() + head_miss[1:]}» уточним по каталогу отдельно, "
                            f"ниже — «{ru_name(main.d.name)}».")
@@ -1796,6 +1820,12 @@ def _main(q: list[str]) -> str | None:
 _PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
                  T.stem("пыльник"): [T.stem("чехол"), "boot"],
                  T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
+# Другие названия той же детали — только чтобы найти её в узлах; главное слово детали при этом не проверяется (у Kia прокладки —
+# «ПРОКЛАДОЧНОЕ КОЛЬЦО-…», у VAG — «К-т прокладок…»). Passat 2002: прокладка клапанной крышки — «Уплотнитель» 06A103483D,
+# не узнав её, робот брал герметик
+_NAME_KIN = {T.stem("прокладка"): [T.stem("уплотнитель"), T.stem("уплотнение"), "gasket"]}
+# Герметик вместо прокладки (VAG D 176 501 A1, Audi AKD 456 000 02, GM sealer): деталь каталога, но не прокладка — объясняем
+_SEALANT = re.compile(r"герметик|sealant|sealer|liquid\s+gasket|жидк\w*\s+прокладк", re.I)
 # Пояснения движка «слово клиента потеряно»: «Шланг» уточним по каталогу отдельно…, Отдельно «усилителя» в каталоге не нашли…
 _LOST_NOTE = re.compile(r"уточним по каталогу отдельно|в каталоге не нашли")
 

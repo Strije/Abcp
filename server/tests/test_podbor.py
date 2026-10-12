@@ -623,6 +623,41 @@ def test_yes_to_robot_question_searches_offered_part():
     assert not vague["positions"]
 
 
+class FakeGasket(Fake):
+    """VAG: в группе «Прокладка клапанной крышки» — только герметик; в узле группы — «Уплотнитель» (это и есть прокладка)
+    и крышка с прокладкой (сама крышка). gasket=False — прокладки в узле нет совсем."""
+
+    def __init__(self, gasket=True):
+        super().__init__()
+        self.gasket = gasket
+
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(1, "Двигатель", link=False, children=[
+                node(999, "Прокладка клапанной крышки")])])
+        if method == "listQuickDetail":
+            dets = [det("D176501A1", "Силиконовый клей-герметик")]
+            if params["all"] == "true":
+                dets += [det("06A103469", "Клапанная крышка с прокладкой")]
+                if self.gasket:
+                    dets.append(det("06A103483D", "Уплотнитель"))
+            return [cat("Головка блока цилиндров", unit("Головка блока цилиндров Клапанная крышка", dets))]
+        return super().answer(method, params)
+
+
+def test_gasket_named_seal_and_sealant_explained():
+    """Passat 2002, перепрогон 12.10: на «прокладку клапанной крышки» робот показал силиконовый герметик, а сама прокладка
+    в каталоге — «Уплотнитель» 06A103483D. Прокладку — по её другому имени; только герметик — показываем и объясняем."""
+    res = run("X9FKXXEEBKCB57566 прокладка клапанной крышки", Engine(FakeGasket(), None, set()))
+    p = res["positions"][0]
+    assert p["status"] in ("found", "choose") and p["variants"][0]["oem"] == "06A103483D"
+    assert "06A103469" not in [v["oem"] for v in p["variants"]]                     # крышка в сборе — не прокладка
+    only = run("X9FKXXEEBKCB57566 прокладка клапанной крышки", Engine(FakeGasket(gasket=False), None, set()))
+    p = only["positions"][0]
+    assert p["status"] in ("found", "choose") and p["variants"][0]["oem"] == "D176501A1", p
+    assert "не прокладку, а герметик" in p["note"] and "герметик" in only["text"]
+
+
 def test_numbers_cleaned_before_abcp_like_app():
     """Номер в ABCP — как в приложении (cleanNumber): буквы и цифры, заглавными; ведущие нули остаются."""
     import httpx
