@@ -917,17 +917,26 @@ class Engine:
                 return None
             aliases = [head] + _PART_ALIASES.get(head, []) + _HOSE_KIN.get(head, [])
             qual = [w for w in q if w != head and not T.side_of_word(w) and not _word_in(w, _GENERIC_HEADS)]
-            pool: dict[str, Detail] = {}
+            first = {gid for gid, u in ids.items() if picked and u["name"] == names[picked[0]]}
+            scored: dict[str, tuple[float, Detail]] = {}
             for gid in gids:
                 for d in await self.catalog.details(v, gid, True):
                     st = T.stems(_ru_words(d.name), self.stop)
                     if not any(T.same(a, x) for a in aliases for x in st) \
                             or any(m in d.name.lower() and m not in {w[:5] for w in q} for m in _ID_MODS):
                         continue
-                    where = st + T.stems(_ru_words(d.unit), self.stop)
-                    if qual and not any(T.same(w, x) for w in qual for x in where):
+                    unit_st = T.stems(_ru_words(d.unit), self.stop)
+                    in_name = sum(1 for w in qual if any(T.same(w, x) for x in st))
+                    in_unit = sum(1 for w in qual if any(T.same(w, x) for x in unit_st))
+                    if qual and not in_name and not in_unit:
                         continue
-                    pool.setdefault(_key(d.oem), d)
+                    # «HOSE,BRAKE BOOSTER VACUUM» (уточнение в самом названии) важнее «ТРУБКИ ТОРМОЗНОЙ» из соседнего узла
+                    score = 2 * in_name + in_unit + any(T.same(head, x) for x in st) + 0.5 * (gid in first)
+                    k = _key(d.oem)
+                    if k not in scored or scored[k][0] < score:
+                        scored[k] = (score, d)
+            best = max((sc for sc, _ in scored.values()), default=0)
+            pool = {k: d for k, (sc, d) in scored.items() if sc == best}
             if not pool or len(pool) > 6:
                 return None
             groups = [{"id": gid, "name": ids[gid]["name"], "path": ids[gid].get("cat", ""), "score": UNIT_SCORE}
