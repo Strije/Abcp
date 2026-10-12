@@ -1430,14 +1430,18 @@ class Engine:
         lrs: dict[str, set[str]] = {}
         # Номер встречается в каталоге несколько раз, а сторона записана не везде (Renault R19: «SAĞ» — только у одной из
         # двух записей правого кулака). Хоть одна запись — про другую сторону, и ни одна — про нужную: номер не берём
-        sides: dict[str, list[T.Side]] = {}
+        sides: dict[str, list[tuple[T.Side, str]]] = {}
         for d in pool:
-            sides.setdefault(_key(d.oem), []).append(T.side(d.context, self.pr_axis))
+            sides.setdefault(_key(d.oem), []).append((T.side(d.context, self.pr_axis), d.context))
+        said = {"left": T.LEFT, "right": T.RIGHT, "front": T.FRONT, "rear": T.REAR}
         def other_side(k: str) -> bool:
             ss = sides.get(k, [])
-            # По каждому признаку отдельно: «передняя» у записи без «лев/прав» не спасает номер, записанный «правым»
-            lr = want.lr and any(x.lr and x.lr != want.lr for x in ss) and not any(x.lr == want.lr for x in ss)
-            axis = want.axis and any(x.axis and x.axis != want.axis for x in ss) and not any(x.axis == want.axis for x in ss)
+            # По каждому признаку отдельно: «передняя» у записи без «лев/прав» не спасает номер, записанный «правым».
+            # Нужная сторона упомянута хоть где-то — номер годится: Lancer «JOINT KIT…,LH» в узле «RH..M/T» (обе стороны)
+            lr = want.lr and any(x.lr and x.lr != want.lr for x, _ in ss) \
+                and not any(x.lr == want.lr or said[want.lr].search(c) for x, c in ss)
+            axis = want.axis and any(x.axis and x.axis != want.axis for x, _ in ss) \
+                and not any(x.axis == want.axis or said[want.axis].search(c) for x, c in ss)
             return bool(lr or axis)
         for d in pool:
             if d.match is False:

@@ -2753,3 +2753,20 @@ def test_fan_is_not_ventilated():
     belts = [{"name": "Ремень привода вентилятора и генератора"}, {"name": "Ремень масляного насоса ГУР"}]
     assert note_diffs(belts) == ["", ""]
     assert note_diffs([{"name": "Тормозной диск (вентилир.)"}, {"name": "Тормозной диск"}]) == ["вентилируемый", ""]
+
+
+class FakeBothSides(Fake):
+    """Lancer: «JOINT KIT,FR AXLE SHAFT,LH» записан дважды — в узле «LH» и в узле «RH..M/T»: номер годится на обе стороны."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(446, "ШРУС")])
+        if method == "listQuickDetail":
+            return [cat("Трансмиссия", unit("ПРИВОДНЫЕ ВАЛЫ", [det("3817A004", "JOINT KIT,FR AXLE SHAFT,LH")], note="LH"),
+                        unit("ПРИВОДНЫЕ ВАЛЫ", [det("3817A004", "JOINT KIT,FR AXLE SHAFT,LH")], note="RH..M/T"))]
+        return super().answer(method, params)
+
+
+def test_number_for_both_sides_kept():
+    """Проверка 12.10: правило «номер записан о другой стороне» выбросило ШРУС Lancer на «правый», хотя второй узел — RH."""
+    p = run("X9FKXXEEBKCB57566 ШРУС правый", engine=Engine(FakeBothSides(), None, set()))["positions"][0]
+    assert [v["oem"] for v in p["variants"]] == ["3817A004"]
