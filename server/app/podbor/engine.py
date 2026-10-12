@@ -810,8 +810,7 @@ class Engine:
                                "вместо дисков стоят барабаны (колодки к ним — барабанные).")
                 await self._confirm_replacements(v, alt)
                 return alt
-        if pos["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (pos.get("note") or "") \
-                and pos["kind"] in ("", "part"):
+        if pos["status"] in ("found", "choose") and _LOST_NOTE.search(pos.get("note") or "") and pos["kind"] in ("", "part"):
             # Нашлось только уточнение («вакуумный насос»), а главного слова («шланг») там нет: деталь ищем внутри узла по
             # уточнению — «Трубка вакуумного насоса», а не сам насос (12.10, L200)
             pos = await self._by_unit_part(v, query, want, kind) or await self._by_units_llm(v, query, want, kind) or pos
@@ -1692,6 +1691,9 @@ def _main(q: list[str]) -> str | None:
 _PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
                  T.stem("пыльник"): [T.stem("чехол"), "boot"],
                  T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
+# Пояснения движка «слово клиента потеряно»: «Шланг» уточним по каталогу отдельно…, Отдельно «усилителя» в каталоге не нашли…
+_LOST_NOTE = re.compile(r"уточним по каталогу отдельно|в каталоге не нашли")
+
 _EN_PART = {"hose": "шланг", "pipe": "трубка", "tube": "трубка", "gasket": "прокладка", "seal": "уплотнитель",
             "sensor": "датчик", "bolt": "болт", "nut": "гайка", "bracket": "кронштейн", "clamp": "хомут", "pump": "насос",
             "filter": "фильтр", "valve": "клапан", "cover": "крышка", "bearing": "подшипник", "spring": "пружина",
