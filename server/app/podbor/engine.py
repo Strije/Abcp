@@ -2270,7 +2270,8 @@ def _offer_line(o: dict, numbers: bool, name: str = "", who: str = "", fallback:
     """«• Kroner — Ступица задняя с подшипником — 3 930 ₽, 1 день · гарантия магазина».
     Артикул — только если менеджер включил его в настройках: клиенту он обычно не нужен."""
     brand = nice_brand(o["brand"])
-    head = f"{brand} {o['number']}" if numbers else brand
+    # Номер — как в приложении и поиске ABCP: «A 001 159 26 01» → «A0011592601», «202 026-SX» → «202026SX»
+    head = f"{brand} {_key(o['number'])}" if numbers else brand
     if who:
         head += f" ({who})"
     title = name or nice_name(o.get("description", ""), o["brand"], o["number"])
@@ -2303,7 +2304,7 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
         same = theirs.lower().strip(" .…") not in _VAGUE and             any(T.same(a, b) for a in T.stems(theirs) for b in T.stems(catalog_name))
         out.append(_offer_line(orig, numbers, theirs if same else catalog_name, "оригинал"))
     else:
-        num = f" {var['oem']}" if numbers else ""
+        num = f" {_key(var['oem'])}" if numbers else ""
         if not var.get("via"):   # сайлентблок по номеру рычага: оригинала отдельно нет, так и написано выше
             out.append(f"• {nice_brand(var['brand'])}{num} (оригинал) — {catalog_name} — цену и срок уточним")
     for a in alts:
@@ -2315,7 +2316,7 @@ def _block(var: dict, alts: list[dict], numbers: bool, analogs: int, query: str 
     for rp in (o or {}).get("replacements") or []:
         if rp.get("catalog"):   # только подтверждённые каталогом по VIN: см. Engine._confirm_replacements
             out.append(_offer_line(rp, numbers, nice_name(rp["description"], rp["brand"], rp["number"]) or catalog_name,
-                                   f"оригинал под другим номером {rp['number']}"))
+                                   f"оригинал под другим номером {_key(rp['number'])}"))
     more = 0
     if o and o["analogs"]:
         shown = o["analogs"][:analogs]

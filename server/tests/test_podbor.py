@@ -1891,7 +1891,8 @@ def test_manufacturer_replacements_only_when_catalog_confirms():
     var = res["positions"][0]["variants"][0]
     assert [r["number"] for r in var["offers"]["replacements"]] == ["48068-48021"]
     text = draft(res, numbers=False)
-    assert "оригинал под другим номером 48068-48021" in text and "99999" not in text
+    # номер в ответе — очищенный, как в приложении
+    assert "оригинал под другим номером 4806848021" in text and "99999" not in text
     # порядок выбора совпадает с порядком строк: оригинал, замена, аналоги
     from app.podbor import dialog as D
     who = [x["who"] for x in D.shown(res["positions"][0])]
@@ -2449,3 +2450,12 @@ def test_scheme_links_go_through_our_server(monkeypatch, tmp_path):
     assert schemes.resolve(tok[:-1] + ("0" if tok[-1] != "0" else "1")) is None          # подпись не подделать
     monkeypatch.setenv("TOKEN_SECRET", "")
     assert schemes.link(url) == url                                                       # без секрета — как есть
+
+
+def test_offer_numbers_cleaned_like_app():
+    """Mercedes E 290 (12.10): «Mercedes-Benz A 001 159 26 01», «Stellox 202 026-SX» — номера в ответе как в приложении."""
+    from app.podbor.engine import _offer_line
+    o = {"brand": "STELLOX", "number": "202 026-SX", "description": "Свеча накаливания", "price": 660, "days": 3}
+    line = _offer_line(o, True)
+    assert "202026SX" in line and "202 026-SX" not in line
+    assert "202026SX" not in _offer_line(o, False)   # без «артикулов» номера нет вовсе
