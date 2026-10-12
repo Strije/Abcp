@@ -934,7 +934,9 @@ class Engine:
             if got["pick"] < 0:
                 notes.append(f"Отдельно эту деталь производитель не продаёт — только в сборе: «{ru_name(d.name)}».")
             o = got["other"]
-            if 0 <= o < len(details) and o != k:
+            # «Возможен и вариант» — только другое исполнение: две «катушки зажигания» под одним названием клиента путают
+            if 0 <= o < len(details) and o != k and details[o].oem != d.oem \
+                    and ru_name(details[o].name).strip().lower() != ru_name(d.name).strip().lower():
                 notes.append(f"По каталогу для вашей машины возможен и вариант «{ru_name(details[o].name)}» "
                              f"({details[o].oem}) — проверьте, какой стоит.")
             pos["note"] = " ".join(notes)
