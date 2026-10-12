@@ -856,6 +856,14 @@ class Engine:
             # Не нашли ни группами, ни словами по узлам (бывает и с пояснением «шланг уточним отдельно»): узлы выбирает модель
             pos = await self._by_units_llm(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
+        miss = out.get("head_miss") or ""
+        if out["status"] in ("found", "choose") and miss and not out.get("via_units") \
+                and not (re.fullmatch(r"[а-яё]+", miss.lower()) and T._ADJ_END.search(miss.lower())):
+            # Главного слова клиента нет ни в одной найденной детали, и узлы полного каталога его не нашли: «соленоиды АКПП»
+            # → гидротрансформатор, «сальник распредвала» → распредвал, «барабан» → рычаг ручника (перепрогон 12.10: 11 из 32
+            # «не та деталь»). Соседа не показываем — менеджеру. «Вентилируемый» — признак, а не деталь: такое оставляем
+            out = dict(out, status="not_found", variants=[], groups=[], question="", note="",
+                       dropped=(out.get("note") or query)[:200])
         await self._confirm_replacements(v, out)
         return out
 
@@ -1061,8 +1069,13 @@ class Engine:
         if alt_ok:
             aliases = [head] + _PART_ALIASES.get(head, [])
             named = [x for x in alt["variants"] if any(T.same(a, s) for a in aliases for s in T.stems(x["name"], self.stop))]
+            # «Ремкомплект прокладок турбокомпрессора»: узел «Турбокомпрессор» нашёлся, но в нём — сама турбина. Общие
+            # слова-детали («прокладки») должны быть в названии варианта, иначе это не набор, а весь узел (12.10, Fiesta)
+            loose = [w for w in lost if _word_in(w, VAGUE_NOUNS) and not _word_in(w, _GENERIC_HEADS) and not T.same(w, head)]
+            whole = [x for x in alt["variants"] if all(any(T.same(w, s) for s in T.stems(x["name"], self.stop)) for w in loose)]
             # «Комплект/ремкомплект X» — деталь и есть узел X; «датчик/подшипник X» — нужны варианты, где названа сама деталь
-            if named or _word_in(head, _GENERIC_HEADS):
+            if named or (_word_in(head, _GENERIC_HEADS) and whole):
+                named = named or whole
                 alt = dict(alt, variants=named or alt["variants"], query=query, qualifier_from=g.name,
                            note=f"Нашли узел «{alt['groups'][0]['name']}»: {query.lower()} уточним по нему.")
                 return alt
@@ -1256,6 +1269,7 @@ class Engine:
         if head_miss and not pos["note"] and re.search(r"[а-яё]", main.d.name, re.I):   # «BOOT KIT…» — не пропуск   # своё пояснение важнее: «подшипник» → «ступица в сборе»
             pos["note"] = (f"«{head_miss[:1].upper() + head_miss[1:]}» уточним по каталогу отдельно, "
                            f"ниже — «{ru_name(main.d.name)}».")
+            pos["head_miss"] = head_miss   # если узлы и модель деталь не найдут — соседа не показываем (position)
         if second:
             c2, note2 = second
             var = self._variant(c2, v, alt=False)

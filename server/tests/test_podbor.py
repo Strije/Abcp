@@ -623,6 +623,19 @@ def test_yes_to_robot_question_searches_offered_part():
     assert not vague["positions"]
 
 
+def test_lost_head_word_shows_no_neighbor():
+    """Перепрогон 12.10: «соленоиды АКПП» → гидротрансформатор, «сальник распредвала» → распредвал — главного слова клиента
+    нет ни в одной детали, а показывали соседа с пометкой «уточним отдельно». Теперь — честно менеджеру."""
+    e = Engine(Fake(), None, set())
+    for q, neighbor in (("шланг колодок тормозных", "торм. колодок суппорта"), ("датчик ступицы", "Подшипник ступицы колеса")):
+        res = run(f"X9FKXXEEBKCB57566 {q}", e)
+        p = res["positions"][0]
+        assert p["status"] == "not_found" and not p["variants"] and p.get("dropped"), q
+        assert neighbor not in res["text"] and "передали менеджеру" in res["text"], q
+    found = run("X9FKXXEEBKCB57566 колодки тормозные передние", e)["positions"][0]   # слово на месте — показываем
+    assert found["status"] in ("found", "choose") and found["variants"]
+
+
 def test_dialog_answer_to_question_replaces_position():
     e = Engine(Fake(), None, set())
     first = run("X9FKXXEEBKCB57566 подшипник ступицы", e)
