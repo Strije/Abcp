@@ -587,6 +587,8 @@ def test_bitrix_hint_flow(tmp_path):
         c.post("/v1/bitrix/install", data={
             "auth[domain]": "bitrix.freno.ru", "auth[access_token]": "AT", "auth[refresh_token]": "RT", "auth[expires_in]": "3600",
             "auth[client_endpoint]": "https://bitrix.freno.ru/rest/", "auth[application_token]": "APPTOK"})
+        # пункт меню приложения — только пояснение, токены не принимает
+        assert "Подбор" in c.post("/v1/bitrix/app", data={"AUTH_ID": "X", "DOMAIN": "bitrix.freno.ru"}).text
         bind = [b for m, b in calls if m == "placement.bind"]
         assert bind and bind[0]["PLACEMENT"] == "IM_TEXTAREA" and bind[0]["OPTIONS"]["context"] == "LINES"
         form = {"AUTH_ID": "OPTOKEN", "PLACEMENT": "IM_TEXTAREA", "PLACEMENT_OPTIONS": '{"dialogId":"chat55","URI":"/online/"}'}
