@@ -623,6 +623,28 @@ def test_yes_to_robot_question_searches_offered_part():
     assert not vague["positions"]
 
 
+def test_slang_synonyms_from_rerun():
+    """Перепрогон 12.10: «сальники клапанов» → сальники коленвала, «пробка радиатора» → сливная пробка, «ролики ГРМ» →
+    приводной ремень. Синонимы из podbor_rules.json ведут в нужные группы."""
+    from app.podbor.catalog import TreeIndex
+    from app.podbor.engine import load_rules
+    rules = load_rules()
+    stop = frozenset(rules["stop"]) | {T.stem(w) for w in rules["stop"]}
+    tree = node(0, "Легковые", link=False, children=[
+        node(18, "Двигатель", link=False, children=[
+            node(23, "Маслосъемные колпачки"), node(47, "Сальник коленвала, передний"), node(48, "Сальник коленвала задний"),
+            node(16, "Пробка сливного отверстия", "Пробка поддона"), node(72, "Ролик натяжителя"),
+            node(73, "Ролик обводной, направляющий"), node(193, "Ремень приводной"), node(195, "Ролик натяжной, натяжитель")]),
+        node(302, "Радиатор водяной", link=False, children=[node(304, "Радиатор системы охлаждения"),
+                                                           node(307, "Расширительный бачок")]),
+        node(13479, "Крышка топливного бака", "пробка бензобака")])
+    ix = TreeIndex(tree, stop, None, rules["synonyms"])
+    top = lambda t: ix.rank(T.stems(t, stop), T.side(t))[0][0].id  # noqa: E731
+    assert top("сальники клапанов") == 23
+    assert top("пробка радиатора") in (304, 307)
+    assert top("ролики грм") in (72, 73)
+
+
 def test_lost_head_word_shows_no_neighbor():
     """Перепрогон 12.10: «соленоиды АКПП» → гидротрансформатор, «сальник распредвала» → распредвал — главного слова клиента
     нет ни в одной детали, а показывали соседа с пометкой «уточним отдельно». Теперь — честно менеджеру."""
