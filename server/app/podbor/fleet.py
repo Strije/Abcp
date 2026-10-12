@@ -253,7 +253,7 @@ async def parts(per: str = "1"):
                 await cat.unit_tree(v)
                 ids = cat._unit_ids.get(cat.tree_key(v) + "-u") or {}
                 for gid, u in ids.items():
-                    on_disk = (CACHE / "unit_details" / _safe(v.catalog) / cat._car(v) / f"{u['id']}.json.gz").exists()
+                    on_disk = (CACHE / cat.unit_file(v, u)).exists()
                     for attempt in range(4):
                         try:
                             ds = await cat._unit_details(v, gid)
