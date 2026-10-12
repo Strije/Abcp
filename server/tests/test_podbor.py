@@ -623,6 +623,24 @@ def test_yes_to_robot_question_searches_offered_part():
     assert not vague["positions"]
 
 
+def test_numbers_cleaned_before_abcp_like_app():
+    """Номер в ABCP — как в приложении (cleanNumber): буквы и цифры, заглавными; ведущие нули остаются."""
+    import httpx
+    from app.podbor.sources import Remote, clean_number
+    assert clean_number("A 460 352 04 65") == "A4603520465" and clean_number("1j0.407-181") == "1J0407181"
+    assert clean_number("06A903315E") == "06A903315E"
+    seen = []
+
+    def server(request):
+        seen.append(request.url.params["number"])
+        return httpx.Response(200, json=[])
+    src = Remote("https://x.test", transport=httpx.MockTransport(server))
+    asyncio.run(src.brands("6507 741AA"))
+    asyncio.run(src.offers("13 53 7 564 751", "BMW"))
+    asyncio.run(src.close())
+    assert seen == ["6507741AA", "13537564751"]
+
+
 def test_slang_synonyms_from_rerun():
     """Перепрогон 12.10: «сальники клапанов» → сальники коленвала, «пробка радиатора» → сливная пробка, «ролики ГРМ» →
     приводной ремень. Синонимы из podbor_rules.json ведут в нужные группы."""

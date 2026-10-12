@@ -6,6 +6,7 @@ Remote — с любого компьютера через гостевые за
 """
 import asyncio
 import json
+import re
 from typing import Any
 
 import httpx
@@ -13,6 +14,13 @@ import httpx
 from ..abcp import Abcp, AbcpError, guest_brands, guest_offers
 from ..laximo import Laximo
 from .catalog import LaximoError, check_error
+
+
+def clean_number(number: str) -> str:
+    """Номер для поиска в ABCP — как в приложении (cleanNumber): только буквы и цифры, заглавными. Laximo отдаёт
+    «A 460 352 04 65» (Mercedes), «6507 741AA» (Chrysler), «1J0.407.181»; ABCP сейчас сам это прощает, но полагаться
+    на это не стоит. Ведущие нули не трогаем: у некоторых марок они часть номера."""
+    return re.sub(r"[^0-9A-ZА-ЯЁ]", "", (number or "").upper())
 
 
 class Direct:
@@ -30,7 +38,7 @@ class Direct:
 
     async def brands(self, number: str) -> list[dict]:
         try:
-            return await guest_brands(self.abcp, number)
+            return await guest_brands(self.abcp, clean_number(number))
         except AbcpError as e:
             if e.status == 404:
                 return []
@@ -40,7 +48,7 @@ class Direct:
         if not self.profile:
             return []  # гостевые цены не настроены — подбор работает без цен
         try:
-            return await guest_offers(self.abcp, number, brand, self.profile, False)
+            return await guest_offers(self.abcp, clean_number(number), brand, self.profile, False)
         except AbcpError as e:
             if e.status == 404:
                 return []
@@ -74,11 +82,11 @@ class Remote:
         return data
 
     async def brands(self, number: str) -> list[dict]:
-        r = await self._send("GET", "/v1/guest/brands", params={"number": number})
+        r = await self._send("GET", "/v1/guest/brands", params={"number": clean_number(number)})
         return r.json() if r.status_code == 200 else []
 
     async def offers(self, number: str, brand: str) -> list[dict]:
-        r = await self._send("GET", "/v1/guest/offers", params={"number": number, "brand": brand, "all": 0})
+        r = await self._send("GET", "/v1/guest/offers", params={"number": clean_number(number), "brand": brand, "all": 0})
         return r.json() if r.status_code == 200 else []
 
     async def close(self):
