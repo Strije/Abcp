@@ -1352,6 +1352,13 @@ class Engine:
             pos["note"] = (f"«{head_miss[:1].upper() + head_miss[1:]}» уточним по каталогу отдельно, "
                            f"ниже — «{ru_name(main.d.name)}».")
             pos["head_miss"] = head_miss   # если узлы и модель деталь не найдут — соседа не показываем (position)
+        before = pos["note"]
+        order_execution(pos, query)
+        if pos["note"] != before:
+            # «Вентилируемый» — исполнение, а не потерянное слово: пояснение «возможен и обычный» заменяет «уточним отдельно»,
+            # общий вопрос «уточните по примечанию» не нужен
+            pos.pop("head_miss", None)
+            pos["question"] = ""
         if second:
             c2, note2 = second
             var = self._variant(c2, v, alt=False)
@@ -1834,6 +1841,36 @@ class Engine:
 _ATTRS = [(re.compile(r"наружн|внешн", re.I), re.compile(r"внутр", re.I), "наружный", "внутренний"),
           (re.compile(r"верхн", re.I), re.compile(r"нижн", re.I), "верхний", "нижний"),
           (re.compile(r"впуск", re.I), re.compile(r"выпуск", re.I), "впускной", "выпускной")]
+
+
+# Исполнения одной детали, которые каталог по VIN не различает, а на машине стоит одно (T4 1992: диск с плавающим суппортом
+# — обычный, с рамочным — вентилируемый). Клиент назвал исполнение — его первым, второе не прячем: клиент мог ошибиться
+# (замечание пользователя 12.10). (как назвал клиент, другое исполнение, как отличить)
+_EXECUTIONS = [(re.compile(r"(?<!не)(?<!не\s)вентил", re.I), re.compile(r"невентил|сплошн|обычн|(?<![а-яё])не\s+вентил", re.I),
+                "вентилируемый", "обычный",
+                "у вентилируемого два диска с каналами между ними, он заметно толще")]
+
+
+def order_execution(pos: dict, query: str) -> None:
+    """Клиент назвал исполнение («вентилируемый»), а каталог дал оба: нужное — первым, второе — ниже с подсказкой
+    «возможен и …, проверьте». Признак — в названии или примечании детали каталога («Тормозной диск (вентилир.)»)."""
+    text = lambda x: f"{x.get('name', '')} {x.get('note', '')} {x.get('unit_note', '')}"  # noqa: E731
+    for mark, other, mark_name, other_name, how in _EXECUTIONS:
+        # Каталог помечает одно исполнение («(вентилир.)»), второе — просто без пометки
+        marked = [x for x in pos.get("variants", []) if mark.search(text(x)) and not other.search(text(x))]
+        plain = [x for x in pos.get("variants", []) if x not in marked]
+        if not marked or not plain:
+            continue
+        if other.search(query):
+            first, rest, want_name, rest_name = plain, marked, other_name, mark_name
+        elif mark.search(query):
+            first, rest, want_name, rest_name = marked, plain, mark_name, other_name
+        else:
+            continue
+        pos["variants"] = first + rest
+        pos["note"] = (f"Первым — {want_name}, как вы написали. По каталогу для вашей машины возможен и {rest_name} "
+                       f"({rest[0]['oem']}) — проверьте: {how}.")
+        return
 
 
 def desc_facts(rows: list[dict]) -> list[str]:

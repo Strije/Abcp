@@ -658,6 +658,23 @@ def test_gasket_named_seal_and_sealant_explained():
     assert "не прокладку, а герметик" in p["note"] and "герметик" in only["text"]
 
 
+def test_execution_named_by_client_goes_first_other_explained():
+    """T4 1992 (перепрогон 12.10): каталог по VIN даёт и обычный, и вентилируемый диск, на машине стоит один. Клиент сказал
+    «вентилируемый» — его первым, обычный не прячем (клиент мог ошибиться): «возможен и обычный, проверьте»."""
+    from app.podbor.engine import order_execution
+    pos = {"variants": [{"oem": "701615301E", "name": "Тормозной диск", "note": ""},
+                        {"oem": "701615301D", "name": "Тормозной диск (вентилир.)", "note": ""}], "note": "x"}
+    order_execution(pos, "передний вентилируемый тормозной диск")
+    assert [v["oem"] for v in pos["variants"]] == ["701615301D", "701615301E"]
+    assert "возможен и обычный (701615301E)" in pos["note"] and "толще" in pos["note"]
+    plain = {"variants": [dict(v) for v in reversed(pos["variants"])], "note": ""}
+    order_execution(plain, "диск тормозной не вентилируемый")
+    assert plain["variants"][0]["oem"] == "701615301E" and "возможен и вентилируемый" in plain["note"]
+    same = {"variants": [{"oem": "1", "name": "Тормозной диск", "note": ""}], "note": ""}
+    order_execution(same, "вентилируемый диск")
+    assert same["note"] == ""                                  # одно исполнение — пояснять нечего
+
+
 def test_numbers_cleaned_before_abcp_like_app():
     """Номер в ABCP — как в приложении (cleanNumber): буквы и цифры, заглавными; ведущие нули остаются."""
     import httpx
