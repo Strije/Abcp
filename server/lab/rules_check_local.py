@@ -21,7 +21,8 @@ LOCAL = SERVER / "app" / "podbor" / "scenarios_local.json"
 
 
 def git(*args, cwd=REPO) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace").stdout.strip()   # Windows по умолчанию читает cp1251
 
 
 def tree_for(ref: str, path: Path) -> Path:
