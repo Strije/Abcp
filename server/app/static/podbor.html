@@ -223,15 +223,18 @@ function offersTable(o) {
 }
 
 function variant(v, ti, pi, vi) {
+  // Позиция из памяти разговора (ответ номером со схемы, 12.10) приходит без схемы, узла и голосов поставщиков —
+  // без проверок «Подробности» падали целиком, и картинок не было ни у одной позиции
+  const vote = v.vote || {front: 0, rear: 0}, sch = v.scheme || {};
   const side = [SIDE[v.axis], SIDE[v.lr]].filter(Boolean).join(" ");
-  const src = v.side_source === "поставщики" ? `по описаниям поставщиков (${v.vote.front} перед / ${v.vote.rear} зад)`
-            : v.side_source ? `по каталогу${v.vote.front + v.vote.rear ? `, поставщики: ${v.vote.front} перед / ${v.vote.rear} зад` : ""}` : "";
+  const src = v.side_source === "поставщики" ? `по описаниям поставщиков (${vote.front} перед / ${vote.rear} зад)`
+            : v.side_source ? `по каталогу${vote.front + vote.rear ? `, поставщики: ${vote.front} перед / ${vote.rear} зад` : ""}` : "";
   return `<div class="variant">
     <div>${v.alt ? '<span class="chip">тот же оригинал</span> ' : ""}<span class="oem">${esc(v.brand)} ${esc(v.oem)}</span> — ${esc(v.name)}</div>
-    <div class="muted">${side ? `<b>${side}</b> ${esc(src)} · ` : ""}${v.amount ? "кол-во " + esc(v.amount) + " · " : ""}узел «${esc(v.unit)}»${v.unit_note ? " · " + esc(v.unit_note) : ""}${v.note ? " · " + esc(v.note) : ""}</div>
+    <div class="muted">${side ? `<b>${side}</b> ${esc(src)} · ` : ""}${v.amount ? "кол-во " + esc(v.amount) + " · " : ""}${v.unit ? `узел «${esc(v.unit)}»` : ""}${v.unit_note ? " · " + esc(v.unit_note) : ""}${v.note ? " · " + esc(v.note) : ""}${!sch.code && v.code ? "позиция на схеме " + esc(v.code) : ""}</div>
     ${v.warning ? `<div class="warn">⚠ ${esc(v.warning)}</div>` : ""}
     ${v.alt ? "" : offersTable(v.offers)}
-    ${v.scheme.image ? `<button onclick="scheme(${ti},${pi},${vi},this)">Схема узла${v.scheme.code ? ", позиция " + esc(v.scheme.code) : ""}</button>` : ""}
+    ${sch.image ? `<button onclick="scheme(${ti},${pi},${vi},this)">Схема узла${sch.code ? ", позиция " + esc(sch.code) : ""}</button>` : ""}
   </div>`;
 }
 
@@ -241,9 +244,14 @@ function details(d, ti) {
   if (d.warnings.length) out.push(`<div class="card">${d.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join("")}</div>`);
   d.positions.forEach((p, pi) => out.push(`<div class="card">
     <div class="q">${pi + 1}. ${esc(p.query)} <span class="badge ${p.status}">${STATUS[p.status]}</span></div>
-    ${p.groups.length ? `<div class="muted">Группы каталога: ${p.groups.map(g => esc(g.name)).join(", ")}</div>` : ""}
+    ${(p.groups || []).length ? `<div class="muted">Группы каталога: ${p.groups.map(g => esc(g.name)).join(", ")}</div>` : ""}
     ${p.question ? `<div><b>${esc(p.question)}</b></div>` : ""}
     ${p.note ? `<div>${esc(p.note)}</div>` : ""}
+    ${(p.schemes || []).map(sc => `<div class="scheme-asked">
+      <div class="muted">Клиенту отправлена схема «${esc(sc.unit || "узла")}» — ${(sc.codes || []).map(c =>
+        `поз. <b>${esc(c.code)}</b> — ${esc(c.name)}`).join("; ")}</div>
+      <div class="scheme"><img alt="Схема узла" loading="lazy" src="${esc(sc.image)}" onclick="window.open(this.src,'_blank','noopener')"></div>
+    </div>`).join("")}
     ${p.variants.map((v, vi) => variant(v, ti, pi, vi)).join("")}
   </div>`));
   return out.join("");
@@ -328,11 +336,12 @@ function pickVehicle(ti, i) { if (ti === chat.turns.length - 1) go(i, chat.turns
 async function scheme(ti, pi, vi, btn) {
   const v = chat.turns[ti].result.positions[pi].variants[vi], s = v.scheme;
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="scheme"><img alt="Схема узла" src="${esc(s.image)}"></div>
+  const src = s.view || s.image;   // через наш сервер: img.laximo.ru не открывается с VPN и из-за границы
+  wrap.innerHTML = `<div class="scheme"><img alt="Схема узла" src="${esc(src)}"></div>
     <div class="scheme-note muted">${s.code ? `Деталь — позиция <b>${esc(s.code)}</b> на схеме, отмечена цветом. ` : ""}Нажмите на схему, чтобы открыть крупно.</div>`;
   btn.replaceWith(wrap);
   const box = wrap.querySelector(".scheme"), img = box.querySelector("img"), note = wrap.querySelector(".scheme-note");
-  img.addEventListener("click", () => window.open(s.image, "_blank", "noopener"));
+  img.addEventListener("click", () => window.open(src, "_blank", "noopener"));
   if (!s.code) return;
   try {
     const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: {"Content-Type": "application/json"},

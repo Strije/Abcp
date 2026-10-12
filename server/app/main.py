@@ -51,6 +51,7 @@ from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
 from .llm import LLM
+from .podbor import schemes
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("avtodrug")
@@ -504,6 +505,32 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     async def laximo_usage():
         """Сколько запросов ушло в Laximo: сегодня, за месяц, по методам и дням; и в языковую модель."""
         return state["laximo"].usage.report() | {"llm": state["llm"].report()}
+
+    @app.get("/v1/podbor/scheme/{tok}")
+    async def podbor_scheme(tok: str, request: Request):
+        """Картинка схемы узла через наш сервер: img.laximo.ru не открывается с VPN и из-за границы (podbor/schemes.py).
+        Без пароля — ссылку получает клиент; отдаём только схемы, подписанные подбором, и храним на диске."""
+        url = schemes.resolve(tok)
+        if not url:
+            raise HTTPException(404, "Схема не найдена")
+        folder = Path(state["s"].state_dir) / "podbor" / "schemes"
+        f = folder / (hashlib.sha1(url.encode()).hexdigest() + ".img")
+        if not f.exists():
+            if not podbor_limit.allow("sch:" + client_ip(request)):
+                raise HTTPException(429, "Слишком много запросов, подождите минуту")
+            if "img_http" not in state:   # свой клиент: у клиента ABCP в запросах логин и пароль — им не место в Laximo
+                state["img_http"] = httpx.AsyncClient(timeout=20, follow_redirects=True)
+            try:
+                r = await state["img_http"].get(url)
+            except httpx.HTTPError:
+                raise HTTPException(502, "Каталог не отдал схему, попробуйте ещё раз")
+            if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+                raise HTTPException(502, "Каталог не отдал схему")
+            folder.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(r.content)
+        data = f.read_bytes()
+        kind = "image/png" if data[:4] == b"\x89PNG" else "image/gif" if data[:3] == b"GIF" else "image/jpeg"
+        return Response(data, media_type=kind, headers={"Cache-Control": "public, max-age=604800"})
 
     @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():

@@ -537,3 +537,27 @@ def test_push_notification_payload():
     assert notification_for({"type": "promo", "title": "Автодруг92", "body": "Скидка"})["channel_id"] == "promo"
     assert notification_for({"type": "chat", "body": "Да"})["click_action"] == "ru.avtodrug92.OPEN_CHAT"
     assert notification_for({"type": "order_status", "body": "x"}) is None  # у заказов свои кнопки в приложении
+
+
+def test_scheme_image_is_served_through_our_server(monkeypatch):
+    """img.laximo.ru не открывается с VPN и из-за границы: схему отдаём сами, по подписанной ссылке, и храним на диске."""
+    from app import main as M
+    from app.podbor import schemes
+    monkeypatch.setenv("TOKEN_SECRET", "t" * 40)
+    calls = []
+
+    def laximo_img(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert "userpsw" not in str(request.url)   # пароль ABCP в Laximo не уходит
+        return httpx.Response(200, content=b"GIF89a....", headers={"content-type": "image/gif"})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(M.httpx, "AsyncClient", lambda **kw: real(**({"transport": httpx.MockTransport(laximo_img)} | kw)))
+    url = "https://img.laximo.ru/MMC202601/source/155/155_010D00256T.gif?s=1&k=2"
+    tok = schemes.token(url)
+    app = create_app(S, Abcp(S, transport=httpx.MockTransport(fake_abcp)))
+    with TestClient(app) as c:
+        r = c.get("/v1/podbor/scheme/" + tok)
+        assert r.status_code == 200 and r.headers["content-type"] == "image/gif" and r.content.startswith(b"GIF")
+        assert c.get("/v1/podbor/scheme/" + tok).status_code == 200 and len(calls) == 1     # второй раз — с диска
+        assert c.get("/v1/podbor/scheme/" + schemes.token("https://evil.example/a.gif")).status_code == 404

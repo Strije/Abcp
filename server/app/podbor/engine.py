@@ -21,6 +21,7 @@ from . import emb as EMB
 from . import article as A
 from . import differ as DF
 from . import makes as MK
+from . import schemes as SC
 from . import reviews as R
 from . import understand as U
 from . import text as T
@@ -1577,7 +1578,8 @@ class Engine:
             "axis": c.side.axis, "lr": c.side.lr, "side_source": c.side_source,
             "vote": {"front": c.vote[1], "rear": c.vote[2]}, "warning": c.warning, "score": round(c.score, 2),
             "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
-                       "image": image_url(d.image) if d.image else "", "code": d.code_on_image},
+                       "image": image_url(d.image) if d.image else "", "code": d.code_on_image,
+                       "view": SC.link(image_url(d.image), absolute=False) if d.image else ""},   # через наш сервер
             "offers": self._offers_of(c, v, name_hint),
             "facts": desc_facts(c.rows or []),
         }
@@ -2253,7 +2255,7 @@ def attach_schemes(res: dict) -> None:
             continue
         by: dict[str, dict] = {}
         for x, sc, code in zip(main, sch, codes):
-            b = by.setdefault(sc["image"], {"unit": x.get("unit", ""), "image": sc["image"], "codes": []})
+            b = by.setdefault(sc["image"], {"unit": x.get("unit", ""), "image": SC.link(sc["image"]), "codes": []})
             b["codes"].append({"code": code, "oem": x["oem"], "name": x["name"]})
         p["schemes"] = list(by.values())
 

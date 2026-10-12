@@ -2255,3 +2255,18 @@ def test_choice_by_scheme_number():
     short = [{"schemes": [{"codes": ["2", "7"]}]}]
     assert scheme_pick("7", short) == (0, "7")
     assert scheme_pick("нужно 2 штуки, и ещё масло для коробки", short) is None   # «2 штуки» — не номер на схеме
+
+
+def test_scheme_links_go_through_our_server(monkeypatch):
+    from app.podbor import schemes
+    url = "https://img.laximo.ru/MMC202601/source/155/155_010D00256T.gif?s=254093901&k=abc"
+    monkeypatch.setenv("TOKEN_SECRET", "x" * 40)
+    monkeypatch.setenv("PUBLIC_URL", "https://109.73.199.217")
+    link = schemes.link(url)
+    assert link.startswith("https://109.73.199.217/v1/podbor/scheme/") and "254093901" not in link
+    assert schemes.resolve(link.rsplit("/", 1)[1]) == url
+    assert schemes.resolve(schemes.token("https://evil.example/x.png")) is None          # только картинки Laximo
+    tok = schemes.token(url)
+    assert schemes.resolve(tok[:-1] + ("0" if tok[-1] != "0" else "1")) is None          # подпись не подделать
+    monkeypatch.setenv("TOKEN_SECRET", "")
+    assert schemes.link(url) == url                                                       # без секрета — как есть
