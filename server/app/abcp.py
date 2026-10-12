@@ -63,8 +63,20 @@ class Abcp:
     async def close(self):
         await self.http.aclose()
 
+    async def _send(self, method: str, op: str, **kw) -> httpx.Response:
+        # ABCP иногда не отвечает вовремя (126 тайм-аутов за 3 дня в /v1/guest/offers) — без этого сервис падал ошибкой 500.
+        # В журнал — только операция и вид сбоя: в параметрах логин и пароль администратора
+        try:
+            return await self.http.request(method, op, **kw)
+        except httpx.TimeoutException as e:
+            log.warning("ABCP %s: %s", op, type(e).__name__)
+            raise AbcpError(504, "Поставщик не ответил вовремя, повторите через минуту")
+        except httpx.HTTPError as e:
+            log.warning("ABCP %s: %s", op, type(e).__name__)
+            raise AbcpError(502, "Поставщик сейчас недоступен, повторите через минуту")
+
     async def _get(self, op: str, params: dict | list) -> Any:
-        r = await self.http.get(op, params=params)
+        r = await self._send("GET", op, params=params)
         try:
             data = r.json()
         except ValueError:
@@ -143,7 +155,7 @@ class Abcp:
             return False
         # Редактирование заказа: передаём только номер и новую заметку — позиции не трогаем
         data = self._admin({"order[number]": number, "order[notes][0][value]": text})
-        r = await self.http.post("cp/order", data=dict(data))
+        r = await self._send("POST", "cp/order", data=dict(data))
         if r.status_code >= 400:
             try:
                 msg = r.json().get("errorMessage")
@@ -170,7 +182,7 @@ class Abcp:
     # ABCP выполняет их только с разрешённых IP — поэтому идут через сервер, а не с телефона.
 
     async def _post_public(self, op: str, data: dict) -> Any:
-        r = await self.http.post(op, data=data)
+        r = await self._send("POST", op, data=data)
         try:
             body = r.json()
         except ValueError:

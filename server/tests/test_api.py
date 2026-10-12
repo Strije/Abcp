@@ -156,6 +156,18 @@ def test_guest_search_hides_purchase_price(client):
         assert secret not in o
 
 
+def test_guest_offers_abcp_timeout_is_clear_error():
+    # ABCP не ответил вовремя — понятная ошибка, а не 500 (126 раз за 3 дня в бою)
+    def slow(request):
+        if request.url.path.endswith("search/articles"):
+            raise httpx.ReadTimeout("timeout", request=request)
+        return fake_abcp(request)
+    with TestClient(create_app(S, Abcp(S, transport=httpx.MockTransport(slow)))) as c:
+        r = c.get("/v1/guest/offers?number=OC90&brand=Knecht")
+        assert r.status_code == 502 and "повторите" in r.json()["detail"]
+        assert c.get("/v1/guest/brands?number=OC90").status_code == 200
+
+
 def test_guest_search_disabled_without_profile():
     s0 = Settings(abcp_host="https://abcp.test", admin_login="admin", admin_md5="a" * 32, token_secret=b"s" * 40,
                   state_dir=S.state_dir)
