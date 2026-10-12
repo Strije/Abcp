@@ -623,6 +623,58 @@ def test_yes_to_robot_question_searches_offered_part():
     assert not vague["positions"]
 
 
+class FakeFilter(Fake):
+    """Renault R19 (проба 12.10): у поворотного кулака два номера, VIN комплектацию не различает; каталог даёт вопрос
+    «АБС: Да / Нет» (getFilterByDetail), а в примечаниях — «АБС = Да» / «АБС = Нет» (среди нескольких «Примечаний»)."""
+
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(77, "Кулак поворотный")])
+        if method == "listQuickDetail":
+            def knuckle(oem, abs_):
+                return {"name": "ПОВОРОТНЫЙ КУЛАК", "oem": oem, "codeOnImage": "1", "filter": "QUJTX0AxMjEzQFllcyNObw__",
+                        "ssd": "$d$", "attributes": [
+                            {"key": "note", "name": "Примечание", "value": "7700787729 ;7700827251"},
+                            {"key": "note", "name": "Примечание", "value": f"Код оборудования = 11-,12-;АБС = {abs_}"},
+                            {"key": "note", "name": "Примечание", "value": "Размер (Х) = 54"}]}
+            return [cat("Передняя подвеска", unit("Поворотный кулак", [knuckle("7700827247", "Нет"),
+                                                                       knuckle("7700827999", "Да")]))]
+        if method == "getFilterByDetail":
+            self.calls.append(("filter", params["detailId"], params["filter"]))
+            return [{"name": "АБС", "type": "list", "values": [{"name": "Да", "ssdModification": "~$a$"},
+                                                               {"name": "Нет", "ssdModification": "~$b$"}]}]
+        return super().answer(method, params)
+
+
+def test_catalog_filter_question_and_answer_narrows():
+    """Номера различает комплектация, которую VIN не знает: спрашиваем вопрос самого каталога, ответ «без абс» сужает
+    выбор по примечаниям каталога — без новых запросов."""
+    fake = FakeFilter()
+    e = Engine(fake, None, set())
+    first = run("X9FKXXEEBKCB57566 поворотный кулак", e)
+    p = first["positions"][0]
+    assert p["status"] == "choose" and "АБС — Да или Нет" in p["question"], p["question"]
+    assert ("filter", "1", "QUJTX0AxMjEzQFllcyNObw__") in fake.calls
+    calls = len(fake.calls)
+    ans = run("без абс", e, memory=first["memory"])
+    q = ans["positions"][0]
+    assert [v["oem"] for v in q["variants"]] == ["7700827247"] and "АБС — Нет" in q["note"]
+    assert not [c for c in fake.calls[calls:] if c[0] in ("filter", "listQuickDetail")]   # ответ — без новых запросов
+    assert len(ans["memory"]["positions"]) == 1                                           # заменил позицию, не добавил
+    from app.podbor.engine import filter_pick
+    mem = [{"filter_q": {"name": "АБС", "values": ["Да", "Нет"]}}]
+    assert filter_pick("есть", mem) == (0, "Да") and filter_pick("Нет", mem) == (0, "Нет")
+    assert filter_pick("да нет наверное", mem) is None and filter_pick("а передние колодки?", mem) is None
+    # «Не знаю», «хз», «а что это?» — не сужаем, подсказываем, как узнать, и передаём менеджеру
+    from app.podbor.engine import filter_unsure
+    for t in ("не знаю", "хз", "без понятия", "а что это?", "как проверить", "да нет"):
+        assert filter_unsure(t, mem) == 0, t
+    assert filter_unsure("а передние колодки?", mem) is None and filter_unsure("нет", mem) is None
+    dunno = run("хз если честно", e, memory=first["memory"])
+    d = dunno["positions"][0]
+    assert len(d["variants"]) == 2 and "значок ABS" in d["note"] and dunno["handoff"]
+
+
 def test_numbers_cleaned_before_abcp_like_app():
     """Номер в ABCP — как в приложении (cleanNumber): буквы и цифры, заглавными; ведущие нули остаются."""
     import httpx
