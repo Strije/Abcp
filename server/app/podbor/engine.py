@@ -511,7 +511,7 @@ class Engine:
     def _weak(self, p: dict, tree: TreeIndex | None = None) -> bool:
         """Правила нашли частично: оценка низкая, главное слово потеряно («Кольцо» уточним отдельно) или в названии группы и
         вариантов нет части слов клиента («тормозной бачок» → бачок омывателя): такое проверяет модель, а не показываем сразу."""
-        if p.get("kind", "") not in ("", "part") or p.get("via_units"):
+        if p.get("kind", "") not in ("", "part") or p.get("via_units") or p.get("settled"):
             return False   # узел полного каталога выбран по структуре каталога: слабая оценка слов — не повод звать арбитра
         if p["status"] == "not_found" and not p.get("groups"):
             # Правила ничего не нашли («крышка омывателя фар», «кожух замка капота»): модель переведёт в название каталога
@@ -586,7 +586,7 @@ class Engine:
         # Детали узла по позициям схемы (Audi: все рычаги) — структура каталога надёжнее мнения модели: не трогаем
         idx = [i for i, p in enumerate(positions)
                if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop) and not p.get("parts")
-               and not p.get("via_units")]
+               and not p.get("via_units") and not p.get("settled")]
         vecs = await emb.embed([positions[i]["query"] for i in idx]) if idx else None
         if not vecs:
             return set()
@@ -818,6 +818,21 @@ class Engine:
             if pos["status"] in ("found", "choose"):
                 return pos | {"query": full[:1].upper() + full[1:], "adj_default": word.lower(),
                               "note": f"Поняли «{word.lower()}» как «{full}»; если нужна другая деталь — напишите."}
+        qs = T.stems(T.expand(query), self.stop)
+        if _SUB_Q.search(query) and any(T.same(T.head(qs) or "", b) for b in _BUSH + _SUB_MOUNT[:2]):
+            # «Сайлентблок подрамника»: быстрые группы дают сайлентблок рычага — ищем в узлах подрамника. Там нет, и группа
+            # подрамника («Вспомогательная рама») ничего не дала — честно менеджеру, а не сайлентблок рычага
+            pos = await self._subframe(v, query, want)
+            if pos is None:
+                pos = await self._position(v, tree, query, want, kind)
+                named = " ".join([g["name"] for g in pos.get("groups", [])] +
+                                 [f"{x.get('unit', '')} {x.get('name', '')}" for x in pos.get("variants", [])])
+                if not _SUB_UNIT.search(named) and not re.search(r"подрамн|вспомогательн", named, re.I):
+                    # settled: решено по устройству каталога — арбитр и эмбеддинги снова привели бы к сайлентблоку рычага
+                    pos = dict(pos, status="not_found", variants=[], groups=[], question="", note="", dropped="подрамник",
+                               settled=True)
+            await self._confirm_replacements(v, pos)
+            return pos
         pos = await self._position(v, tree, query, want, kind)
         if pos["status"] == "not_found" and want.axis == "rear" and _DISC.search(query):
             # «Диски задние» на машине с барабанами: дисков в каталоге нет — даём барабаны и говорим об этом
@@ -836,7 +851,6 @@ class Engine:
             # Быстрые группы Laximo (около 680) — урезанный список: подрамника, поперечины и многого другого там нет.
             # Ищем по узлам полного каталога машины: по словам, а не нашлось — узлы выбирает модель
             pos = await self._by_units(v, query, want, kind) or pos
-        qs = T.stems(T.expand(query), self.stop)
         if pos["status"] == "not_found" and pos["kind"] in ("", "part") and not pos.get("via_units") \
                 and not self.outside(qs) and not self._vague(qs, query):
             # Не нашли ни группами, ни словами по узлам (бывает и с пояснением «шланг уточним отдельно»): узлы выбирает модель
@@ -892,6 +906,61 @@ class Engine:
             groups = [{"id": g.id, "name": g.name, "path": g.path, "score": round(sc, 2)} for g, sc in ranked]
             return await self._pos_from_details(v, query, want, list(pool.values()), groups)
         except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
+            return None
+
+    async def _subframe(self, v: Vehicle, query: str, want: T.Side) -> dict | None:
+        """«Сайлентблок (заднего) подрамника»: узлы подрамника машины под любым его названием → сайлентблоки и опоры в них,
+        кроме чужих (рычага, стабилизатора, КП). Своих нет (Kia, Mitsubishi, Mazda: подрамник продаётся в сборе) —
+        сайлентблоки из кроссов номера самого подрамника. Узла подрамника у машины нет — None."""
+        try:
+            ut = await self.catalog.unit_tree(v)
+            if ut is None:
+                return None
+            units = [g for g in ut.groups.values() if _SUB_UNIT.search(g.name) and not _SUB_NOT.search(g.name)]
+            mounts: dict[str, tuple[Detail, str]] = {}
+            frames: dict[str, tuple[Detail, str]] = {}
+            for g in units[:6]:
+                for d in await self.catalog.details(v, g.id, True):
+                    name = _ru_words(d.name)
+                    head = T.head(T.stems(name, self.stop)) or ""
+                    axis = _sub_axis(name) or _sub_axis(g.name)
+                    if any(T.same(head, p) for p in _SUB_PART):
+                        frames.setdefault(_key(d.oem), (d, axis))
+                    elif (is_bushing(name) or any(T.same(head, m) for m in _SUB_MOUNT)) and not _SUB_OTHER.search(name) \
+                            and not (_SUB_OTHER.search(g.name) and not is_bushing(name)):
+                        mounts.setdefault(_key(d.oem), (d, axis))
+            if want.axis:
+                # «Заднего подрамника» — только то, что каталог прямо называет задним: «Подрамник» без стороны у Audi и
+                # «Подрамник передней подвески» у Kia — передние, клиенту нужен другой
+                mounts = {k: x for k, x in mounts.items() if x[1] == want.axis}
+                frames = {k: x for k, x in frames.items() if x[1] == want.axis}
+            names = ", ".join(dict.fromkeys(g.name for g in units[:2]))
+            groups = [{"id": g.id, "name": g.name, "path": g.path, "score": UNIT_SCORE} for g in units[:2]]
+            pos = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "found", "groups": groups,
+                   "variants": [], "question": "", "kind": "part", "via_units": True,
+                   "note": f"Нашли в полном каталоге машины (узел «{names}»), в быстрых группах подрамника нет."}
+            if 0 < len(mounts) <= 8:
+                cands = [Candidate(d, 0.8, 0.8, True, T.Side(ax, ""), "каталог" if ax else "") for d, ax in mounts.values()]
+                kept = await self._check_sides(v, cands, T.Side("", want.lr))
+                if kept:
+                    pos["variants"] = [self._variant(c, v, alt=i > 0) for i, c in enumerate(kept)]
+            if not pos["variants"]:
+                host = ([T.stem("подрамник"), T.stem("поперечина"), T.stem("балка"), T.stem("траверса")],
+                        ("подрамник", "подрамника", "подрамник"))
+                for d, _ in list(frames.values())[:3]:
+                    found = await self._bushings_by_host(v, [d], T.Side(), host)
+                    if found:
+                        c, note = found
+                        pos["variants"] = [self._variant(c, v, alt=False)]
+                        pos["variants"][0]["via"] = c.d.oem
+                        pos["note"] = note
+                        break
+            if not pos["variants"]:
+                return None
+            for var in pos["variants"]:
+                R.annotate(var, [query])
+            return pos
+        except Exception:   # noqa: BLE001 — запасной путь: ошибка = не нашли, передаём менеджеру
             return None
 
     async def _pos_from_details(self, v: Vehicle, query: str, want: T.Side, details: list[Detail],
@@ -1738,6 +1807,30 @@ _HOSTS = [([T.stem("рычаг")], ("рычаг", "рычага", "рычаг"))
           ([T.stem("цапфа"), T.stem("кулак")], ("цапфу", "цапфы", "цапфа задняя")),
           ([T.stem("тяга")], ("тягу", "тяги", "тяга")),
           ([T.stem("балка")], ("балку", "балки", "балка"))]
+
+# Сайлентблок подрамника (Вордстат: 1,2% запросов о сайлентблоках). В быстрых группах подрамника нет — находился сайлентблок
+# РЫЧАГА. Подрамник в узлах полного каталога зовут по-разному: «Подрамник» (VAG, Kia), «SUSPENSION CROSSMEMBER» и
+# «поперечина передней подвески» (Toyota), «ТРАВЕРСА» (Mercedes), «CROSSMEMBER & STABILIZER» (Mazda)
+_SUB_Q = re.compile(r"подрамн|траверс", re.I)
+_SUB_UNIT = re.compile(r"подрамн|вспомогательн\w*\s+рам|cross\s*-?member|sub\s*-?frame|траверс|"
+                       r"поперечин\w*\s+(?:передн\w*\s+|задн\w*\s+)?(?:подвеск|мост)", re.I)
+_SUB_NOT = re.compile(r"багажник|панел|сиден|щит|колонк|педал|звукоизол|буксир|люк|стекл|двигател\w*\s+в\s+сборе", re.I)
+# Сайлентблок чужой детали в том же узле: рычага, стабилизатора, КП («Опора» в «Детали крепления КП Подрамник» у Audi)
+_SUB_OTHER = re.compile(r"рычаг|тяг|стабилиз|амортиз|штанг|рессор|кузов|радиатор|глушит|выхлоп|(?<![а-яё])кп(?![а-яё])|"
+                        r"коробк|двигател|engine|transm|\barm\b|link|stabili|shock|body", re.I)
+_SUB_MOUNT = [T.stem(w) for w in ("опора", "подушка")] + ["bush", "mount", "insulator"]
+_SUB_PART = [T.stem(w) for w in ("подрамник", "поперечина", "балка", "траверса")] + ["crossmember", "subframe"]
+
+
+def _sub_axis(text: str) -> str:
+    """Чей это подрамник: «Опора элемента задней подвески, передняя правая» — задний (сторона самой опоры не в счёт),
+    «Задний сайлентблок поперечины передней подвески» — передний, «REAR SUBFRAME» — задний."""
+    for pat in (r"(передн|задн)\w*\.?\s+(?:подвеск|мост)", r"(передн|задн)\w*\.?\s*(?:подрамн|поперечин|травер)",
+                r"(front|rear)\s*-?\s*(?:sub\s*-?frame|susp)", r"(?:cross\s*-?member|sub\s*-?frame)\s*-?\s*(front|rear)"):
+        m = re.search(pat, text or "", re.I)
+        if m:
+            return "front" if m.group(1).lower() in ("передн", "front") else "rear"
+    return ""
 
 
 # Деталь, которую производитель продаёт только в узле: (слова клиента, слова детали в описании, узел,

@@ -2080,6 +2080,49 @@ def test_part_outside_quick_groups_is_found_in_full_catalog_by_supplier_names():
     assert "Segmatic" not in analogs and {"NTY", "Sat"} <= set(analogs)       # колодки-кросс отсечены словом клиента
 
 
+class FakeSubframeCross(FakeUnits):
+    """Kia, Mazda: подрамник продаётся в сборе, сайлентблоки к нему поставщики привязывают к номеру подрамника."""
+
+    async def offers(self, number, brand):
+        if number == "48099-00001":
+            return (await super().offers(number, brand)) + [
+                offer("Febest", "TAB-SF1", 1200, 48, "Сайлентблок подрамника передний", 5),
+                offer("Masuma", "SF-77", 900, 72, "Сайлентблок подрамника", 5)]
+        return await super().offers(number, brand)
+
+
+class FakeSubframeOwn(FakeUnits):
+    """Toyota: в узле поперечины свои сайлентблоки и опоры — и чужие (рычага, стабилизатора), их брать нельзя."""
+
+    def answer(self, method, params):
+        if method == "listDetailByUnit":
+            return [{"name": "Сайлентблок переднего нижнего рычага", "codeOnImage": "1", "oem": "48655-00001"},
+                    {"name": "Втулка стабилизатора", "codeOnImage": "2", "oem": "48815-00001"},
+                    {"name": "Задний сайлентблок поперечины передней подвески", "codeOnImage": "3", "oem": "52215-00001"},
+                    {"name": "Опора элемента задней подвески, передняя правая", "codeOnImage": "4", "oem": "52271-00001"},
+                    {"name": "БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ", "codeOnImage": "5", "oem": "48099-00001"}]
+        return super().answer(method, params)
+
+
+def test_subframe_bushing_from_subframe_unit_not_from_lever():
+    """«Сайлентблок подрамника»: быстрые группы давали сайлентблок рычага. Берём из узла подрамника — свои сайлентблоки и
+    опоры (без чужих), а если их нет — из кроссов номера подрамника. Сторону клиента — только названную каталогом."""
+    pos = run("XW7BF4FK30S064389 сайлентблок подрамника", engine=Engine(FakeSubframeOwn(), None, set()))["positions"][0]
+    assert pos["status"] in ("found", "choose") and pos.get("via_units")
+    assert sorted(v["oem"] for v in pos["variants"]) == ["52215-00001", "52271-00001"]     # не рычага и не стабилизатора
+    rear = run("XW7BF4FK30S064389 опора заднего подрамника", engine=Engine(FakeSubframeOwn(), None, set()))["positions"][0]
+    assert [v["oem"] for v in rear["variants"]] == ["52271-00001"]   # «Задний сайлентблок поперечины ПЕРЕДНЕЙ подвески» — передний
+    cross = run("XW7BF4FK30S064389 сайлентблок подрамника", engine=Engine(FakeSubframeCross(), None, set()))["positions"][0]
+    assert cross["status"] == "found" and cross["variants"][0]["name"] == "Сайлентблок подрамника"
+    assert "только подрамник в сборе" in cross["note"]
+    assert {a["brand"] for a in cross["variants"][0]["offers"]["analogs"]} <= {"Febest", "Masuma"}
+    # Заднего подрамника у машины в каталоге нет (узел — передний): честно менеджеру, без сайлентблока рычага
+    none = run("XW7BF4FK30S064389 сайлентблоки заднего подрамника", engine=Engine(FakeSubframeCross(), None, set()))
+    p = none["positions"][0]
+    assert p["status"] == "not_found" and p.get("dropped") and not p["variants"]
+    assert "передали менеджеру" in none["text"]
+
+
 def test_bushing_of_a_unit_is_not_guessed_and_known_parts_never_use_units():
     eng = Engine(FakeUnits(), None, set())
     res = run("XW7BF4FK30S064389 сайлентблок подрамника", engine=eng)
