@@ -252,3 +252,34 @@ async def pick_group(llm: Any, query: str, cands: list[str]) -> str:
     except Exception:  # noqa: BLE001
         return ""
     return parse_pick(txt, cands)
+
+UNITS_SYSTEM = """Ты помогаешь магазину автозапчастей найти деталь в каталоге конкретной машины.
+Дана фраза клиента и пронумерованный список узлов (разделов схем) полного каталога его машины. Узел — это схема, на которой
+нарисовано несколько деталей; нужная деталь часто лежит в узле с другим названием: шланг вакуумного насоса — в узле вакуумного
+насоса или усилителя тормозов; прокладка поддона АКПП — в узле масляного поддона коробки; датчик давления масла — в узле
+масляного насоса или системы смазки. Названия узлов бывают по-английски.
+Выбери до трёх узлов, на схемах которых эта деталь скорее всего есть, самый вероятный первым. Узлы — только из списка.
+Если во фразе нет конкретной детали или подходящих узлов нет — пустой список.
+Ответ строго JSON: {"units": [номера]}"""
+
+
+async def pick_units(llm: Any, query: str, names: list[str]) -> list[int]:
+    """Узлы полного каталога для детали, которую быстрые группы не нашли: номера в списке names (с нуля). Модель знает
+    устройство машины, но выбирает только из узлов этой машины — выдумать узел она не может. Ошибка — пусто."""
+    if not llm or not getattr(llm, "enabled", False) or not names:
+        return []
+    user = f"Фраза: «{mask(query)[:200]}»\nУзлы:\n" + "\n".join(f"{k}. {n}" for k, n in enumerate(names, 1))
+    try:
+        txt = await llm.chat(UNITS_SYSTEM, user, max_tokens=120)
+    except Exception:  # noqa: BLE001
+        return []
+    m = re.search(r"\{.*?\}", txt or "", re.S)
+    try:
+        got = json.loads(m.group(0)).get("units", []) if m else []
+    except ValueError:
+        got = []
+    out = []
+    for x in got if isinstance(got, list) else []:
+        if str(x).isdigit() and 1 <= int(x) <= len(names) and int(x) - 1 not in out:
+            out.append(int(x) - 1)
+    return out[:3]

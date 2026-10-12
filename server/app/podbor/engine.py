@@ -813,11 +813,11 @@ class Engine:
         if pos["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (pos.get("note") or "")                 and pos["kind"] in ("", "part"):
             # Нашлось только уточнение («вакуумный насос»), а главного слова («шланг») там нет: деталь ищем внутри узла по
             # уточнению — «Трубка вакуумного насоса», а не сам насос (12.10, L200)
-            pos = await self._by_unit_part(v, query, want, kind) or pos
+            pos = await self._by_unit_part(v, query, want, kind) or await self._by_units_llm(v, query, want, kind) or pos
         if pos["status"] == "not_found" and not pos["groups"] and not pos["note"] and pos["kind"] in ("", "part"):
             # Быстрые группы Laximo (около 680) — урезанный список: подрамника, поперечины и многого другого там нет.
-            # Ищем по узлам полного каталога машины
-            pos = await self._by_units(v, query, want, kind) or pos
+            # Ищем по узлам полного каталога машины: по словам, а не нашлось — узлы выбирает модель
+            pos = await self._by_units(v, query, want, kind) or await self._by_units_llm(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
         await self._confirm_replacements(v, out)
         return out
@@ -866,17 +866,68 @@ class Engine:
                         pool.setdefault(_key(d.oem), d)
             if not pool or len(pool) > 4:
                 return None
-            cands = [Candidate(d, 0.8, 0.8, True, want, "каталог") for d in pool.values()]
-            kept = await self._check_sides(v, cands, want)
-            if not kept:
-                return None
             groups = [{"id": g.id, "name": g.name, "path": g.path, "score": round(sc, 2)} for g, sc in ranked]
-            pos = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "found", "groups": groups,
-                   "variants": [self._variant(c, v, alt=i > 0) for i, c in enumerate(kept)], "question": "", "kind": "part",
-                   "via_units": True,
-                   "note": f"Нашли в полном каталоге машины (узел «{ranked[0][0].name}»), в быстрых группах такой детали нет."}
-            for var in pos["variants"]:
-                R.annotate(var, [query])
+            return await self._pos_from_details(v, query, want, list(pool.values()), groups)
+        except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
+            return None
+
+    async def _pos_from_details(self, v: Vehicle, query: str, want: T.Side, details: list[Detail],
+                                groups: list[dict]) -> dict | None:
+        """Позиция из деталей, найденных в узлах полного каталога: цены, стороны и варианты — тем же кодом."""
+        cands = [Candidate(d, 0.8, 0.8, True, want, "каталог") for d in details]
+        kept = await self._check_sides(v, cands, want)
+        if not kept:
+            return None
+        units = ", ".join(dict.fromkeys(g["name"] for g in groups[:2]))
+        pos = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "found", "groups": groups,
+               "variants": [self._variant(c, v, alt=i > 0) for i, c in enumerate(kept)], "question": "", "kind": "part",
+               "via_units": True,
+               "note": f"Нашли в полном каталоге машины (узел «{units}»), в быстрых группах такой детали нет."}
+        for var in pos["variants"]:
+            R.annotate(var, [query])
+        return pos
+
+    async def _by_units_llm(self, v: Vehicle, query: str, want: T.Side, kind: str) -> dict | None:
+        """Ни быстрые группы, ни слова не нашли узел. Модель по знанию устройства машины выбирает до трёх узлов из
+        списка ЭТОЙ машины (выдумать узел не может), деталь в них ищем по главному слову, его родне и по-английски
+        (HOSE = шланг), уточнение — в названии детали или узла. Деталей больше шести — это уже не ответ, а гадание."""
+        if not self.llm or not getattr(self.llm, "enabled", False):
+            return None
+        try:
+            ut = await self.catalog.unit_tree(v)
+            q = T.stems(T.expand(query), self.stop)
+            head = T.head(q) or ""
+            if ut is None or not head or any(T.same(head, b) for b in _BUSH):
+                return None
+            ids = self.catalog._unit_ids.get(self.catalog.tree_key(v) + "-u") or {}
+            names = list(dict.fromkeys(u["name"] for u in ids.values()))
+            if sum(len(n) for n in names) > 24000:   # BMW: больше тысячи узлов — сначала те, где есть слово фразы
+                names = sorted(names, key=lambda n: -sum(1 for w in q for s in T.stems(_ru_words(n), self.stop)
+                                                          if T.same(w, s)))[:600]
+            picked = await U.pick_units(self.llm, query, names)
+            chosen = {names[i] for i in picked}
+            gids = [gid for gid, u in ids.items() if u["name"] in chosen][:6]
+            if not gids:
+                return None
+            aliases = [head] + _PART_ALIASES.get(head, []) + _HOSE_KIN.get(head, [])
+            qual = [w for w in q if w != head and not T.side_of_word(w) and not _word_in(w, _GENERIC_HEADS)]
+            pool: dict[str, Detail] = {}
+            for gid in gids:
+                for d in await self.catalog.details(v, gid, True):
+                    st = T.stems(_ru_words(d.name), self.stop)
+                    if not any(T.same(a, x) for a in aliases for x in st):
+                        continue
+                    where = st + T.stems(_ru_words(d.unit), self.stop)
+                    if qual and not any(T.same(w, x) for w in qual for x in where):
+                        continue
+                    pool.setdefault(_key(d.oem), d)
+            if not pool or len(pool) > 6:
+                return None
+            groups = [{"id": gid, "name": ids[gid]["name"], "path": ids[gid].get("cat", ""), "score": UNIT_SCORE}
+                      for gid in gids if any(d.group_id == gid for d in pool.values())]
+            pos = await self._pos_from_details(v, query, want, list(pool.values()), groups)
+            if pos:
+                pos["via_llm_units"] = True
             return pos
         except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
             return None
@@ -1625,6 +1676,21 @@ def _main(q: list[str]) -> str | None:
 _PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
                  T.stem("пыльник"): [T.stem("чехол"), "boot"],
                  T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
+_EN_PART = {"hose": "шланг", "pipe": "трубка", "tube": "трубка", "gasket": "прокладка", "seal": "уплотнитель",
+            "sensor": "датчик", "bolt": "болт", "nut": "гайка", "bracket": "кронштейн", "clamp": "хомут", "pump": "насос",
+            "filter": "фильтр", "valve": "клапан", "cover": "крышка", "bearing": "подшипник", "spring": "пружина",
+            "switch": "выключатель", "relay": "реле", "bushing": "втулка", "belt": "ремень", "boot": "пыльник",
+            "lamp": "фонарь", "mirror": "зеркало", "bumper": "бампер", "vacuum": "вакуумный", "brake": "тормозной",
+            "booster": "усилитель", "oil": "масляный", "fuel": "топливный", "water": "водяной", "air": "воздушный",
+            "radiator": "радиатор", "tank": "бачок", "cap": "крышка", "washer": "шайба", "screw": "винт", "cable": "трос"}
+
+
+def _ru_words(name: str) -> str:
+    """«HOSE,BRAKE BOOSTER VACUUM» → «шланг,тормозной усилитель вакуумный»: в каталогах Mitsubishi и др. пятая часть
+    названий по-английски, а слова клиента русские."""
+    return re.sub(r"[A-Za-z]+", lambda m: _EN_PART.get(m.group(0).lower(), m.group(0)), name or "")
+
+
 _HOSE_KIN = {T.stem("шланг"): [T.stem("трубка"), T.stem("патрубок")], T.stem("трубка"): [T.stem("шланг"), T.stem("патрубок")],
              T.stem("патрубок"): [T.stem("шланг"), T.stem("трубка")]}   # так же называют одну деталь по-разному
 _BUSH = [T.stem("сайлентблок"), T.stem("втулка"), "bush", T.stem("сайлент")]   # VW: «Сайлент-блок»
