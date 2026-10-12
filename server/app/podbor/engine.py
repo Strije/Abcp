@@ -809,6 +809,10 @@ class Engine:
                                "вместо дисков стоят барабаны (колодки к ним — барабанные).")
                 await self._confirm_replacements(v, alt)
                 return alt
+        if pos["status"] in ("found", "choose") and "уточним по каталогу отдельно" in (pos.get("note") or "")                 and pos["kind"] in ("", "part"):
+            # Нашлось только уточнение («вакуумный насос»), а главного слова («шланг») там нет: деталь ищем внутри узла по
+            # уточнению — «Трубка вакуумного насоса», а не сам насос (12.10, L200)
+            pos = await self._by_unit_part(v, query, want, kind) or pos
         if pos["status"] == "not_found" and not pos["groups"] and not pos["note"] and pos["kind"] in ("", "part"):
             # Быстрые группы Laximo (около 680) — урезанный список: подрамника, поперечины и многого другого там нет.
             # Ищем по узлам полного каталога машины
