@@ -3,8 +3,9 @@
 
     cd server && python lab/rules_check_local.py <ветка>        # итог — .podbor-cache/rules-<ветка>/REPORT.txt и на экран
 
-Нужно в server/.podbor-cache: trees/ и fleet_ready.json (деревья парка), etalon/ (labels.tsv, label_sample.jsonl) —
-забираются с сервера лаборатории; клиентские сценарии — app/podbor/scenarios_local.json (не в git).
+Нужно в server/.podbor-cache: trees/ и fleet_ready.json (деревья парка), etalon/ (labels.tsv, label_sample.jsonl),
+brand_aliases.json (справочник брендов ABCP, /var/lib/avtodrug-api на сервере) — забираются с сервера лаборатории;
+клиентские сценарии — app/podbor/scenarios_local.json (не в git).
 Копия main — git worktree рядом с репозиторием (../../abcp-main-wt), кэш в ней — ссылка на этот.
 """
 import os
@@ -39,7 +40,9 @@ def tree_for(ref: str, path: Path) -> Path:
 
 
 def start(side: str, code: Path, out: Path) -> list[subprocess.Popen]:
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # STATE_DIR — кэш лаборатории: там справочник брендов ABCP (brand_aliases.json с сервера; без него «свечи ngk» теряют
+    # фирму и сценарий проваливается и на main, и на ветке)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", STATE_DIR=str(CACHE))
     env.pop("TOKEN_SECRET", None)   # ссылки на схемы — адресами Laximo, ничего не пишем
     files = [str(code / "app" / "data" / "podbor_scenarios.json")] + ([str(LOCAL)] if LOCAL.exists() else [])
     gold = subprocess.Popen([sys.executable, str(EVAL), "run", str(CACHE / "etalon"), str(out / f"gold_{side}.json")],
