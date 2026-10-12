@@ -196,7 +196,12 @@ class Bitrix:
             "ICON": {"DATA_IMAGE": ICON_SVG, "COLOR": "#1C3A6E", "SIZE": "100%", "POSITION": "center"},
             "PLACEMENT_HANDLER": f"{self.public_url}/v1/bitrix/placement",
         })
-        await self.call("event.bind", {"event": "OnImConnectorMessageAdd", "handler": f"{self.public_url}/v1/bitrix/event"})
+        try:
+            await self.call("event.bind", {"event": "OnImConnectorMessageAdd", "handler": f"{self.public_url}/v1/bitrix/event"})
+        except RuntimeError as e:
+            # Переустановка (12.10): «Handler already binded» — подписка уже есть, это не провал установки
+            if "already bind" not in str(e).lower():
+                raise
         try:
             await self.call("placement.bind", {
                 "PLACEMENT": "IM_TEXTAREA", "HANDLER": f"{self.public_url}/v1/bitrix/hint", "TITLE": HINT_TITLE,

@@ -483,7 +483,7 @@ def test_brand_warranty(client):
 def test_bitrix_chat_flow(tmp_path):
     from dataclasses import replace
     import json as J
-    calls, pushes = [], []
+    calls, pushes, bound = [], [], []
 
     def fake(request: httpx.Request) -> httpx.Response:
         host, path = request.url.host, request.url.path
@@ -493,6 +493,8 @@ def test_bitrix_chat_flow(tmp_path):
             calls.append((method, body))
             if method == "app.info":
                 return httpx.Response(200, json={"result": {"CODE": "local.app1"}})
+            if method in ("event.bind", "placement.bind") and bound:
+                return httpx.Response(400, json={"error": "ERROR_CORE", "error_description": "Unable to set event handler: Handler already binded"})
             return httpx.Response(200, json={"result": True})
         if host == "push.test":
             pushes.append(J.loads(request.content))
@@ -513,6 +515,12 @@ def test_bitrix_chat_flow(tmp_path):
             "auth[expires_in]": "3600", "auth[client_endpoint]": "https://bitrix.freno.ru/rest/", "auth[application_token]": "APPTOK"})
         assert r.status_code == 200, r.text
         assert [m for m, _ in calls][:3] == ["app.info", "imconnector.register", "event.bind"]
+        # Переустановка: Битрикс отвечает «Handler already binded» — установка всё равно проходит (12.10)
+        bound.append(True)
+        r = c.post("/v1/bitrix/install", data={
+            "event": "ONAPPINSTALL", "auth[domain]": "bitrix.freno.ru", "auth[access_token]": "AT2", "auth[refresh_token]": "RT",
+            "auth[expires_in]": "3600", "auth[client_endpoint]": "https://bitrix.freno.ru/rest/", "auth[application_token]": "APPTOK"})
+        assert r.status_code == 200, r.text
         r = c.post("/v1/bitrix/placement", data={"DOMAIN": "bitrix.freno.ru", "PLACEMENT_OPTIONS": '{"LINE":"7","ACTIVE_STATUS":0}'})
         assert r.status_code == 200 and any(m == "imconnector.activate" and b["LINE"] == 7 for m, b in calls)
         assert c.get("/v1/chat/status").json() == {"enabled": True}
