@@ -385,6 +385,24 @@ class Engine:
             res["positions"] = [dict(p, variants=vs, status="found", question="", schemes=[],
                                      note=f"Поз. {code} на схеме узла.")]
             return self._done(res, "ok", t0, mem, [i])
+        chosen = filter_pick(text, positions)
+        if chosen:
+            # «Нет», «без АБС» на вопрос комплектации — варианты, чьё примечание каталога это и говорит (новых запросов нет)
+            i, val = chosen
+            p, q = positions[i], positions[i]["filter_q"]
+            vs = [x for x in p.get("variants", []) if _spec_says(x.get("specs", ""), q["name"], val)]
+            if vs:
+                res["positions"] = [dict(p, variants=vs, status="found", question="", filter_q={}, schemes=[],
+                                         note=f"По каталогу: {q['name']} — {val}.")]
+                return self._done(res, "ok", t0, mem, [i])
+        unsure = filter_unsure(text, positions)
+        if unsure is not None:
+            # «Не знаю», «хз», «а что это?»: выбор не сужаем — как проверить самому, и менеджеру на уточнение
+            p = positions[unsure]
+            name = (p.get("filter_q") or {}).get("name", "")
+            res["positions"] = [dict(p, schemes=[], note=filter_help(name))]
+            res["handoff"] = [f"{p['query']} — клиент не знает «{name}», номер уточнить по машине"]
+            return self._done(res, "ok", t0, mem, [unsure])
         offered = D.asked_part(mem.get("asked", "")) if D.YES.fullmatch(text.strip()) else ""
         if offered and self._partish(offered, tree):
             # «Да» на «Топливный фильтр нужен?» — робот сам предложил деталь, её и ищем (с моделью и без)
@@ -1322,6 +1340,11 @@ class Engine:
             except Exception:
                 second = None   # подсказка: из-за неё подбор не падает
         pos["status"], pos["question"] = verdict(list(kinds), want, query)
+        if not pos["question"] or pos["question"].startswith("В каталоге несколько вариантов"):
+            try:
+                await self._filter_ask(v, pos, kept)   # Renault: «АБС — есть или нет?» — вопрос самого каталога
+            except Exception:   # noqa: BLE001 — подсказка: из-за неё подбор не падает
+                pass
         try:
             await self._explain(v, pos, kept)   # «почему два номера и как выбрать» — из фактов
         except Exception:
@@ -1539,6 +1562,29 @@ class Engine:
         if not own or len(own) > 2 or (len(own) == 2 and {x.lr for x in sides} != {"left", "right"}):
             return []
         return [Candidate(d, 1.0, 1.0, True, x, "каталог" if x.axis else "") for d, x in zip(own.values(), sides)]
+
+    async def _filter_ask(self, v: Vehicle, pos: dict, kept: list[Candidate]) -> None:
+        """Номера одной детали различает комплектация, которую VIN не расшифровывает (Renault, Mazda, BMW): каталог сам
+        даёт вопрос (getFilterByDetail). Спрашиваем ровно его, а ответ клиента сузит варианты по примечаниям («АБС = Нет»)
+        без новых запросов (Engine._follow → filter_pick)."""
+        # Все номера позиции, и «альтернативы» тоже: у Renault оба кулака — один вид детали, второй шёл альтернативой,
+        # и клиент видел два номера без подсказки, какой его
+        main = {x["oem"] for x in pos["variants"]}
+        if len(main) < 2:
+            return
+        c = next((c for c in kept if c.d.filter and c.d.oem in main), None)
+        qs = await self.catalog.filter_question(v, c.d) if c else None
+        if not qs:
+            return
+        q = qs[0]
+        # Вопрос годится, только если примечания вариантов и правда различаются по нему: «АБС = Да» / «АБС = Нет»
+        said = {x["oem"]: [val for val in q["values"] if _spec_says(x.get("specs", ""), q["name"], val)]
+                for x in pos["variants"] if x["oem"] in main}
+        if len({tuple(s) for s in said.values()}) < 2:
+            return
+        pos["filter_q"] = q
+        pos["status"] = "choose"
+        pos["question"] = f"Номер зависит от комплектации — уточните: {q['name']} — {' или '.join(q['values'])}?"
 
     async def _explain(self, v: Vehicle, pos: dict, kept: list[Candidate]):
         """Несколько номеров одной детали в одном узле (Lacetti: колодки 96405131 и 96800089): чем они отличаются
@@ -1761,6 +1807,7 @@ class Engine:
                        "image": image_url(d.image) if d.image else "", "code": d.code_on_image,
                        "view": SC.link(image_url(d.image), absolute=False) if d.image else ""},   # через наш сервер
             "offers": self._offers_of(c, v, name_hint),
+            "specs": d.specs,   # все примечания каталога: «АБС = Нет» — по ним ответ на вопрос комплектации сужает выбор
             "facts": desc_facts(c.rows or []),
         }
 
@@ -2269,6 +2316,71 @@ def wants_all(query: str, stop: frozenset[str]) -> bool:
 # (поштучно у VAG, комплектом — у других фирм). «Комплект сцепления/ГРМ/прокладок» — настоящие группы каталога, не трогаем
 _KIT_OF = re.compile(r"^\s*(?:комплект\w*|набор\w*)\s+((?:[а-яё]+\s+){0,2}(?:рычаг|сайлентблок|сайлент|амортизатор|стоек|стойк|"
                      r"пружин|опор|втул|тяг|наконечник|свеч|катуш|форсун|шаров)[а-яё]*.*)$", re.I)
+
+
+def _spec_says(specs: str, name: str, value: str) -> bool:
+    """Примечание каталога говорит «<признак> = <значение>»: «Код оборудования = 11-,12-;АБС = Нет»."""
+    return bool(re.search(rf"(?<![а-яёa-z]){re.escape(name)}\s*=\s*{re.escape(value)}(?![а-яёa-z])", specs or "", re.I))
+
+
+_YES = re.compile(r"^(?:да|ага|есть|имеется|стоит|конечно|с\s+\w+)(?![а-яё])", re.I)
+_NO = re.compile(r"(?<![а-яё])(?:нет|без|отсутствует)(?![а-яё])", re.I)
+# Клиент не знает ответа на вопрос комплектации: не сужаем — подсказываем, как узнать, и передаём менеджеру
+_UNSURE = re.compile(r"не\s*зна|не\s*помн|без\s+понятия|понятия\s+не|(?<![а-яё])хз(?![а-яё])|х\.\s?з|не\s+уверен|"
+                     r"не\s+в\s+курсе|не\s+разбира|затрудня|что\s+это|что\s+такое|как\s+(?:узнать|проверить|понять|посмотреть)|"
+                     r"где\s+(?:посмотреть|глянуть)|откуда\s+(?:мне|я)|наверн|может\s+быть|вроде", re.I)
+# Как клиенту узнать признак самому — для частых вопросов каталога; прочие — по номеру со снятой детали
+_FILTER_HELP = [(re.compile(r"abs|абс", re.I), "при включении зажигания на приборной панели загорается значок ABS — "
+                                               "значит, АБС есть"),
+                (re.compile(r"кпп|коробк|transm", re.I), "автомат — нет педали сцепления, механика — есть"),
+                (re.compile(r"привод|4wd|awd", re.I), "полный привод — обычно надпись 4WD/4x4/AWD на кузове или кнопка/"
+                                                      "рычаг включения полного привода"),
+                (re.compile(r"кондиц|a/c", re.I), "есть кнопка A/C или снежинка на панели — кондиционер есть")]
+
+
+def filter_unsure(text: str, positions: list[dict]) -> int | None:
+    """Позиция с вопросом комплектации, на который клиент ответил «не знаю», «хз», «а что это?», «да нет»."""
+    t = (text or "").strip().lower()
+    if not t or len(t) > 120:
+        return None
+    for i, p in enumerate(positions):
+        if (p.get("filter_q") or {}) and (_UNSURE.search(t) or (_YES.search(t) and _NO.search(t))):
+            return i
+    return None
+
+
+def filter_help(name: str) -> str:
+    how = next((h for rx, h in _FILTER_HELP if rx.search(name)), "")
+    return (f"Ничего страшного. Как проверить: {how}. " if how else "Ничего страшного. ") + \
+        "Можно прислать фото снятой детали с номером — сверим. Или менеджер уточнит по вашей машине и напишет."
+
+
+def filter_pick(text: str, positions: list[dict]) -> tuple[int, str] | None:
+    """Ответ на вопрос комплектации из памяти («АБС — Да или Нет?»): «нет», «без абс», «есть», «да», или само значение
+    («11-»). Только один однозначный ответ и только у позиции, где этот вопрос задан — иначе None (разберут правила)."""
+    t = (text or "").strip().lower().strip(" .!)")
+    if not t or len(t) > 60 or _UNSURE.search(t):
+        return None   # «наверное нет», «да нет», «не знаю» — не ответ (filter_unsure)
+    for i, p in enumerate(positions):
+        q = p.get("filter_q") or {}
+        if not q:
+            continue
+        hits = []
+        for val in q.get("values") or []:
+            vl = val.lower()
+            if vl in ("да", "yes"):
+                ok = bool(_YES.search(t)) and not _NO.search(t)
+            elif vl in ("нет", "no") and _YES.search(t):
+                ok = False   # «да нет» — не ответ
+            elif vl in ("нет", "no"):
+                ok = bool(_NO.search(t))
+            else:
+                ok = vl in t
+            if ok:
+                hits.append(val)
+        if len(hits) == 1:
+            return i, hits[0]
+    return None
 
 
 def verdict(kinds: list[tuple[str, str, str]], want: T.Side, query: str = "") -> tuple[str, str]:

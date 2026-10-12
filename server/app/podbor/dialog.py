@@ -113,11 +113,15 @@ def _slim_offers(o: dict | None) -> dict | None:
 
 
 def _slim(p: dict) -> dict:
+    fq = p.get("filter_q") or {}
     return {"query": p["query"], "side": p.get("side") or {}, "status": p["status"], "question": p.get("question", ""),
             "asked": bool(p.get("asked")), "kind": p.get("kind", ""),
+            # Вопрос комплектации («АБС — Да или Нет?») и примечания вариантов: ответ «нет» сузит выбор (Engine._follow)
+            **({"filter_q": fq} if fq else {}),
             "variants": [{"name": v["name"], "oem": v["oem"], "brand": v["brand"], "axis": v["axis"], "lr": v["lr"],
                           "amount": v.get("amount", ""), "alt": v.get("alt", False), "offers": _slim_offers(v.get("offers")),
-                          "facts": v.get("facts", []), "code": v.get("code") or (v.get("scheme") or {}).get("code", "")}
+                          "facts": v.get("facts", []), "code": v.get("code") or (v.get("scheme") or {}).get("code", ""),
+                          **({"specs": (v.get("specs") or "")[:300]} if fq else {})}
                          for v in p.get("variants", [])],
             # Номера на схеме, которую прислали клиенту: ответ «03763» выбирает деталь (Engine._follow)
             "schemes": [{"unit": sc.get("unit", ""), "codes": [c["code"] for c in sc.get("codes", [])]}

@@ -135,6 +135,12 @@ class Detail:
     category: str
     group_id: int = 0
     unit_code: str = ""   # код узла полного каталога («60-624»): у Hyundai/Kia номера главных деталей начинаются с «624»
+    # Фильтр Laximo (Renault, Mazda, BMW: VIN не различает комплектацию) — по нему getFilterByDetail даёт вопрос клиенту
+    # («АБС: да / нет»); ssd самой детали — для этого запроса; specs — ВСЕ примечания детали («АБС = Нет»): у Renault их
+    # несколько с одним именем «Примечание», и в note остаётся только последнее
+    filter: str = ""
+    ssd: str = ""
+    specs: str = ""
 
     @property
     def context(self) -> str:
@@ -152,6 +158,12 @@ def _attrs(o: dict) -> dict[str, str]:
                 key = "note"
             out[key] = str(a.get("value") or "")
     return out
+
+
+def _specs(o: dict) -> str:
+    """Все примечания детали одной строкой — и с одинаковыми именами (у Renault «Примечание» встречается трижды)."""
+    return " ; ".join(str(a.get("value") or "") for a in o.get("attributes") or []
+                      if isinstance(a, dict) and a.get("key") not in ("amount",) and a.get("value"))
 
 
 # Машинный перевод Laximo, по которому деталь не найти словами клиента: у Toyota «CARRIER SUB-ASSY, RR AXLE»
@@ -201,7 +213,7 @@ def parse_details(data: Any, group_id: int = 0) -> list[Detail]:
                     unit_id=str(u.get("unitId") or ""), unit_ssd=str(u.get("ssd") or ""),
                     image=str(u.get("largeImageUrl") or u.get("imageUrl") or ""),
                     code_on_image=str(d.get("codeOnImage") or ""), category=str(c.get("name") or ""),
-                    group_id=group_id,
+                    group_id=group_id, filter=str(d.get("filter") or ""), ssd=str(d.get("ssd") or ""), specs=_specs(d),
                 ))
     return out
 
@@ -617,7 +629,8 @@ class Catalog:
                               amount=da.get("amount", ""), match=d.get("match"), unit=u["name"], unit_note="",
                               unit_id=u["id"], unit_ssd=u["ssd"], image=u["image"],
                               code_on_image=str(d.get("codeOnImage") or ""), category=u["cat"], group_id=group_id,
-                              unit_code=u["code"]))
+                              unit_code=u["code"], filter=str(d.get("filter") or ""), ssd=str(d.get("ssd") or ""),
+                              specs=_specs(d)))
         self._details[key] = (time.time(), out)
         return out
 
@@ -653,6 +666,29 @@ class Catalog:
             if status != "NONAPPLICABLE":
                 return {"status": status, "where": [w for w in data.get("categories") or [] if w], "oem": form}
         return {"status": "NONAPPLICABLE", "where": [], "oem": bare} if answered else None
+
+    # --- вопрос по комплектации, когда VIN её не различает (Renault, Mazda, BMW) ---
+    async def filter_question(self, v: Vehicle, d: Detail) -> list[dict] | None:
+        """getFilterByDetail: чем различаются номера по каталогу — [{"name": "АБС", "values": ["Да", "Нет"]}]. Проба 12.10:
+        Renault R19, поворотный кулак — «АБС: Да / Нет». detailId — позиция на схеме; ssd — самой детали. Нет фильтра
+        или каталог не ответил — None (робот спросит, как раньше)."""
+        if not d.filter or not d.unit_id:
+            return None
+        name = f"filters/{_safe(v.catalog)}-{hashlib.sha1((d.filter + '|' + d.unit_id).encode()).hexdigest()[:16]}.json"
+        try:
+            data = await self._cached(name, DETAILS_TTL, lambda: self.call("getFilterByDetail", {
+                "catalog": v.catalog, "vehicleId": v.vehicle_id, "ssd": d.ssd or d.unit_ssd, "unitId": d.unit_id,
+                "detailId": d.code_on_image, "filter": d.filter}))
+        except Exception:   # noqa: BLE001 — подсказка: не ответил каталог — спросим по-старому
+            return None
+        out = []
+        for q in data if isinstance(data, list) else []:
+            vals = [str(x.get("name") or "").strip() for x in q.get("values") or [] if isinstance(x, dict)] \
+                if isinstance(q, dict) else []
+            vals = [x for x in vals if x]
+            if isinstance(q, dict) and q.get("name") and len(vals) >= 2:
+                out.append({"name": str(q["name"]).strip(), "values": vals[:6]})
+        return out or None
 
     # --- машина по словам клиента, когда VIN каталог не знает ---
     async def by_text(self, text: str, vin: str = "", limit: int = 6) -> list[Vehicle]:
