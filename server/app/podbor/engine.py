@@ -385,6 +385,13 @@ class Engine:
             res["positions"] = [dict(p, variants=vs, status="found", question="", schemes=[],
                                      note=f"Поз. {code} на схеме узла.")]
             return self._done(res, "ok", t0, mem, [i])
+        offered = D.asked_part(mem.get("asked", "")) if D.YES.fullmatch(text.strip()) else ""
+        if offered and self._partish(offered, tree):
+            # «Да» на «Топливный фильтр нужен?» — робот сам предложил деталь, её и ищем (с моделью и без)
+            jobs = self.split([offered], tree)
+            if jobs:
+                res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
+                return self._done(res, "ok", t0, mem)
         plan = D.plan(text, mem, self.stop, tree, analogs, self.clean)
         if not plan["sure"] and use_llm and self.llm is not None and getattr(self.llm, "enabled", False):
             # Правила не уверены («Хорошо, давайте», длинное сообщение с новыми деталями) — спрашиваем модель

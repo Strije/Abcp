@@ -599,6 +599,30 @@ def test_dialog_side_choice_and_cheaper():
     assert other["status"] == "chat" and other["text"] == ""
 
 
+def test_yes_to_robot_question_searches_offered_part():
+    """11.10, Audi A4: позиций в памяти нет, робот спросил «Топливный фильтр нужен?», клиент — «Да». Робот отвечал
+    «Какой вариант оформить?», потом «Уточните, какие варианты» — тупик. «Да» — согласие с предложенной деталью."""
+    from app.podbor import dialog as D
+    assert D.asked_part("Поняли так. Масляный фильтр нужен?") == "Масляный фильтр"
+    assert D.asked_part("Вы имеете в виду салонный фильтр?") == "салонный фильтр"
+    for q in ("Какой вариант оформить?", "Уточните, пожалуйста, какую деталь вы имеете в виду?",
+              "Фильтр масляный или воздушный?", "Масляный фильтр подобрали."):
+        assert D.asked_part(q) == ""
+    for yes in ("Да", "да, нужен", "Ага!", "ну да", "Нужен", "да пожалуйста"):
+        assert D.YES.fullmatch(yes), yes
+    for no in ("Да нет", "да, а какие есть?", "нет"):
+        assert not D.YES.fullmatch(no), no
+    e = Engine(Fake(), None, set())
+    first = run("X9FKXXEEBKCB57566 масляный фильтр", e)
+    mem = dict(first["memory"], positions=[], asked="Масляный фильтр нужен?")
+    yes = run("Да", e, memory=mem)
+    assert yes["status"] == "ok" and [v["oem"] for v in yes["positions"][0]["variants"]] == ["1883037"]
+    assert "asked" not in yes["memory"]                  # вопрос отвечен — второй «да» его не повторит
+    # «Какой вариант оформить?» — не предложение детали: «да» по нему ничего не ищет
+    vague = run("Да", e, memory=dict(first["memory"], asked="Какой вариант оформить?"))
+    assert not vague["positions"]
+
+
 def test_dialog_answer_to_question_replaces_position():
     e = Engine(Fake(), None, set())
     first = run("X9FKXXEEBKCB57566 подшипник ступицы", e)
