@@ -584,6 +584,11 @@ def test_bitrix_hint_flow(tmp_path):
 
     s = replace(S, state_dir=str(tmp_path), bitrix_client_id="local.app1", bitrix_client_secret="sec", podbor_password="")
     with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        # Установка из интерфейса (12.10): DOMAIN — в строке запроса, токены — в теле; раньше был «Чужой портал»
+        r = c.post("/v1/bitrix/install?DOMAIN=bitrix.freno.ru&PROTOCOL=1&LANG=ru&APP_SID=x",
+                   data={"AUTH_ID": "AT", "AUTH_EXPIRES": "3600", "REFRESH_ID": "RT", "member_id": "m"})
+        assert r.status_code == 200 and "подключено" in r.text, r.text
+        assert c.post("/v1/bitrix/install?DOMAIN=evil.bitrix24.ru", data={"AUTH_ID": "AT"}).status_code == 403
         c.post("/v1/bitrix/install", data={
             "auth[domain]": "bitrix.freno.ru", "auth[access_token]": "AT", "auth[refresh_token]": "RT", "auth[expires_in]": "3600",
             "auth[client_endpoint]": "https://bitrix.freno.ru/rest/", "auth[application_token]": "APPTOK"})

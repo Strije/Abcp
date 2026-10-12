@@ -757,17 +757,26 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
                 "<script>try{BX24.init(function(){BX24.installFinish()})}catch(e){}</script></body>")
         return Response(page, media_type="text/html; charset=utf-8")
 
+    def bx_domain(request: Request, d: dict) -> str:
+        """Адрес портала: Битрикс кладёт DOMAIN в строку запроса, а не в тело (установка из интерфейса, встройки) —
+        12.10 установка получала «Чужой портал». Без порта и схемы."""
+        raw = str(d.get("DOMAIN") or request.query_params.get("DOMAIN") or "")
+        return raw.lower().removeprefix("https://").removeprefix("http://").split("/")[0].split(":")[0]
+
     @app.post("/v1/bitrix/install")
     async def bitrix_install(request: Request):
         bx: bitrix.Bitrix = state["bx"]
         d = await bitrix_body(request)
+        domain = bx_domain(request, d)
         auth = d.get("auth") or {
             "access_token": d.get("AUTH_ID"), "refresh_token": d.get("REFRESH_ID"), "expires_in": d.get("AUTH_EXPIRES"),
-            "domain": d.get("DOMAIN"), "member_id": d.get("member_id"),
-            "client_endpoint": f"https://{d.get('DOMAIN')}/rest/" if d.get("DOMAIN") else None,
+            "domain": domain, "member_id": d.get("member_id"),
+            "client_endpoint": f"https://{domain}/rest/" if domain else None,
         }
         # Только наш Битрикс и только наше приложение — иначе чужой портал мог бы перехватить сообщения клиентов
-        if not bx.configured or str(auth.get("domain") or "").lower() != state["s"].bitrix_domain.lower():
+        got = str(auth.get("domain") or "").lower().split(":")[0]
+        if not bx.configured or got != state["s"].bitrix_domain.lower():
+            log.info("bitrix install refused: domain %r, configured %s", got[:80], bx.configured)
             raise HTTPException(403, "Чужой портал")
         before = bx.state.load()
         bx.save_auth({k: v for k, v in auth.items() if v})
@@ -789,7 +798,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     async def bitrix_placement(request: Request):
         bx: bitrix.Bitrix = state["bx"]
         d = await bitrix_body(request)
-        if str(d.get("DOMAIN") or "").lower() != state["s"].bitrix_domain.lower():
+        if bx_domain(request, d) != state["s"].bitrix_domain.lower():
             raise HTTPException(403, "Чужой портал")
         try:
             opts = json.loads(d.get("PLACEMENT_OPTIONS") or "{}")
@@ -865,7 +874,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         нашему приложению на нашем портале, и отдаём страницу подбора с пропуском на этот диалог."""
         bx: bitrix.Bitrix = state["bx"]
         d = await bitrix_body(request)
-        domain = str(request.query_params.get("DOMAIN") or d.get("DOMAIN") or "").lower()
+        domain = bx_domain(request, d)
         if not bx.configured or domain != state["s"].bitrix_domain.lower():
             return hint_error("Чужой портал", 403)
         try:
