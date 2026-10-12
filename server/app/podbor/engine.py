@@ -319,6 +319,7 @@ class Engine:
               replaced: list[int] | None = None) -> dict:
         res["status"] = status
         res["seconds"] = round(time.time() - t0, 1)
+        attach_schemes(res)
         res["memory"] = D.remember(res, prev, replaced)
         self._manager_handoff(res)
         res["text"] = draft(res)
@@ -374,6 +375,15 @@ class Engine:
         except LaximoError as e:
             return self._done(res, "no_quick_groups" if e.code == "E_NOTSUPPORTED" else "catalog_error", t0, mem)
         positions = mem.get("positions") or []
+        picked = scheme_pick(text, positions)
+        if picked:
+            # «03763», «поз. 54154B» — клиент выбрал деталь по номеру на схеме узла, которую мы прислали
+            i, code = picked
+            p = positions[i]
+            vs = [x for x in p.get("variants", []) if str(x.get("code") or "").upper() == code]
+            res["positions"] = [dict(p, variants=vs, status="found", question="", schemes=[],
+                                     note=f"Поз. {code} на схеме узла.")]
+            return self._done(res, "ok", t0, mem, [i])
         plan = D.plan(text, mem, self.stop, tree, analogs, self.clean)
         if not plan["sure"] and use_llm and self.llm is not None and getattr(self.llm, "enabled", False):
             # Правила не уверены («Хорошо, давайте», длинное сообщение с новыми деталями) — спрашиваем модель
@@ -2227,6 +2237,48 @@ def requirement_lines(p: dict) -> list[str]:
     return out
 
 
+def attach_schemes(res: dict) -> None:
+    """Каталог дал несколько разных деталей, а выбрать может только клиент («трубка кондиционера»: от компрессора или от
+    радиатора). Пишем «уточните по схеме», и раньше клиент схемы не видел. Теперь — ссылка на картинку узла и номера позиций
+    на ней: клиент отвечает номером. Только если у каждой детали свой номер на схеме (у вариантов одной позиции под
+    разные модификации номер один — схема их не различит)."""
+    for p in res.get("positions", []):
+        p.pop("schemes", None)
+        if p.get("status") != "choose" or p.get("parts"):
+            continue
+        main = [x for x in p.get("variants", []) if not x.get("alt")]
+        sch = [x.get("scheme") or {} for x in main]
+        codes = [str(sc.get("code") or "").strip() for sc in sch]
+        if len(main) < 2 or not all(codes) or not all(sc.get("image") for sc in sch) or len(set(codes)) != len(codes):
+            continue
+        by: dict[str, dict] = {}
+        for x, sc, code in zip(main, sch, codes):
+            b = by.setdefault(sc["image"], {"unit": x.get("unit", ""), "image": sc["image"], "codes": []})
+            b["codes"].append({"code": code, "oem": x["oem"], "name": x["name"]})
+        p["schemes"] = list(by.values())
+
+
+_SCHEME_WORD = re.compile(r"(?:поз\w*|№|номер\w*|n)\.?\s*$", re.I)
+
+
+def scheme_pick(text: str, positions: list[dict]) -> tuple[int, str] | None:
+    """Номер со схемы в ответе клиента → (номер позиции в памяти, номер на схеме). Короткие номера («2», «7») принимаем
+    только в короткой реплике или после «поз.», «№», «номер»: иначе «2 штуки» станет выбором."""
+    asked = [(i, {str(c).upper() for sc in p.get("schemes") or [] for c in sc.get("codes", [])})
+             for i, p in enumerate(positions) if p.get("schemes")]
+    if not asked:
+        return None
+    for m in re.finditer(r"[0-9A-Za-zА-Яа-я]+", text):
+        tok = m.group(0).upper()
+        for i, codes in asked:
+            if tok not in codes:
+                continue
+            explicit = bool(_SCHEME_WORD.search(text[:m.start()]))
+            if len(tok) >= 4 or explicit or len(text.strip()) <= 12:
+                return i, tok
+    return None
+
+
 def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     """Ответ клиенту. По позиции: при нескольких вариантах — блоки «Передний:» / «Задний:», в каждом
     «• Фирма — наименование — цена, срок», оригинал первым, дальше аналоги — что привезём быстрее."""
@@ -2331,6 +2383,12 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
             lines.append("   " + p["question"].replace(
                 "В каталоге несколько вариантов — уточните по примечанию или по номеру позиции на схеме.",
                 "Есть несколько вариантов, уточните, какой нужен:"))
+        for sc in p.get("schemes") or []:
+            unit = ru_name(sc["unit"]) if sc.get("unit") else "узла"
+            lines.append(f"   Схема «{unit}»: {sc['image']}")
+            lines.append("   На схеме: " + "; ".join(f"поз. {c['code']} — {ru_name(base_name(c['name']))}" for c in sc["codes"]) + ".")
+        if p.get("schemes"):
+            lines.append("   Напишите номер позиции со схемы — покажем цены именно на неё.")
         if p["note"] and "не нашли" not in p["note"]:
             lines.append("   " + p["note"])
         # Варианты: основной номер и «тот же оригинал» под другими номерами (Motorcraft) — к нему

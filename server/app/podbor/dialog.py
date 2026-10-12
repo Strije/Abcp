@@ -96,8 +96,11 @@ def _slim(p: dict) -> dict:
             "asked": bool(p.get("asked")), "kind": p.get("kind", ""),
             "variants": [{"name": v["name"], "oem": v["oem"], "brand": v["brand"], "axis": v["axis"], "lr": v["lr"],
                           "amount": v.get("amount", ""), "alt": v.get("alt", False), "offers": _slim_offers(v.get("offers")),
-                          "facts": v.get("facts", [])}
-                         for v in p.get("variants", [])]}
+                          "facts": v.get("facts", []), "code": v.get("code") or (v.get("scheme") or {}).get("code", "")}
+                         for v in p.get("variants", [])],
+            # Номера на схеме, которую прислали клиенту: ответ «03763» выбирает деталь (Engine._follow)
+            "schemes": [{"unit": sc.get("unit", ""), "codes": [c["code"] for c in sc.get("codes", [])]}
+                        for sc in p.get("schemes") or []]}
 
 
 def remember(res: dict, prev: dict | None, replaced: list[int] | None = None) -> dict:

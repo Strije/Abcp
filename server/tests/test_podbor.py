@@ -2236,3 +2236,22 @@ def test_units_with_the_same_id_keep_their_own_details(tmp_path):
     again = Engine(FakeSameIds(), tmp_path, set())                     # с диска — тоже свои
     asyncio.run(again.catalog.unit_tree(v))
     assert [d.name for d in asyncio.run(again.catalog._unit_details(v, -2))] == ["БАЛКА ПОПЕРЕЧНАЯ В СБОРЕ"]
+
+
+def test_choice_by_scheme_number():
+    from app.podbor.engine import attach_schemes, scheme_pick
+    var = lambda oem, name, code, img, alt=False: {"oem": oem, "name": name, "alt": alt, "unit": "Кондиционер",  # noqa: E731
+                                                    "scheme": {"code": code, "image": img}}
+    res = {"positions": [{"status": "choose", "variants": [var("7810A149", "ТРУБКА КОНДИЦИОНЕРА", "87667", "https://i/1.gif"),
+                                                           var("7815A717", "ТРУБКА РАДИАТОРА КОНДИЦИОНЕРА", "87051", "https://i/2.gif")]},
+                         {"status": "choose", "variants": [var("A", "ШЛАНГ", "54154B", "https://i/3.gif"),
+                                                           var("B", "ШЛАНГ", "54154B", "https://i/3.gif")]}]}
+    attach_schemes(res)
+    assert [c["code"] for sc in res["positions"][0]["schemes"] for c in sc["codes"]] == ["87667", "87051"]
+    assert "schemes" not in res["positions"][1]          # один номер на схеме — схема не различит, не шлём
+    mem = [{"schemes": [{"codes": ["87667"]}, {"codes": ["87051"]}]}]
+    assert scheme_pick("87051", mem) == (0, "87051")
+    assert scheme_pick("поз. 87667 нужна", mem) == (0, "87667")
+    short = [{"schemes": [{"codes": ["2", "7"]}]}]
+    assert scheme_pick("7", short) == (0, "7")
+    assert scheme_pick("нужно 2 штуки, и ещё масло для коробки", short) is None   # «2 штуки» — не номер на схеме
