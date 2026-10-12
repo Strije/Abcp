@@ -2179,3 +2179,34 @@ def test_master_cylinder_is_not_shown_for_rear_cylinders():
     res = run("XW7BF4FK30S064389 тормозные цилиндры задние", engine=Engine(FakeMaster(), None, set()))
     pos = res["positions"][0]
     assert not pos.get("via_units") and pos["status"] == "not_found"
+
+
+class FakeVacuum(FakeUnits):
+    """L200: узел «Проводка двигателя — генератор и вакуумный насос» (слова «шланг» в нём нет), в нём «Трубка вакуумного насоса»."""
+
+    def answer(self, method, params):
+        if method == "listUnits":
+            self.unit_calls += 1
+            return [{"unitId": "31", "name": "ПРОВОДКА ДВИГАТЕЛЯ - ГЕНЕРАТОР И ВАКУУМНЫЙ НАСОС", "code": "16-110", "ssd": "SU31",
+                     "imageUrl": ""}]
+        if method == "listDetailByUnit":
+            return [{"name": "НАСОС ВАКУУМНЫЙ В СБОРЕ", "codeOnImage": "1", "oem": "2020A002"},
+                    {"name": "ТРУБКА ВАКУУМНОГО НАСОСА", "codeOnImage": "2", "oem": "2036A194"},
+                    {"name": "КОЛЬЦО УПЛОТНИТЕЛЬНОЕ,ВАКУУМНОГО НАСОСА", "codeOnImage": "3", "oem": "2020A008"}]
+        return super().answer(method, params)
+
+    async def offers(self, number, brand):
+        self.calls.append(("offers", number, brand))
+        if number == "2036A194":
+            return ([offer("MITSUBISHI", "2036A194", 1900, 100, "Трубка вакуумного насоса")]
+                    + [offer("Dominant", "VT1", 700, 48, "Трубка вакуумная насоса", 5)])
+        return await super().offers(number, brand)
+
+
+def test_hose_of_vacuum_pump_is_found_in_the_unit_by_the_qualifier():
+    eng = Engine(FakeVacuum(), None, set())
+    v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
+    tree = asyncio.run(eng.catalog.tree(v))
+    pos = asyncio.run(eng.position(v, tree, "шланг вакуумного насоса", T.Side()))
+    assert pos["status"] == "found" and pos.get("via_units")
+    assert [v["name"] for v in pos["variants"]] == ["ТРУБКА ВАКУУМНОГО НАСОСА"]       # не насос и не кольцо

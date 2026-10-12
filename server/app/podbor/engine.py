@@ -827,7 +827,7 @@ class Engine:
         except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
             return None
         if not alt or alt["status"] not in ("found", "choose") or not alt["variants"]                 or max((g["score"] for g in alt["groups"]), default=0.0) < UNIT_SCORE:
-            return None
+            return await self._by_unit_part(v, query, want, kind)
         said = {w[:5] for w in T.stems(T.expand(query), self.stop)}
         named = " ".join([g["name"] for g in alt["groups"][:2]] + [x["name"] for x in alt["variants"][:3]]).lower()
         if any(m in named and m not in said for m in _ID_MODS):
@@ -836,6 +836,45 @@ class Engine:
         units = ", ".join(dict.fromkeys(g["name"] for g in alt["groups"][:2]))
         alt["note"] = alt.get("note") or f"Нашли в полном каталоге машины (узел «{units}»), в быстрых группах такой детали нет."
         return alt
+
+    async def _by_unit_part(self, v: Vehicle, query: str, want: T.Side, kind: str) -> dict | None:
+        """«Шланг вакуумного насоса»: узел называется «Проводка двигателя — генератор и вакуумный насос» и слова «шланг» в
+        нём нет — по всей фразе он не находится. Узел ищем по уточнению («вакуумного насоса»), а деталь в нём — по главному
+        слову и его родне (шланг = трубка = патрубок). Показываем только то, что названо и узлом, и деталью (12.10: вместо
+        трубки насоса шёл «Патрубок воздушного фильтра»)."""
+        try:
+            ut = await self.catalog.unit_tree(v)
+            q = T.stems(T.expand(query), self.stop)
+            head = T.head(q) or ""
+            qual = [w for w in q if w != head and not T.side_of_word(w) and not _word_in(w, _GENERIC_HEADS)]
+            if ut is None or not head or not qual:
+                return None
+            ranked = [(g, sc) for g, sc in ut.rank(qual, want) if sc >= UNIT_SCORE][:2]
+            if not ranked:
+                return None
+            aliases = [head] + _PART_ALIASES.get(head, []) + _HOSE_KIN.get(head, [])
+            pool = {}
+            for g, _ in ranked:
+                for d in await self.catalog.details(v, g.id, True):
+                    st = T.stems(d.name, self.stop)
+                    if any(T.same(a, s) for a in aliases for s in st) and all(any(T.same(w, s) for s in st) for w in qual[:1]):
+                        pool.setdefault(_key(d.oem), d)
+            if not pool or len(pool) > 4:
+                return None
+            cands = [Candidate(d, 0.8, 0.8, True, want, "каталог") for d in pool.values()]
+            kept = await self._check_sides(v, cands, want)
+            if not kept:
+                return None
+            groups = [{"id": g.id, "name": g.name, "path": g.path, "score": round(sc, 2)} for g, sc in ranked]
+            pos = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "found", "groups": groups,
+                   "variants": [self._variant(c, v, alt=i > 0) for i, c in enumerate(kept)], "question": "", "kind": "part",
+                   "via_units": True,
+                   "note": f"Нашли в полном каталоге машины (узел «{ranked[0][0].name}»), в быстрых группах такой детали нет."}
+            for var in pos["variants"]:
+                R.annotate(var, [query])
+            return pos
+        except Exception:   # noqa: BLE001 — запасной путь: ошибка = ничего не нашли, как раньше
+            return None
 
     async def _qualifier(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str, pos: dict) -> dict | None:
         """«Подшипник маховика» → группа «Подшипник коленвала»: слово-уточнение (маховик) в группе не нашлось, это другая
@@ -1581,6 +1620,8 @@ def _main(q: list[str]) -> str | None:
 _PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
                  T.stem("пыльник"): [T.stem("чехол"), "boot"],
                  T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
+_HOSE_KIN = {T.stem("шланг"): [T.stem("трубка"), T.stem("патрубок")], T.stem("трубка"): [T.stem("шланг"), T.stem("патрубок")],
+             T.stem("патрубок"): [T.stem("шланг"), T.stem("трубка")]}   # так же называют одну деталь по-разному
 _BUSH = [T.stem("сайлентблок"), T.stem("втулка"), "bush", T.stem("сайлент")]   # VW: «Сайлент-блок»
 
 
