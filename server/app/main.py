@@ -163,6 +163,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["abcp"] = abcp or Abcp(s)
         state["laximo"] = laximo or Laximo(s)
         folder = Path(s.state_dir)
+        schemes.init(folder)
         state["tokens"] = push.TokenStore(folder)
         state["pusher"] = push.RuStorePush(state["abcp"].http, s.rustore_push_host, s.rustore_project_id, s.rustore_push_token)
         state["watcher"] = push.OrderWatcher(state["abcp"], state["pusher"], state["tokens"], folder, s.order_watch_interval)

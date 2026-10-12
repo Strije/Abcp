@@ -573,3 +573,5 @@ def test_scheme_image_is_served_through_our_server(monkeypatch):
         assert r.status_code == 200 and r.headers["content-type"] == "image/gif" and r.content.startswith(b"GIF")
         assert c.get("/v1/podbor/scheme/" + tok).status_code == 200 and len(calls) == 1     # второй раз — с диска
         assert c.get("/v1/podbor/scheme/" + schemes.token("https://evil.example/a.gif")).status_code == 404
+        sid = schemes.link(url).rsplit("/", 1)[1]               # короткий номер: адрес Laximo лежит у нас на диске
+        assert "." not in sid and c.get("/v1/podbor/scheme/" + sid).status_code == 200 and len(calls) == 1
