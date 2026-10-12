@@ -2502,3 +2502,30 @@ def test_brand_found_by_question_stays_pickable():
     assert [x["offer"]["brand"] for x in D.shown(slim)] == ["STARTVOLT"]   # «второй» — по-прежнему то, что видел клиент
     assert [x["offer"]["brand"] for x in D.all_offers(slim)] == ["STARTVOLT", "BERU"]
     assert D.same_offer(D.all_offers(slim)[1], {"brand": "Beru", "number": "GN-961"})
+
+
+class FakeBoot(Fake):
+    """Golf 2009: пыльник рейки у VAG — «Манжета»; рядом группа «Пыльник» привода с пыльниками ШРУСа."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[
+                node(520, "Рулевое управление", link=False, children=[node(523, "Пыльник рулевой рейки")]),
+                node(440, "Привод колеса", link=False, children=[node(447, "Пыльник")])])
+        if method == "listQuickDetail" and int(params["quickGroupId"]) in (523, 447):
+            if int(params["quickGroupId"]) == 523:
+                return [cat("Рулевое управление", unit("Рулевой механизм Рулевая тяга", [det("1K0423831B", "Манжета", "2")]))]
+            return [cat("Привод", unit("Приводной вал", [det("1K0498203A", "Пыльник ШРУСа с монтажными деталями", "2")]))]
+        return super().answer(method, params)
+
+
+def test_rack_boot_named_cuff_beats_cv_boot():
+    """Golf 2009 (судья, 11.10): «Пыльник рейки» → пыльники ШРУСа: в их группе нет «рейки», но в названии есть «пыльник»,
+    а настоящий пыльник рейки VAG называет «Манжета»."""
+    p = run("X9FKXXEEBKCB57566 Пыльник рейки", engine=Engine(FakeBoot(), None, set()))["positions"][0]
+    assert [v["oem"] for v in p["variants"]] == ["1K0423831B"]
+
+
+def test_clamp_is_not_an_analog_of_boot():
+    from app.podbor.offers import not_the_part
+    assert not_the_part("Хомут комплект", "Манжета")         # Febest к манжете рейки — не аналог
+    assert not not_the_part("Хомут пыльника ШРУС", "Хомут")   # спрашивали сам хомут — аналог

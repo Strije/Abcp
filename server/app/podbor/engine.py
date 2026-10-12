@@ -1390,6 +1390,18 @@ class Engine:
                                      foreign=member and foreign)
         if not cands:
             return []
+        # «Пыльник рейки» у Golf (12.10): группы «Пыльник рулевой рейки» (там «Манжета» 1K0423831B) и «Пыльник» привода.
+        # Пыльник ШРУСа набирал больше за слово «пыльник» в названии, а «рейки» нет ни в нём, ни в его группе. Деталь из
+        # группы, что покрывает меньше слов клиента, отбрасываем, если недостающих слов нет и в её названии — когда есть
+        # деталь из группы, покрывающей больше. В одной группе (или при равном покрытии групп) ничего не меняется
+        gcov = {g.id: {s for s in known if any(T.same(s, t) for p, _ in g.phrases for t in p)} for g, _ in groups}
+        if len({len(x) for x in gcov.values()}) > 1:
+            most = max(len(x) for x in gcov.values())
+            def thin(c: Candidate) -> bool:
+                own = gcov.get(c.d.group_id, set())
+                return len(own) < most and len(own | {s for s in known if any(T.same(s, t) for t in names[id(c.d)])}) < most
+            if any(c.member and len(gcov.get(c.d.group_id, ())) == most for c in cands.values()):
+                cands = {k: c for k, c in cands.items() if not (c.member and thin(c))}
         for k, c in cands.items():
             if {"left", "right"} <= lrs.get(k, set()):
                 # Наконечник Lexus RX: «Левый» и «Правый рулевой наконечник» — оба 45460-29435.
@@ -1837,7 +1849,8 @@ def _main(q: list[str]) -> str | None:
     return nouns[0] if h in _BUNDLE and nouns else h
 # Как деталь, которую клиент называет по-своему, может называться в каталоге: сайлентблок у Toyota — «втулка»
 _PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
-                 T.stem("пыльник"): [T.stem("чехол"), "boot"],
+                 # у VAG пыльник рейки — «Манжета» 1K0423831B (Golf 2009, 12.10): не узнав её, робот уходил в пыльники ШРУСа
+                 T.stem("пыльник"): [T.stem("чехол"), "boot", T.stem("манжета")],
                  T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
 # Другие названия той же детали — только чтобы найти её в узлах; главное слово детали при этом не проверяется (у Kia прокладки —
 # «ПРОКЛАДОЧНОЕ КОЛЬЦО-…», у VAG — «К-т прокладок…»). Passat 2002: прокладка клапанной крышки — «Уплотнитель» 06A103483D,
