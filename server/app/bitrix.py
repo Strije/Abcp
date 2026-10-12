@@ -7,14 +7,21 @@
 Установка: локальное серверное приложение Битрикс24 → POST /v1/bitrix/install (токены) → регистрируем
 коннектор и подписываемся на событие; администратор включает канал в настройках линии →
 Битрикс открывает PLACEMENT_HANDLER → активируем коннектор на этой линии.
+
+Подсказчик подбора (IM_TEXTAREA): кнопка «Подбор» над полем ввода в чатах открытых линий. Битрикс открывает
+/v1/bitrix/hint с токеном оператора → выдаём пропуск на полчаса (Tickets) → страница подбора читает переписку
+клиента (im.dialog.messages.get от имени оператора), робот ищет, оператор вставляет ответ в поле и сам отправляет.
+Клиенту робот ничего не пишет. Нужны права приложения: imconnector, imopenlines, im, placement.
 """
 import json
 import logging
 import os
 import re
+import secrets
 import sqlite3
 import tempfile
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -25,6 +32,7 @@ log = logging.getLogger("avtodrug")
 CONNECTOR = "avtodrug_app"
 CONNECTOR_NAME = "Приложение Автодруг"
 KEEP_DAYS = 180  # переписку на нашем сервере храним полгода (полная история — в Битрикс24)
+HINT_TITLE = "Подбор"
 
 # Иконка канала в настройках открытых линий: машинка в круге
 ICON_SVG = ("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20"
@@ -189,6 +197,14 @@ class Bitrix:
             "PLACEMENT_HANDLER": f"{self.public_url}/v1/bitrix/placement",
         })
         await self.call("event.bind", {"event": "OnImConnectorMessageAdd", "handler": f"{self.public_url}/v1/bitrix/event"})
+        try:
+            await self.call("placement.bind", {
+                "PLACEMENT": "IM_TEXTAREA", "HANDLER": f"{self.public_url}/v1/bitrix/hint", "TITLE": HINT_TITLE,
+                "OPTIONS": {"iconName": "fa-car", "context": "LINES", "role": "USER", "extranet": "N", "color": "ORANGE"},
+            })
+        except RuntimeError as e:
+            # Уже привязан при прошлой установке или у приложения нет прав placement/im — канал чата работает и без подсказчика
+            log.info("bitrix hint placement: %s", e)
 
     async def activate(self, line: str):
         await self.call("imconnector.activate", {"CONNECTOR": CONNECTOR, "LINE": int(line), "ACTIVE": "1"})
@@ -220,3 +236,93 @@ class Bitrix:
         """Отметка «доставлено» у сообщений операторов — иначе в Битриксе висит «не доставлено»."""
         if items:
             await self.call("imconnector.send.status.delivery", {"CONNECTOR": CONNECTOR, "LINE": int(line), "MESSAGES": items})
+
+
+# ---------- подсказчик подбора в чате открытой линии ----------
+
+class Tickets:
+    """Пропуск страницы подсказчика: токен оператора и диалог. Только в памяти процесса и на полчаса
+    (токен Битрикса живёт час): перезапуск службы — оператор просто открывает «Подбор» заново."""
+    TTL = 1800
+    LIMIT = 500
+
+    def __init__(self):
+        self.items: dict[str, dict] = {}
+
+    def issue(self, auth: str, endpoint: str, dialog: str) -> str:
+        now = time.time()
+        self.items = {k: v for k, v in self.items.items() if v["exp"] > now}
+        while len(self.items) >= self.LIMIT:
+            self.items.pop(next(iter(self.items)))
+        t = secrets.token_urlsafe(24)
+        self.items[t] = {"auth": auth, "endpoint": endpoint, "dialog": dialog, "exp": now + self.TTL}
+        return t
+
+    def get(self, ticket: str) -> dict | None:
+        v = self.items.get(ticket or "")
+        return v if v and v["exp"] > time.time() else None
+
+
+async def operator_call(http: httpx.AsyncClient, endpoint: str, auth: str, method: str, params: dict) -> dict:
+    """Вызов REST от имени оператора, открывшего подсказчик: видно ровно то, что видно ему."""
+    r = await http.post(endpoint + method + ".json", json={**params, "auth": auth})
+    d = r.json()
+    if "error" in d:
+        raise RuntimeError(f"{method}: {d.get('error')} {d.get('error_description', '')}")
+    return d
+
+
+ROBOT = re.compile(r"^\s*Отправлено роботом", re.I)   # рассылки магазина в том же чате — не слова клиента
+_BB_USER = re.compile(r"\[USER=\d+[^\]]*\](.*?)\[/USER\]", re.I | re.S)
+HINT_RECENT_DAYS = 2
+HINT_MAX_MESSAGES = 15
+
+
+def _when(s) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(s))
+    except ValueError:
+        return None
+
+
+def client_text(result: dict, after: int = 0, find_ident=None) -> dict:
+    """Что написал клиент — для подбора, из ответа im.dialog.messages.get.
+    after=0 (первое открытие): сообщения клиента за последние двое суток переписки, не больше 15; если VIN был раньше —
+    подставляем его в начало. after>0: только сообщения клиента после этого (память разговора — у страницы подбора).
+    Клиент — участник-коннектор (Telegram, Авито, сайт…) или экстранет; системные сообщения, менеджеры и рассылки — нет."""
+    users = result.get("users") or []
+    users = users.values() if isinstance(users, dict) else users
+    clients = {str(u.get("id")) for u in users if u.get("connector") or u.get("extranet")}
+    msgs = sorted(result.get("messages") or [], key=lambda m: int(m.get("id") or 0))
+    last = max([after] + [int(m.get("id") or 0) for m in msgs])
+    mine, photos = [], 0
+    for m in msgs:
+        if str(m.get("author_id") or "0") not in clients:
+            continue
+        _, text = clean_bb(_BB_USER.sub(r"\1", str(m.get("text") or "")))
+        if text and not ROBOT.match(text):
+            mine.append((int(m.get("id") or 0), _when(m.get("date")), text))
+        elif not text and (m.get("params") or {}).get("FILE_ID") and int(m.get("id") or 0) > after:
+            photos += 1
+    if after:
+        new = [t for i, _, t in mine if i > after][-HINT_MAX_MESSAGES:]
+        return {"text": _fit("\n".join(new)), "last": last, "count": len(new), "photos": photos}
+    if not mine:
+        return {"text": "", "last": last, "count": 0, "photos": photos}
+    edge = mine[-1][1] - timedelta(days=HINT_RECENT_DAYS) if mine[-1][1] else None
+    recent = [x for x in mine if edge is None or x[1] is None or x[1] >= edge][-HINT_MAX_MESSAGES:]
+    text = "\n".join(t for _, _, t in recent)
+    if find_ident and not find_ident(text):
+        vin = next((v for v in (find_ident(t) for _, _, t in reversed(mine)) if v), "")
+        if vin:
+            text = f"VIN: {vin}\n{text}"
+    return {"text": _fit(text, find_ident), "last": last, "count": len(recent), "photos": photos}
+
+
+def _fit(text: str, find_ident=None, limit: int = 3800) -> str:
+    """Подбор принимает до 4000 знаков: длинную переписку режем с начала, VIN сохраняем."""
+    if len(text) <= limit:
+        return text
+    vin = find_ident(text) if find_ident else ""
+    tail = text[-(limit - 30):]
+    return f"VIN: {vin}\n{tail}" if vin and vin not in tail else tail

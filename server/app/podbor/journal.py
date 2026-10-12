@@ -78,6 +78,11 @@ class Journal:
         self._write({"t": datetime.now().isoformat(timespec="seconds"), "type": "feedback", "dialog": dialog or "",
                      "turn": turn, "good": good, "comment": clean(comment)[:1000]})
 
+    def used(self, dialog: str, turn: int, how: str):
+        """Подсказчик в Битрикс24: менеджер вставил (insert) или скопировал (copy) ответ робота — мера пользы."""
+        self._write({"t": datetime.now().isoformat(timespec="seconds"), "type": "used", "dialog": dialog or "",
+                     "turn": turn, "how": how})
+
 
 def show(folder: str, days: int = 1):
     """Разговоры за последние дни: реплика → ответ, с оценками."""

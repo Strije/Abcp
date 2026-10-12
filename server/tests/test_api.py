@@ -536,6 +536,77 @@ def test_bitrix_chat_flow(tmp_path):
         assert any(m == "imconnector.send.status.delivery" for m, _ in calls)
 
 
+def _hint_messages():
+    """Чат открытой линии: клиент (коннектор) 7, менеджер 3, системные — 0. VIN клиент прислал за неделю до просьбы."""
+    msgs = [
+        {"id": 100, "author_id": 7, "date": "2026-10-01T10:00:00+03:00", "text": "VIN XTA21703080123456"},
+        {"id": 101, "author_id": 3, "date": "2026-10-01T10:05:00+03:00", "text": "Добрый день! Что подобрать?"},
+        {"id": 120, "author_id": 0, "date": "2026-10-08T09:00:00+03:00", "text": "Начат новый диалог"},
+        {"id": 121, "author_id": 7, "date": "2026-10-08T09:01:00+03:00", "text": "Нужны колодки передние"},
+        {"id": 122, "author_id": 7, "date": "2026-10-08T09:01:30+03:00", "text": "", "params": {"FILE_ID": [5]}},
+        {"id": 123, "author_id": 7, "date": "2026-10-08T09:02:00+03:00", "text": "Отправлено роботом: заказ №5 готов"},
+        {"id": 124, "author_id": 3, "date": "2026-10-08T09:03:00+03:00", "text": "Сейчас посмотрю"},
+        {"id": 125, "author_id": 7, "date": "2026-10-08T09:04:00+03:00", "text": "и [b]диски[/b] тоже"},
+    ]
+    users = [{"id": 7, "name": "Клиент", "connector": True}, {"id": 3, "name": "Светлана", "connector": False}]
+    return {"messages": list(reversed(msgs)), "users": users}
+
+
+def test_bitrix_hint_client_text():
+    from app.bitrix import client_text
+    from app.podbor.text import find_ident
+    d = client_text(_hint_messages(), 0, find_ident)
+    # Двое суток от последнего сообщения клиента: старое «VIN …» в окно не попало — VIN подставлен отдельно
+    assert d["text"] == "VIN: XTA21703080123456\nНужны колодки передние\nи диски тоже"
+    assert d["last"] == 125 and d["count"] == 2 and d["photos"] == 1
+    assert client_text(_hint_messages(), 121, find_ident)["text"] == "и диски тоже"
+    assert client_text(_hint_messages(), 125, find_ident) == {"text": "", "last": 125, "count": 0, "photos": 0}
+
+
+def test_bitrix_hint_flow(tmp_path):
+    from dataclasses import replace
+    import json as J
+    import re as R
+    calls = []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "bitrix.freno.ru":
+            method = request.url.path.rsplit("/", 1)[-1].removesuffix(".json")
+            body = J.loads(request.content or b"{}")
+            calls.append((method, body))
+            if method == "app.info":
+                return httpx.Response(200, json={"result": {"CODE": "local.other" if body["auth"] == "OTHER" else "local.app1"}})
+            if method == "im.dialog.messages.get":
+                assert body["auth"] == "OPTOKEN" and body["DIALOG_ID"] == "chat55"
+                return httpx.Response(200, json={"result": _hint_messages()})
+            return httpx.Response(200, json={"result": True})
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), bitrix_client_id="local.app1", bitrix_client_secret="sec", podbor_password="")
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        c.post("/v1/bitrix/install", data={
+            "auth[domain]": "bitrix.freno.ru", "auth[access_token]": "AT", "auth[refresh_token]": "RT", "auth[expires_in]": "3600",
+            "auth[client_endpoint]": "https://bitrix.freno.ru/rest/", "auth[application_token]": "APPTOK"})
+        bind = [b for m, b in calls if m == "placement.bind"]
+        assert bind and bind[0]["PLACEMENT"] == "IM_TEXTAREA" and bind[0]["OPTIONS"]["context"] == "LINES"
+        form = {"AUTH_ID": "OPTOKEN", "PLACEMENT": "IM_TEXTAREA", "PLACEMENT_OPTIONS": '{"dialogId":"chat55","URI":"/online/"}'}
+        assert c.post("/v1/bitrix/hint?DOMAIN=evil.bitrix24.ru", data=form).status_code == 403
+        assert c.post("/v1/bitrix/hint?DOMAIN=bitrix.freno.ru", data={**form, "AUTH_ID": "OTHER"}).status_code == 403
+        r = c.post("/v1/bitrix/hint?DOMAIN=bitrix.freno.ru&APP_SID=x", data=form)
+        assert r.status_code == 200 and "Подбор по VIN" in r.text
+        ticket = R.search(r'"ticket": "([^"]+)"', r.text).group(1)
+        # без пропуска — ни переписки, ни подбора (пароля подбора в настройках нет — страница закрыта)
+        assert c.get("/v1/bitrix/hint/dialog").status_code == 401
+        assert c.post("/v1/podbor", json={"text": "колодки"}).status_code == 404
+        d = c.get("/v1/bitrix/hint/dialog", headers={"X-Bx-Ticket": ticket}).json()
+        assert d["text"].startswith("VIN: XTA21703080123456\n") and "Сейчас посмотрю" not in d["text"]
+        assert c.post("/v1/podbor", json={"text": "колодки"}, headers={"X-Bx-Ticket": ticket}).status_code not in (401, 404)
+        assert c.post("/v1/bitrix/hint/used", json={"dialog": "bx-chat55-ab12", "turn": 1, "how": "insert"},
+                      headers={"X-Bx-Ticket": ticket}).json() == {"ok": True}
+        assert c.post("/v1/bitrix/hint/used", json={"dialog": "x", "turn": 1, "how": "send"},
+                      headers={"X-Bx-Ticket": ticket}).status_code == 422
+
+
 def test_pushto_recipients():
     from app.push import match_recipients, split_recipients
     assert split_recipients("9497384, +7 978 123-45-67 Заказ 10% готов") == ("9497384,+7978123-45-67", "Заказ 10% готов")

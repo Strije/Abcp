@@ -36,6 +36,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -52,6 +53,7 @@ from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
 from .llm import LLM
 from .podbor import schemes
+from .podbor.text import find_ident
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("avtodrug")
@@ -117,6 +119,12 @@ class PodborFeedback(BaseModel):
     comment: str = Field(default="", max_length=1000)
 
 
+class HintUsed(BaseModel):
+    dialog: str = Field(min_length=1, max_length=40)
+    turn: int = Field(ge=0, le=1000)
+    how: str = Field(pattern="^(insert|copy)$")
+
+
 class PodborTextOnly(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     memory: dict | None = None   # с памятью — разбор следующего сообщения разговора
@@ -171,6 +179,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["bx"] = bitrix.Bitrix(state["abcp"].http, bitrix.BitrixState(folder), s.bitrix_client_id,
                                     s.bitrix_client_secret, s.public_url)
         state["chat"] = bitrix.ChatStore(folder)
+        state["bx_tickets"] = bitrix.Tickets()
         state["llm"] = LLM(s)
         state["podbor"] = podbor.Engine(podbor.Direct(state["laximo"], state["abcp"], s.guest_profile_id),
                                         folder / "podbor", warranty_brands(), llm=state["llm"])
@@ -427,6 +436,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         Каждый подбор тратит запросы Laximo по тарифу магазина. Без пароля в настройках — подбора нет."""
         if state["s"].podbor_open:
             return   # массовое тестирование: PODBOR_OPEN=1 — без пароля (тратит Laximo и модель, держать включённым недолго)
+        if state["bx_tickets"].get(request.headers.get("x-bx-ticket", "")):
+            return   # подсказчик в чате Битрикс24: пропуск выдан оператору, которого проверил портал
         password = state["s"].podbor_password
         if not password:
             raise HTTPException(404, "Not Found")
@@ -826,6 +837,64 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             await bx.delivered(line, delivered)
         except Exception as e:
             log.info("bitrix delivery status failed: %s", e)
+        return {"ok": True}
+
+    # ---------- подсказчик подбора в чате открытой линии ----------
+
+    def hint_error(text: str, status: int = 200) -> Response:
+        return Response(f"<!doctype html><meta charset=utf-8><body style='font:15px sans-serif;padding:16px'>{text}</body>",
+                        status_code=status, media_type="text/html; charset=utf-8")
+
+    def bx_ticket(request: Request) -> dict:
+        t = state["bx_tickets"].get(request.headers.get("x-bx-ticket", ""))
+        if not t:
+            raise HTTPException(401, "Подсказчик устарел — закройте его и откройте «Подбор» заново")
+        return t
+
+    @app.post("/v1/bitrix/hint")
+    async def bitrix_hint(request: Request):
+        """Кнопка «Подбор» над полем ввода (IM_TEXTAREA). Битрикс присылает токен оператора: проверяем, что он выдан
+        нашему приложению на нашем портале, и отдаём страницу подбора с пропуском на этот диалог."""
+        bx: bitrix.Bitrix = state["bx"]
+        d = await bitrix_body(request)
+        domain = str(request.query_params.get("DOMAIN") or d.get("DOMAIN") or "").lower()
+        if not bx.configured or domain != state["s"].bitrix_domain.lower():
+            return hint_error("Чужой портал", 403)
+        try:
+            opts = json.loads(d.get("PLACEMENT_OPTIONS") or "{}")
+        except ValueError:
+            opts = {}
+        dialog, auth = str(opts.get("dialogId") or ""), str(d.get("AUTH_ID") or "")
+        if not re.fullmatch(r"chat\d+", dialog) or not auth:
+            return hint_error("Откройте «Подбор» из чата с клиентом.")
+        endpoint = f"https://{domain}/rest/"
+        try:
+            info = (await bitrix.operator_call(state["abcp"].http, endpoint, auth, "app.info", {})).get("result") or {}
+        except Exception as e:
+            log.info("bitrix hint auth failed: %s", type(e).__name__)
+            return hint_error("Битрикс24 не подтвердил вход — откройте «Подбор» ещё раз.", 403)
+        if str(info.get("CODE") or info.get("client_id") or "") != bx.client_id:
+            return hint_error("Чужое приложение", 403)
+        ticket = state["bx_tickets"].issue(auth, endpoint, dialog)
+        boot = json.dumps({"ticket": ticket, "dialog": dialog})
+        page = podbor_page.read_text(encoding="utf-8").replace("<head>", f"<head>\n<script>window.BX_HINT = {boot};</script>", 1)
+        return Response(page, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/bitrix/hint/dialog")
+    async def bitrix_hint_dialog(after: int = 0, t: dict = Depends(bx_ticket)):
+        """Сообщения клиента из этого чата (от имени оператора). after — последнее уже разобранное сообщение."""
+        try:
+            d = await bitrix.operator_call(state["abcp"].http, t["endpoint"], t["auth"], "im.dialog.messages.get",
+                                           {"DIALOG_ID": t["dialog"], "LIMIT": 50})
+        except Exception as e:
+            log.info("bitrix hint dialog failed: %s", type(e).__name__)
+            raise HTTPException(502, "Битрикс24 не отдал переписку — попробуйте ещё раз")
+        return bitrix.client_text(d.get("result") or {}, max(after, 0), find_ident)
+
+    @app.post("/v1/bitrix/hint/used")
+    async def bitrix_hint_used(body: HintUsed, t: dict = Depends(bx_ticket)):
+        if state.get("journal"):
+            state["journal"].used(body.dialog, body.turn, body.how)
         return {"ok": True}
 
     @app.get("/v1/chat/status")

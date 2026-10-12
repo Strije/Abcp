@@ -84,6 +84,11 @@
   .composer textarea { min-height: 70px; max-height: 40vh; }
   .composer .row { margin: 8px 0 0; }
   .empty { color: var(--muted); text-align: center; padding: 30px 10px; }
+  /* Подсказчик в чате Битрикс24: окно небольшое — без заголовка и пояснения */
+  html.bx h1, html.bx .hint { display: none; }
+  html.bx main { padding: 8px 12px 20px; }
+  .bx-only { display: none; }
+  html.bx .bx-only { display: inline-block; }
   @media (max-width: 600px) {
     /* На телефоне поле ввода не должно съедать полэкрана */
     .hint, #state { display: none; }
@@ -110,6 +115,7 @@ VIN/FRAME: X9FKXXEEBKCB57566
 Запрос состоит из следующих позиций: подшипник задней ступицы, масляный фильтр"></textarea>
     <div class="row">
       <button class="main" id="go">Отправить</button>
+      <button class="bx-only" id="pull" title="Взять из чата сообщения клиента, которые робот ещё не разбирал">Новые сообщения из чата</button>
       <button id="photo-btn" title="Фото СТС, ПТС или таблички с VIN — можно вставить в поле через Ctrl+V или перетащить">📷 VIN с фото</button>
       <input type="file" id="photo" accept="image/*" hidden>
       <button id="reset" title="Забыть машину и разговор">Новый клиент</button>
@@ -121,7 +127,12 @@ VIN/FRAME: X9FKXXEEBKCB57566
 </main>
 <script>
 const $ = s => document.querySelector(s);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+// Подсказчик в чате Битрикс24: страница открыта кнопкой «Подбор» над полем ввода. Вход — по пропуску вместо пароля,
+// сообщения клиента берём из чата сами, ответ вставляем в поле ввода чата — отправляет менеджер, не робот.
+const BX = window.BX_HINT || null;
+const H = (json = true) => Object.assign(json ? {"Content-Type": "application/json"} : {}, BX ? {"X-Bx-Ticket": BX.ticket} : {});
+if (BX) document.documentElement.classList.add("bx");
+const esc =s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = x => Math.round(x).toLocaleString("ru-RU") + " ₽";
 const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one
   : (n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14)) ? few : many;
@@ -148,13 +159,16 @@ const KEEP_TURNS = 12;   // столько шагов разговора хра�
 // в журнал для разбора (без телефонов и почты) — по номеру разговора, он же у оценок «помог / не помог».
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";   // после перезагрузки — к концу разговора
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-let chat = {memory: null, turns: [], dialog: newId(), step: 0};
-try { chat = Object.assign(chat, JSON.parse(localStorage.getItem("podbor_chat") || "{}")); } catch (e) {}
-if (!chat.dialog) chat.dialog = newId();
+// У подсказчика свой разговор на каждый чат Битрикса; в журнале он — «bx-chatNNN-…»
+const CHAT_KEY = BX ? "podbor_chat_bx_" + BX.dialog : "podbor_chat";
+const dialogId = () => BX ? `bx-${BX.dialog}-${newId().slice(-4)}` : newId();
+let chat = {memory: null, turns: [], dialog: dialogId(), step: 0, bxLast: 0};
+try { chat = Object.assign(chat, JSON.parse(localStorage.getItem(CHAT_KEY) || "{}")); } catch (e) {}
+if (!chat.dialog) chat.dialog = dialogId();
 function saveChat() {
   chat.turns = chat.turns.slice(-KEEP_TURNS);
-  try { localStorage.setItem("podbor_chat", JSON.stringify(chat)); }
-  catch (e) { try { localStorage.removeItem("podbor_chat"); } catch (e2) {} }   // переполнено — не беда
+  try { localStorage.setItem(CHAT_KEY, JSON.stringify(chat)); }
+  catch (e) { try { localStorage.removeItem(CHAT_KEY); } catch (e2) {} }   // переполнено — не беда
 }
 
 // Настройки ответа клиенту — запоминаются в этом браузере
@@ -168,7 +182,7 @@ async function redraft() {
   // Пересобрать ответы с новыми настройками — без новых запросов в каталог
   for (const t of chat.turns) {
     if (!t.result || !t.result.status) continue;
-    const r = await fetch("/v1/podbor/text", {method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await fetch("/v1/podbor/text", {method: "POST", headers: H(),
                                               body: JSON.stringify({result: t.result, ...opts})});
     if (r.ok) t.result.text = (await r.json()).text;
   }
@@ -189,7 +203,7 @@ async function go(vehicle, again) {
   draw();
   $("#go").disabled = true; $("#state").textContent = "Ищем в каталоге и у поставщиков…";
   try {
-    const r = await fetch("/v1/podbor", {method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await fetch("/v1/podbor", {method: "POST", headers: H(),
       body: JSON.stringify({text, vehicle: vehicle ?? null, memory: chat.memory, dialog: chat.dialog,
                             turn: turn.step || 0, ...opts})});
     const data = await r.json();
@@ -205,7 +219,7 @@ async function go(vehicle, again) {
 }
 
 function resetChat() {
-  chat = {memory: null, turns: [], dialog: newId(), step: 0}; saveChat(); draw();
+  chat = {memory: null, turns: [], dialog: dialogId(), step: 0, bxLast: 0}; saveChat(); draw();
   $("#ocr").hidden = true; $("#state").textContent = "Разговор очищен"; $("#text").focus();
 }
 
@@ -277,7 +291,8 @@ function botMessage(t, ti) {
     ${d.text ? `<pre id="draft-${ti}">${esc(d.text)}</pre>` : ""}
     ${choose}
     <div class="tools">
-      ${d.text ? `<button onclick="copyDraft(${ti},this)">Скопировать ответ</button>` : ""}
+      ${d.text ? (BX ? `<button class="main" onclick="insertDraft(${ti},this)">Вставить в ответ</button>`
+                     : `<button onclick="copyDraft(${ti},this)">Скопировать ответ</button>`) : ""}
       ${more ? `<button onclick="toggle(${ti},this)">Подробности</button>` : ""}
       <span class="muted" style="align-self:center;font-size:13px">${d.seconds} с</span>
       <span style="margin-left:auto;display:flex;gap:6px">
@@ -320,7 +335,7 @@ async function rate(ti, good) {
     if (comment === null) return;
   }
   try {
-    const r = await fetch("/v1/podbor/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await fetch("/v1/podbor/feedback", {method: "POST", headers: H(),
       body: JSON.stringify({dialog: chat.dialog, turn: t.step || 0, good, comment})});
     if (!r.ok) throw new Error();
     t.rated = good; saveChat(); draw();
@@ -344,7 +359,7 @@ async function scheme(ti, pi, vi, btn) {
   img.addEventListener("click", () => window.open(src, "_blank", "noopener"));
   if (!s.code) return;
   try {
-    const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await fetch("/v1/laximo/listImageMapByUnit", {method: "POST", headers: H(),
                                                              body: JSON.stringify({catalog: s.catalog, ssd: s.ssd, unitId: s.unit_id})});
     const map = await r.json();
     const hits = (Array.isArray(map) ? map : []).filter(m => String(m.code) === String(s.code));
@@ -366,6 +381,71 @@ async function scheme(ti, pi, vi, btn) {
 
 function copyDraft(ti, btn) {
   navigator.clipboard.writeText($("#draft-" + ti).textContent).then(() => { btn.textContent = "Скопировано"; });
+}
+
+// ---------- подсказчик в чате Битрикс24 ----------
+// Вставка в поле ввода чата — только через B24JsSDK (im:setImTextareaContent). В коробке старой версии команды может
+// не быть: тогда за полторы секунды ответа нет — копируем в буфер, менеджер вставляет сам (Ctrl+V).
+let b24 = null;
+function frame() {
+  b24 = b24 || new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/@bitrix24/b24jssdk@2.2.0/dist/umd/index.min.js";
+    s.onload = () => window.B24Js.initializeB24Frame().then(ok, fail);
+    s.onerror = () => fail(new Error("не загрузилась библиотека Битрикс24"));
+    document.head.appendChild(s);
+  });
+  return b24;
+}
+
+function copyText(text) {
+  // В рамке Битрикса navigator.clipboard часто запрещён — сначала старый способ через выделение
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  if (!ok && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+async function insertDraft(ti, btn) {
+  const text = $("#draft-" + ti).textContent, turn = chat.turns[ti];
+  let how = "copy";
+  try {
+    const $b24 = await Promise.race([frame(), new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 1500))]);
+    const r = await $b24.parent.message.send("im:setImTextareaContent",
+      {requestId: window.B24Js.Text.getUuidRfc4122(), text, isSafely: true, safelyTime: 1500});
+    if (r && r.success) how = "insert";
+  } catch (e) {}
+  if (how === "copy") copyText(text);
+  btn.textContent = how === "insert" ? "Вставлено — проверьте и отправьте" : "Скопировано — вставьте в ответ (Ctrl+V)";
+  fetch("/v1/bitrix/hint/used", {method: "POST", headers: H(),
+    body: JSON.stringify({dialog: chat.dialog, turn: turn.step || 0, how})}).catch(() => {});
+}
+
+// Сообщения клиента из чата: при первом открытии — недавняя переписка, дальше — только новые (память — у робота)
+async function pull() {
+  $("#pull").disabled = true;
+  $("#state").textContent = "Читаем переписку с клиентом…";
+  try {
+    const r = await fetch("/v1/bitrix/hint/dialog?after=" + (chat.bxLast || 0), {headers: H(false)});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || ("Ошибка " + r.status));
+    chat.bxLast = d.last; saveChat();
+    const photo = d.photos ? ` Клиент прислал фото (${d.photos}): если там VIN — сохраните снимок и нажмите «📷 VIN с фото».` : "";
+    if (!d.text) {
+      $("#state").textContent = (chat.turns.length ? "Новых сообщений клиента нет." : "Клиент пока ничего не написал.") + photo;
+      return;
+    }
+    $("#text").value = d.text;
+    await go();
+    if (photo) $("#state").textContent += " ·" + photo;
+  } catch (e) {
+    $("#state").textContent = e.message;
+  } finally {
+    $("#pull").disabled = false;
+  }
 }
 
 // ---------- VIN с фото (СТС, ПТС, табличка) ----------
@@ -482,7 +562,7 @@ $("#text").addEventListener("drop", e => {
 // Расход запросов к Laximo (тариф помесячный, лимит неизвестен — следим)
 async function showUsage() {
   try {
-    const r = await fetch("/v1/podbor/laximo-usage");
+    const r = await fetch("/v1/podbor/laximo-usage", {headers: H(false)});
     if (!r.ok) return;
     const u = await r.json();
     $("#lx-usage").textContent = `· Laximo: сегодня ${u.today}, за месяц ${u.month} запросов`;
@@ -494,7 +574,9 @@ $("#go").addEventListener("click", () => go());
 $("#reset").addEventListener("click", resetChat);
 // Enter — отправить, Shift+Enter — новая строка (заявку из ABCP проще вставить, чем набирать)
 $("#text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } });
+$("#pull").addEventListener("click", pull);
 draw();
+if (BX) { frame().catch(() => {}); pull(); }   // библиотеку Битрикса — заранее, чтобы «Вставить» сработал сразу
 </script>
 </body>
 </html>
