@@ -2459,3 +2459,29 @@ def test_offer_numbers_cleaned_like_app():
     line = _offer_line(o, True)
     assert "202026SX" in line and "202 026-SX" not in line
     assert "202026SX" not in _offer_line(o, False)   # без «артикулов» номера нет вовсе
+
+
+class FakeDiesel(Fake):
+    """Дизель: в дереве есть «Свечи накаливания», а свечей зажигания нет вовсе."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[
+                node(1, "Детали для ТО", link=False, children=[node(2, "Фильтр масляный")]),
+                node(250, "Система накаливания", link=False, children=[node(254, "Свечи накаливания")])])
+        if method == "listQuickDetail" and int(params["quickGroupId"]) == 254:
+            self.calls.append((method, 254, params["all"]))
+            return [cat("Двигатель", unit("Свечи накаливания", [det("1854999", "Свеча накаливания", "5")]))]
+        return super().answer(method, params)
+
+
+def test_spark_plugs_on_diesel_become_glow_plugs():
+    """Mercedes E 290 Turbodiesel (12.10): «Свечи зажигания» → «подбор неуверенный, передано менеджеру».
+    На дизеле свечей зажигания нет — показываем свечи накаливания и говорим почему."""
+    res = run("X9FKXXEEBKCB57566 Свечи зажигания", engine=Engine(FakeDiesel(), None, set()))
+    p = res["positions"][0]
+    assert p["status"] != "not_found" and p["query"] == "Свечи накаливания"
+    assert p["variants"][0]["oem"] == "1854999" and "дизельный" in p["note"]
+    assert not res.get("handoff")
+    # Бензиновая машина (групп накаливания нет): свечи накаливания не подсовываем
+    res = run("X9FKXXEEBKCB57566 Свечи зажигания")
+    assert not any("накал" in v["name"].lower() for p in res["positions"] for v in p["variants"])

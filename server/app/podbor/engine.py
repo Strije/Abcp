@@ -833,6 +833,19 @@ class Engine:
                                settled=True)
             await self._confirm_replacements(v, pos)
             return pos
+        if _SPARK.search(query) and not any("свеч" in g.name.lower() and "зажиган" in g.name.lower()
+                                            for g in tree.groups.values()):
+            # «Свечи зажигания» на дизеле (Mercedes E 290 Turbodiesel, 12.10): группы свечей зажигания в каталоге нет,
+            # правила находили «Свечи накаливания» по слову «свечи» и тут же выбрасывали за потерянное «зажигания» —
+            # «передано менеджеру». Клиенту нужны свечи накаливания: показываем их и говорим почему. У бензиновой
+            # машины группы накаливания нет (strict в podbor_rules) — останется «не нашли»
+            alt = await self._position(v, tree, "свечи накаливания", want, kind)
+            if alt["status"] != "not_found":
+                alt.update(query="Свечи накаливания", settled=True,
+                           note="У вашей машины дизельный двигатель — свечей зажигания у него нет, "
+                                "вместо них свечи накаливания.")
+                await self._confirm_replacements(v, alt)
+                return alt
         pos = await self._position(v, tree, query, want, kind)
         if pos["status"] == "not_found" and want.axis == "rear" and _DISC.search(query):
             # «Диски задние» на машине с барабанами: дисков в каталоге нет — даём барабаны и говорим об этом
@@ -2877,6 +2890,7 @@ WEAK_SCORE = 0.65   # оценка группы каталога ниже — р
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
 _BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)
 _DISC = re.compile(r"диск\w*\s+тормоз|тормозн\w*\s+диск|^диск", re.I)
+_SPARK = re.compile(r"свеч\w*\s+(?:\w+\s+)?зажиган|зажиган\w*\s+свеч", re.I)
 _AROUND = re.compile(r"\bв\s+круг\b|\bпо\s+кругу\b|\bсо\s+всех\s+сторон\b|\bна\s+все\s+колес\w*|\bна\s+все\s+колёс\w*"
                      r"|\bвсе\s+четыре\b|\bна\s+4\s+колеса\b|\bна\s+все\s+4\b", re.I)
 
