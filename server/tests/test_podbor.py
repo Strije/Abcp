@@ -2226,6 +2226,54 @@ def test_subframe_bushing_from_subframe_unit_not_from_lever():
     assert "передали менеджеру" in none["text"]
 
 
+def test_vectors_and_model_find_part_in_client_car(monkeypatch):
+    """«Векторы + модель» (опыт 12.10): модель переводит слова клиента в язык каталога, векторы выбирают узлы ЭТОЙ машины,
+    модель выбирает деталь из настоящих деталей с номерами; второе исполнение — подсказкой «проверьте»."""
+    import json
+    import numpy as numpy_
+    from app.podbor import emb as EMB
+    from app.podbor import understand as U
+    np = numpy_
+
+    class Units(FakeUnits):
+        def answer(self, method, params):
+            if method == "listDetailByUnit" and params["unitId"] == "12":
+                return [{"name": "Бампер передний", "codeOnImage": "1", "oem": "52119-00001"}]
+            return super().answer(method, params)
+
+    class Vec:
+        np = numpy_
+
+        async def embed(self, texts, instruct=None):
+            # узел «Подрамник» и все фразы-запросы — рядом, «Бампер» — в стороне
+            return [np.array([0.0, 1.0]) if "Бампер" in t else np.array([1.0, 0.0]) for t in texts]
+
+    class Model:
+        enabled = True
+        asked: list = []
+
+        async def chat(self, system, user, max_tokens=0):
+            self.asked.append(system)
+            if system == U.CATALOG_NAMES_SYSTEM:
+                return '{"part": "подрамник", "ru": ["балка поперечная"], "en": ["crossmember"], "unit": ["подвеска"]}'
+            if system == U.PICK_DETAIL_SYSTEM:
+                assert "железяка" in user and "Сообщение клиента" not in user   # только сама позиция
+                lines = user.split("\n")
+                n = next(int(x.split(".")[0]) for x in lines if "БАЛКА ПОПЕРЕЧНАЯ" in x)
+                k = next(int(x.split(".")[0]) for x in lines if "КРОНШТЕЙН ПОДРАМНИКА" in x)
+                return json.dumps({"pick": n, "assembly": 0, "other": k})
+            return "{}"
+
+    monkeypatch.setattr(EMB, "get", lambda: Vec())
+    e = Engine(Units(), None, set(), llm=Model())
+    v = asyncio.run(e.catalog.vehicles("XW7BF4FK30S064389"))[0]
+    pos = asyncio.run(e._by_vectors(v, "железяка под мотором", T.Side()))
+    assert pos and pos.get("via_vectors") and pos["variants"][0]["oem"] == "48099-00001"
+    assert "полном каталоге" in pos["note"] and "возможен и вариант" in pos["note"]
+    monkeypatch.setattr(EMB, "get", lambda: None)                     # нет векторов — путь выключен, как раньше
+    assert asyncio.run(e._by_vectors(v, "железяка под мотором", T.Side())) is None
+
+
 def test_bushing_of_a_unit_is_not_guessed_and_known_parts_never_use_units():
     eng = Engine(FakeUnits(), None, set())
     res = run("XW7BF4FK30S064389 сайлентблок подрамника", engine=eng)

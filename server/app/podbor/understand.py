@@ -288,3 +288,59 @@ async def pick_units(llm: Any, query: str, names: list[str]) -> list[int]:
         if str(x).isdigit() and 1 <= int(x) <= len(names) and int(x) - 1 not in out:
             out.append(int(x) - 1)
     return out[:3]
+
+
+# ---------- «векторы + модель»: деталь вне быстрых групп (опыт 12.10, runs/2026-10-12-unitvec) ----------
+
+CATALOG_NAMES_SYSTEM = """Ты эксперт по электронным каталогам оригинальных запчастей (Laximo, ETKA, EPC, TecDoc).
+Клиент назвал деталь своими словами — с жаргоном, опечатками, лишними словами. Определи, какую деталь он имеет в виду для
+этой машины, и напиши, как она называется в каталогах производителя.
+Ответь ТОЛЬКО JSON:
+{"part": "одно короткое название детали по-русски",
+ "ru": ["3-5 вариантов названия, как в каталогах: полное, сокращённое, синонимы"],
+ "en": ["2-3 названия по-английски, как в японских/американских каталогах"],
+ "unit": ["1-2 узла или раздела каталога, где она лежит"]}
+Не выдумывай номера. Если во фразе нет детали — {"part": ""}."""
+
+
+async def catalog_names(llm: Any, query: str, car: str) -> dict | None:
+    """Слова клиента → названия из каталогов (ru + en + узел): «топливный быстросъём» → «соединитель топливопровода».
+    Это знание модели об устройстве машины; номеров она не называет. Без этого шага векторы находили верную деталь в
+    первых 20 кандидатах в 30 случаях из 55, с ним — в 54. Ошибка — None."""
+    if not llm or not getattr(llm, "enabled", False) or not query.strip():
+        return None
+    try:
+        txt = await llm.chat(CATALOG_NAMES_SYSTEM, f"Машина: {car}\nДеталь: {mask(query)[:200]}", max_tokens=600)
+        d = json.loads(re.search(r"\{.*\}", txt or "", re.S).group(0))
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(d, dict) or not str(d.get("part") or "").strip():
+        return None
+    strs = lambda k: [str(x)[:80] for x in d.get(k) or [] if isinstance(x, str) and x.strip()][:6]  # noqa: E731
+    return {"part": str(d["part"])[:80], "ru": strs("ru"), "en": strs("en"), "unit": strs("unit")}
+
+
+PICK_DETAIL_SYSTEM = """Ты подбираешь автозапчасть. Дана машина, деталь, которую просит клиент, и пронумерованный список
+деталей ЭТОЙ машины из каталога (название — узел). Выбери ОДНУ деталь, которая и есть то, что просит клиент. Если отдельно
+такой детали нет, но есть узел в сборе, в который она входит и который продают вместо неё, — выбери его как assembly.
+Если ничего не подходит — 0. Не выбирай соседнюю деталь того же узла, крепёж или похожую по названию, но другую.
+Если клиент назвал признак (вентилируемый, задний, левый, наружный) — выбери деталь с этим признаком. Если в списке есть
+та же деталь в другом исполнении (вентилируемый и обычный диск, с АБС и без) — каталог по VIN не различает, а на машине
+стоит одна из них: укажи её номер как other.
+Ответ ТОЛЬКО JSON: {"pick": номер или 0, "assembly": номер или 0, "other": номер или 0}"""
+
+
+async def pick_detail(llm: Any, car: str, query: str, part: str, names: list[str]) -> dict:
+    """Выбор детали из настоящих деталей машины клиента (номера с нуля; -1 — нет). Только сама позиция, без всего
+    сообщения клиента: «Прокладка гбц, 8 впускных…» — на «впускной клапан» модель выбирала прокладку ГБЦ."""
+    none = {"pick": -1, "assembly": -1, "other": -1}
+    if not llm or not getattr(llm, "enabled", False) or not names:
+        return none
+    user = (f"Машина: {car}\nДеталь: {mask(query)[:200]}" + (f" (по смыслу: {part})" if part else "")
+            + "\n\nСписок:\n" + "\n".join(f"{k}. {n}" for k, n in enumerate(names, 1)))
+    try:
+        d = json.loads(re.search(r"\{.*\}", await llm.chat(PICK_DETAIL_SYSTEM, user, max_tokens=150) or "", re.S).group(0))
+    except Exception:  # noqa: BLE001
+        return none
+    num = lambda x: int(x) - 1 if isinstance(x, int) and 1 <= x <= len(names) else -1  # noqa: E731
+    return {k: num(d.get(k)) for k in none} if isinstance(d, dict) else none
