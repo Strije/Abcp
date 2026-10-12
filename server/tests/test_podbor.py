@@ -675,6 +675,58 @@ def test_execution_named_by_client_goes_first_other_explained():
     assert same["note"] == ""                                  # одно исполнение — пояснять нечего
 
 
+class FakeFilter(Fake):
+    """Renault R19 (проба 12.10): у поворотного кулака два номера, VIN комплектацию не различает; каталог даёт вопрос
+    «АБС: Да / Нет» (getFilterByDetail), а в примечаниях — «АБС = Да» / «АБС = Нет» (среди нескольких «Примечаний»)."""
+
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(77, "Кулак поворотный")])
+        if method == "listQuickDetail":
+            def knuckle(oem, abs_):
+                return {"name": "ПОВОРОТНЫЙ КУЛАК", "oem": oem, "codeOnImage": "1", "filter": "QUJTX0AxMjEzQFllcyNObw__",
+                        "ssd": "$d$", "attributes": [
+                            {"key": "note", "name": "Примечание", "value": "7700787729 ;7700827251"},
+                            {"key": "note", "name": "Примечание", "value": f"Код оборудования = 11-,12-;АБС = {abs_}"},
+                            {"key": "note", "name": "Примечание", "value": "Размер (Х) = 54"}]}
+            return [cat("Передняя подвеска", unit("Поворотный кулак", [knuckle("7700827247", "Нет"),
+                                                                       knuckle("7700827999", "Да")]))]
+        if method == "getFilterByDetail":
+            self.calls.append(("filter", params["detailId"], params["filter"]))
+            return [{"name": "АБС", "type": "list", "values": [{"name": "Да", "ssdModification": "~$a$"},
+                                                               {"name": "Нет", "ssdModification": "~$b$"}]}]
+        return super().answer(method, params)
+
+
+def test_catalog_filter_question_and_answer_narrows():
+    """Номера различает комплектация, которую VIN не знает: спрашиваем вопрос самого каталога, ответ «без абс» сужает
+    выбор по примечаниям каталога — без новых запросов."""
+    fake = FakeFilter()
+    e = Engine(fake, None, set())
+    first = run("X9FKXXEEBKCB57566 поворотный кулак", e)
+    p = first["positions"][0]
+    assert p["status"] == "choose" and "АБС — Да или Нет" in p["question"], p["question"]
+    assert ("filter", "1", "QUJTX0AxMjEzQFllcyNObw__") in fake.calls
+    calls = len(fake.calls)
+    ans = run("без абс", e, memory=first["memory"])
+    q = ans["positions"][0]
+    assert [v["oem"] for v in q["variants"]] == ["7700827247"] and "АБС — Нет" in q["note"]
+    assert not [c for c in fake.calls[calls:] if c[0] in ("filter", "listQuickDetail")]   # ответ — без новых запросов
+    assert len(ans["memory"]["positions"]) == 1                                           # заменил позицию, не добавил
+    from app.podbor.engine import filter_pick
+    mem = [{"filter_q": {"name": "АБС", "values": ["Да", "Нет"]}}]
+    assert filter_pick("есть", mem) == (0, "Да") and filter_pick("Нет", mem) == (0, "Нет")
+    assert filter_pick("да нет наверное", mem) is None and filter_pick("а передние колодки?", mem) is None
+    # «Не знаю», «хз», «а что это?» — не сужаем, подсказываем, как узнать, и передаём менеджеру
+    from app.podbor.engine import filter_unsure
+    for t in ("не знаю", "хз", "без понятия", "а что это?", "как проверить", "да нет"):
+        assert filter_unsure(t, mem) == 0, t
+    assert filter_unsure("а передние колодки?", mem) is None and filter_unsure("нет", mem) is None
+    dunno = run("хз если честно", e, memory=first["memory"])
+    d = dunno["positions"][0]
+    assert len(d["variants"]) == 2 and "значок ABS" in d["note"] and dunno["handoff"]
+
+
 def test_numbers_cleaned_before_abcp_like_app():
     """Номер в ABCP — как в приложении (cleanNumber): буквы и цифры, заглавными; ведущие нули остаются."""
     import httpx
@@ -2639,3 +2691,30 @@ def test_same_answer_regardless_of_history():
     again = run("X9FKXXEEBKCB57566 ремень генератора, колодки передние")
     brief = lambda r: [(p["query"], p["status"], [v["oem"] for v in p["variants"]]) for p in r["positions"]]  # noqa: E731
     assert brief(first) == brief(again)
+
+
+class FakeRenaultSides(Fake):
+    """Renault R19: сторона кулака — только в названиях прежних номеров (replacement) по-турецки, и не у каждой записи."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(499, "Поворотный кулак")])
+        if method == "listQuickDetail":
+            def k(oem, name, repl):
+                return {"name": name, "oem": oem, "codeOnImage": "1" if oem.endswith("7") else "2", "match": True,
+                        "attributes": [{"key": "replacement", "name": "replacement", "value": repl},
+                                       {"key": "note", "name": "Примечание", "value": "Размер (Х) = 54"}]}
+            dets = [k("7700827247", "ПОВОРОТНЫЙ КУЛАК П", "7700787729 ;7700827251 SOL AKS TAŞIYICI"),
+                    k("7700827248", "ПОВОРОТНЫЙ КУЛАК", "7700787730 ;7700827252 ;7700768323 SAĞ AKS TAŞIYICI"),
+                    k("7700827247", "ПОВОРОТНЫЙ КУЛАК П", "7700787729 ;7700827251 SOL AKS TAŞIYICI"),
+                    k("7700827248", "ПОВОРОТНЫЙ КУЛАК", "7700787730 ;7700827252 ")]
+            return [cat("Передняя подвеска", unit("Хвостовик - Тормозной диск", dets))]
+        return super().answer(method, params)
+
+
+def test_renault_side_in_replaced_numbers_turkish():
+    """R19 (12.10): «поворотный кулак передний левый» → оба кулака «разные детали узла»: сторона только в «SOL/SAĞ AKS
+    TAŞIYICI» у прежних номеров, а у второй записи правого кулака её нет вовсе."""
+    assert T.side("7700827251 SOL AKS TAŞIYICI").lr == "left" and T.side("SAĞ AKS TAŞIYICI").lr == "right"
+    assert T.side("SOLENOID").lr == "" and T.side("SAGE").lr == ""
+    p = run("X9FKXXEEBKCB57566 поворотный кулак передний левый", engine=Engine(FakeRenaultSides(), None, set()))["positions"][0]
+    assert [v["oem"] for v in p["variants"]] == ["7700827247"]
