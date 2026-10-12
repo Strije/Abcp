@@ -219,10 +219,82 @@ async def units():
     print(f"Машин со списком узлов: {done} (новых {fresh}); узлов всего {total}")
 
 
+async def parts(per: str = "1"):
+    """Словарь деталей по семействам каталогов: для 1–2 машин каждого каталога (с самым длинным списком узлов) — детали всех
+    узлов (listDetailByUnit, по запросу на узел, навсегда на диск). Итог — parts_dict/<каталог>.json: название детали →
+    в каких узлах встречается и сколько раз. Нужен, чтобы модель и правила знали, где у этого семейства бывают шланги,
+    датчики, прокладки, и как их называют (по-русски и по-английски: «ТРУБКА ВАКУУМНОГО НАСОСА», «HOSE,BRAKE BOOSTER VACUUM»).
+    Повторный запуск продолжает: скачанное лежит в unit_details/."""
+    ready = json.loads((CACHE / "fleet_ready.json").read_text(encoding="utf-8"))
+    from ..config import load
+    from ..laximo import Laximo, Usage
+    lx = Laximo(load())
+    lx.usage = Usage(None)
+    cat = _catalog(Direct(lx, None, ""))
+    out_dir = CACHE / "parts_dict"
+    out_dir.mkdir(exist_ok=True)
+    fams: dict[str, list[dict]] = collections.defaultdict(list)
+    for f in ready:
+        fams[f.get("catalog") or f["make"]].append(f)
+    asked = 0
+    try:
+        for family, cars in sorted(fams.items()):
+            sized = []
+            for f in cars:   # самые подробные машины семейства: у них больше узлов
+                try:
+                    vs = await cat.vehicles(f["vin"])
+                    if vs:
+                        sized.append((len(await cat.units(vs[0])), f, vs[0]))
+                except Exception as e:   # noqa: BLE001
+                    print(f"  {family}: {type(e).__name__} {str(e)[:60]}", flush=True)
+            sized.sort(key=lambda x: -x[0])
+            names: dict[str, dict] = {}
+            for n, f, v in sized[:int(per)]:
+                await cat.unit_tree(v)
+                ids = cat._unit_ids.get(cat.tree_key(v) + "-u") or {}
+                for gid, u in ids.items():
+                    for attempt in range(4):
+                        t0 = time.time()
+                        try:
+                            ds = await cat._unit_details(v, gid)
+                            break
+                        except LaximoError as e:
+                            if "TOO_MANY" not in str(e) or attempt == 3:
+                                ds = []
+                                break
+                            await asyncio.sleep(20 * (attempt + 1))
+                        except Exception:   # noqa: BLE001 — сеть: узел пропускаем, повторный запуск докачает
+                            ds = []
+                            break
+                    if time.time() - t0 > 0.05:
+                        asked += 1
+                        await asyncio.sleep(0.5)   # общий лимит Laximo 600 в минуту: оставляем место боевому роботу
+                    for d in ds:
+                        key = re.sub(r"\s+", " ", d.name.strip().upper())
+                        if not key:
+                            continue
+                        e = names.setdefault(key, {"name": d.name.strip(), "n": 0, "units": collections.Counter(), "oem": d.oem})
+                        e["n"] += 1
+                        e["units"][u["name"]] += 1
+                    cat._details.clear()   # память: сервер маленький
+                print(f"  {family:16} {v.summary()[:44]:44} узлов {n:4}, названий деталей {len(names):6}, запросов {asked}",
+                      flush=True)
+            rows = sorted(({"name": e["name"], "n": e["n"], "oem": e["oem"], "units": e["units"].most_common(6)}
+                           for e in names.values()), key=lambda r: -r["n"])
+            (out_dir / f"{_safe(family)}.json").write_text(json.dumps({"family": family, "parts": rows}, ensure_ascii=False),
+                                                           encoding="utf-8")
+            cat._vehicles.clear()
+    finally:
+        await lx.close()
+    print(f"Готово: семейств {len(fams)}, запросов к Laximo {asked}")
+
+
 if __name__ == "__main__":
     cmd, args = sys.argv[1], sys.argv[2:]
     if cmd == "units":
         asyncio.run(units())
+    elif cmd == "parts":
+        asyncio.run(parts(*args))
     elif cmd == "pick":
         pick(*args)
     elif cmd == "trees":
