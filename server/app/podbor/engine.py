@@ -1479,6 +1479,16 @@ class Engine:
                 return len(own) < most and len(own | {s for s in known if any(T.same(s, t) for t in names[id(c.d)])}) < most
             if any(c.member and len(gcov.get(c.d.group_id, ())) == most for c in cands.values()):
                 cands = {k: c for k, c in cands.items() if not (c.member and thin(c))}
+        # «Ролик приводного ремня» у Nissan Pathfinder (12.10): ролики там — «Холостой шкив», натяжитель — «Автоматическое
+        # натяжное устройство», слова «ролик» нет ни у кого, и ремни («Ремень привода вентилятора…») набирали больше за
+        # «ремень» и «привод». Но «ремень» у клиента — уточнение («ролик чего»), а не деталь. Главного слова нет ни в одном
+        # названии — деталь, чьё главное слово и есть уточнение клиента, не берём, если есть другие
+        head = T.head(known) if len(known) >= 2 else None
+        quals = [s for s in known if s != head and s not in T.ADJ]
+        if head and quals and not any(any(T.same(head, t) for t in names[id(c.d)]) for c in cands.values()):
+            host = {k for k, c in cands.items() if any(T.same(_name_head(c.d.name), s) for s in quals)}
+            if host and len(host) < len(cands):
+                cands = {k: c for k, c in cands.items() if k not in host}
         for k, c in cands.items():
             if {"left", "right"} <= lrs.get(k, set()):
                 # Наконечник Lexus RX: «Левый» и «Правый рулевой наконечник» — оба 45460-29435.
@@ -1904,7 +1914,7 @@ _ATTRS = [(re.compile(r"наружн|внешн", re.I), re.compile(r"внутр
 # Исполнения одной детали, которые каталог по VIN не различает, а на машине стоит одно (T4 1992: диск с плавающим суппортом
 # — обычный, с рамочным — вентилируемый). Клиент назвал исполнение — его первым, второе не прячем: клиент мог ошибиться
 # (замечание пользователя 12.10). (как назвал клиент, другое исполнение, как отличить)
-_EXECUTIONS = [(re.compile(r"(?<!не)(?<!не\s)вентил", re.I), re.compile(r"невентил|сплошн|обычн|(?<![а-яё])не\s+вентил", re.I),
+_EXECUTIONS = [(re.compile(r"(?<!не)(?<!не\s)вентилир", re.I), re.compile(r"невентилир|сплошн|обычн|(?<![а-яё])не\s+вентилир", re.I),
                 "вентилируемый", "обычный",
                 "у вентилируемого два диска с каналами между ними, он заметно толще")]
 
@@ -2960,7 +2970,7 @@ def differ_lines(d: dict, called: dict[str, str], numbers: bool = False) -> list
 _ORDERED = re.compile(r"уже\s+(?:заказ|оплат)|оплачен|заказал\w*|когда\s+(?:придёт|придет|ожидать)", re.I)
 _NOTE_SIZE = re.compile(r"(?:Ø|d\s*=\s*)?\d{2,3}\s*[xх×]\s*\d{1,3}(?:\s*(?:mm|мм))?|(?:Ø|d\s*=\s*)\d{2,3}(?:\s*(?:mm|мм))?|\b\d{3}\s*(?:mm|мм)\b", re.I)
 _NOTE_KIT = re.compile(r"спортивн\w*|усилен\w*|с\s+датчик\w*|без\s+датчик\w*|с\s+abs|без\s+abs|4x4|4wd|полный\s+привод|"
-                       r"невентил\w*|вентил\w*|с\s+индик\w*|без\s+индик\w*", re.I)   # «Тормозной диск (вентилир.)»
+                       r"невентилир\w*|вентилир\w*|с\s+индик\w*|без\s+индик\w*", re.I)   # «Тормозной диск (вентилир.)»; не «вентилятор» (Nissan, 12.10)
 
 
 def note_diffs(variants: list[dict]) -> list[str]:

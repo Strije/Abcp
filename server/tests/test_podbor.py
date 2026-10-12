@@ -2718,3 +2718,38 @@ def test_renault_side_in_replaced_numbers_turkish():
     assert T.side("SOLENOID").lr == "" and T.side("SAGE").lr == ""
     p = run("X9FKXXEEBKCB57566 поворотный кулак передний левый", engine=Engine(FakeRenaultSides(), None, set()))["positions"][0]
     assert [v["oem"] for v in p["variants"]] == ["7700827247"]
+
+
+class FakeIdler(Fake):
+    """Nissan Pathfinder: в «Ремень приводной, ролики» — ремни и ролики, но ролики зовутся «Холостой шкив», натяжитель —
+    «Автоматическое натяжное устройство»; слова «ролик» нет ни в одном названии."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(190, "Ременный привод", link=False, children=[
+                node(192, "Ремень приводной, ролики")])])
+        if method == "listQuickDetail":
+            return [cat("Двигатель", unit("Вентилятор, компрессор, ремень усилителя руля", [
+                        det("117205X00A", "Ремень привода вентилятора и генератора переменного тока"),
+                        det("11950EB70A", "Ремень масляного насоса ГУР"),
+                        det("119555X00C", "Автоматическое натяжное устройство (в сборе)")]),
+                        unit("Крепления генератора переменного тока", [det("11925ED320", "Холостой шкив (в сборе)")]))]
+        return super().answer(method, params)
+
+
+def test_idler_roller_not_the_belt():
+    """Nissan Pathfinder (12.10, пример пользователя): «Ролик приводного ремня» → ремни. «Ремень» у клиента — уточнение."""
+    p = run("X9FKXXEEBKCB57566 Ролик приводного ремня", engine=Engine(FakeIdler(), None, set()))["positions"][0]
+    oems = {v["oem"] for v in p["variants"]}
+    assert oems and not oems & {"117205X00A", "11950EB70A"}
+    assert oems <= {"119555X00C", "11925ED320"}
+    # Сам ремень находится как раньше
+    p = run("X9FKXXEEBKCB57566 Приводной ремень", engine=Engine(FakeIdler(), None, set()))["positions"][0]
+    assert "117205X00A" in {v["oem"] for v in p["variants"]}
+
+
+def test_fan_is_not_ventilated():
+    """«Ремень привода вентилятора» — не «вентилируемый» (Nissan, 12.10: «Отличие по каталогу: вентилируемый» у ремня)."""
+    from app.podbor.engine import note_diffs
+    belts = [{"name": "Ремень привода вентилятора и генератора"}, {"name": "Ремень масляного насоса ГУР"}]
+    assert note_diffs(belts) == ["", ""]
+    assert note_diffs([{"name": "Тормозной диск (вентилир.)"}, {"name": "Тормозной диск"}]) == ["вентилируемый", ""]
