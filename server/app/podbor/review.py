@@ -154,6 +154,23 @@ async def run(folder: Path, llm, days: int = 1, limit: int = 200) -> dict:
     return stat
 
 
+def chosen(rows: list[dict]) -> tuple[int, int]:
+    """Из разговоров, где робот показал варианты с ценами, — сколько закончились выбором показанного («давайте первый»,
+    номер, фирма): (выбрали, показали). Главная цифра качества предложений, а не «нашли/не нашли» (ROADMAP, п. 6).
+    Без номера разговора (страница без памяти) — не считаем: продолжения не увидеть."""
+    shown, picked = set(), set()
+    for r in rows:
+        d = r.get("dialog")
+        if r.get("type") != "turn" or not d:
+            continue
+        if r.get("status") == "ok" and any(p.get("variants") for p in r.get("positions") or []):
+            shown.add(d)
+        reply = r.get("reply") or {}
+        if d in shown and reply.get("kind") == "order" and reply.get("picks"):
+            picked.add(d)
+    return len(picked), len(shown)
+
+
 def report(folder: Path, days: int = 7) -> str:
     edge = (date.today() - timedelta(days=days - 1)).isoformat()
     rows = []
@@ -168,6 +185,8 @@ def report(folder: Path, days: int = 7) -> str:
     lines = [f"Разобрано {len(rows)}, подозрений {sum(r['verdict'] == 'suspect' for r in rows)}, "
              f"отмечено «не помог» людьми {sum(r.get('human') is False for r in rows)}",
              "По видам: " + (", ".join(f"{k} {v}" for k, v in sorted(kinds.items(), key=lambda x: -x[1])) or "—")]
+    n, m = chosen(_read(folder, days))
+    lines.append(f"Выбрали показанное: {n} из {m} разговоров с вариантами" + (f" ({100 * n // m}%)" if m else ""))
     for r in bad:
         lines += ["", f"— {r['t'][:16]} разговор {r['dialog'] or '—'}, реплика {r['turn']}"
                       + (" · не помог" if r.get("human") is False else ""),

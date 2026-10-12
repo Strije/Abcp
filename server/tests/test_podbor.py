@@ -800,6 +800,18 @@ def test_bitrix_export_masks_phones_and_skips_robot(monkeypatch):
     assert B.ROBOT.match("Отправлено роботом\nБлагодарим за заказ №1165020")
 
 
+def test_report_counts_chosen_offers():
+    """«Выбрали показанное»: разговоры с вариантами и цены → сколько закончились выбором (ROADMAP, п. 6)."""
+    from app.podbor import review as R
+    shown = {"type": "turn", "status": "ok", "positions": [{"variants": [["04465-33471", "Колодки"]]}]}
+    rows = [shown | {"dialog": "a"}, {"type": "turn", "dialog": "a", "status": "order", "reply": {"kind": "order", "picks": 1}},
+            shown | {"dialog": "b"}, {"type": "turn", "dialog": "b", "status": "order", "reply": {"kind": "order", "picks": 0}},
+            {"type": "turn", "dialog": "c", "status": "ok", "positions": [{"variants": []}]},          # нечего было выбрать
+            {"type": "turn", "dialog": "c", "status": "order", "reply": {"kind": "order", "picks": 1}},
+            shown | {"dialog": ""}]                                                                    # без разговора — не видно
+    assert R.chosen(rows) == (1, 2)
+
+
 def test_review_judge(tmp_path):
     """Судья: разбирает новые реплики журнала, «не помог» — первыми, повторно не отправляет, мусор модели не пишет."""
     import asyncio
