@@ -2485,3 +2485,20 @@ def test_spark_plugs_on_diesel_become_glow_plugs():
     # Бензиновая машина (групп накаливания нет): свечи накаливания не подсовываем
     res = run("X9FKXXEEBKCB57566 Свечи зажигания")
     assert not any("накал" in v["name"].lower() for p in res["positions"] for v in p["variants"])
+
+
+
+def test_brand_found_by_question_stays_pickable():
+    """Mercedes E 290 (12.10): «Beru фирмы есть?» → «есть: Beru GN961», дальше «Беру беру» → «какой вариант оформить?»:
+    найденный по вопросу Beru не попадал в память. Теперь он в памяти позиции, но в нумерацию показанного не входит."""
+    from app.podbor import dialog as D
+    beru = {"brand": "BERU", "number": "GN961", "description": "Свеча накаливания", "price": 1550, "days": 5}
+    p = {"query": "Свечи накаливания", "status": "found", "variants": [
+        {"name": "Свеча накаливания", "oem": "A0011592601", "brand": "MERCEDES", "axis": "", "lr": "",
+         "offers": {"original": None, "analogs": [{"brand": "STARTVOLT", "number": "GLSP075", "price": 420, "days": 1}],
+                    "stats": {}, "asked": [beru]}}]}
+    slim = D._slim(p)
+    assert slim["variants"][0]["offers"]["asked"][0]["number"] == "GN961"   # переживает память разговора
+    assert [x["offer"]["brand"] for x in D.shown(slim)] == ["STARTVOLT"]   # «второй» — по-прежнему то, что видел клиент
+    assert [x["offer"]["brand"] for x in D.all_offers(slim)] == ["STARTVOLT", "BERU"]
+    assert D.same_offer(D.all_offers(slim)[1], {"brand": "Beru", "number": "GN-961"})

@@ -108,6 +108,7 @@ def _slim_offers(o: dict | None) -> dict | None:
     keep = ("brand", "number", "description", "price", "days", "tags", "cheaper", "reviews")
     return {"original": {k: o["original"].get(k) for k in keep} if o.get("original") else None,
             "analogs": [{k: a.get(k) for k in keep} for a in o.get("analogs", [])],
+            "asked": [{k: a.get(k) for k in keep} for a in o.get("asked", [])],
             "stats": o.get("stats") or {}}
 
 
@@ -186,9 +187,19 @@ def shown(p: dict, analogs: int = 3) -> list[dict]:
     return out
 
 
+def same_offer(x: dict, o: dict) -> bool:
+    """Строка из shown/all_offers и предложение — одна фирма и один номер (номер без пробелов и дефисов)."""
+    num = lambda s: re.sub(r"[^0-9A-ZА-ЯЁ]", "", str(s or "").upper())  # noqa: E731
+    return _bk(x["offer"].get("brand")) == _bk(o.get("brand")) and num(x["offer"].get("number")) == num(o.get("number"))
+
+
 def all_offers(p: dict) -> list[dict]:
-    """Все запомненные предложения позиции, не только показанные (до пяти аналогов на деталь)."""
-    return shown(p, analogs=99)
+    """Все запомненные предложения позиции, не только показанные (до пяти аналогов на деталь), и фирмы, найденные
+    по вопросу клиента («Beru есть?» → Beru GN961): на «беру беру» следующей репликой их можно выбрать (12.10)."""
+    out = shown(p, analogs=99)
+    for var in p.get("variants", []):
+        out += [{"var": var, "offer": x, "who": ""} for x in ((var.get("offers") or {}).get("asked") or [])]
+    return out
 
 
 # ---------- разбор реплики ----------

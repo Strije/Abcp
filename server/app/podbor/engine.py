@@ -679,6 +679,12 @@ class Engine:
                 if rows:
                     best = min(rows, key=lambda x: (days(x.get("deliveryPeriod")), _num(x.get("price"))))
                     got = item("brand", p, {"var": var, "who": "", "offer": _offer(best)})
+                    # Найденное по вопросу — в память позиции: «Беру беру» следующей репликой выбирает его (Mercedes, 12.10)
+                    o = var.get("offers") if isinstance(var.get("offers"), dict) else None
+                    if o is None:
+                        o = var["offers"] = {"original": None, "analogs": [], "stats": {}}
+                    if not any(D.same_offer(x, got["offer"]) for x in D.all_offers(p)):
+                        o.setdefault("asked", []).append(got["offer"])
                     break
             answers.append(got or item("no_brand", p, None, word=a["word"]))
         picks = [{"type": "pick", **x} for x in r.get("picks", [])]
