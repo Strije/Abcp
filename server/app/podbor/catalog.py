@@ -141,12 +141,14 @@ class Detail:
     filter: str = ""
     ssd: str = ""
     specs: str = ""
+    # Прежние номера той же детали с их названиями: у Renault сторона только там — «7700827251 SOL AKS TAŞIYICI» (R19, 12.10)
+    replaced: str = ""
 
     @property
     def context(self) -> str:
         """Всё, где каталог пишет сторону: VAG — в примечании узла («передн.;PR:1ZC»),
         Ford — в названии узла («Задний кулак…»), суппорты — в примечании детали («лев.»)."""
-        return " | ".join(x for x in (self.name, self.note, self.unit, self.unit_note, self.category) if x)
+        return " | ".join(x for x in (self.name, self.note, self.unit, self.unit_note, self.category, self.replaced) if x)
 
 
 def _attrs(o: dict) -> dict[str, str]:
@@ -214,6 +216,7 @@ def parse_details(data: Any, group_id: int = 0) -> list[Detail]:
                     image=str(u.get("largeImageUrl") or u.get("imageUrl") or ""),
                     code_on_image=str(d.get("codeOnImage") or ""), category=str(c.get("name") or ""),
                     group_id=group_id, filter=str(d.get("filter") or ""), ssd=str(d.get("ssd") or ""), specs=_specs(d),
+                    replaced=da.get("replacement", ""),
                 ))
     return out
 
@@ -630,7 +633,7 @@ class Catalog:
                               unit_id=u["id"], unit_ssd=u["ssd"], image=u["image"],
                               code_on_image=str(d.get("codeOnImage") or ""), category=u["cat"], group_id=group_id,
                               unit_code=u["code"], filter=str(d.get("filter") or ""), ssd=str(d.get("ssd") or ""),
-                              specs=_specs(d)))
+                              specs=_specs(d), replaced=da.get("replacement", "")))
         self._details[key] = (time.time(), out)
         return out
 

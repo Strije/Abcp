@@ -2644,3 +2644,30 @@ def test_frame_number_without_dash():
     # машины нет в каталоге — говорим про номер кузова, а не про «VIN 17 знаков»
     text = draft({"status": "vehicle_not_found", "request": {"ident": "L275V-1003754", "chunks": []}, "positions": []})
     assert "номеру кузова" in text and "17 знаков" not in text
+
+
+class FakeRenaultSides(Fake):
+    """Renault R19: сторона кулака — только в названиях прежних номеров (replacement) по-турецки, и не у каждой записи."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(499, "Поворотный кулак")])
+        if method == "listQuickDetail":
+            def k(oem, name, repl):
+                return {"name": name, "oem": oem, "codeOnImage": "1" if oem.endswith("7") else "2", "match": True,
+                        "attributes": [{"key": "replacement", "name": "replacement", "value": repl},
+                                       {"key": "note", "name": "Примечание", "value": "Размер (Х) = 54"}]}
+            dets = [k("7700827247", "ПОВОРОТНЫЙ КУЛАК П", "7700787729 ;7700827251 SOL AKS TAŞIYICI"),
+                    k("7700827248", "ПОВОРОТНЫЙ КУЛАК", "7700787730 ;7700827252 ;7700768323 SAĞ AKS TAŞIYICI"),
+                    k("7700827247", "ПОВОРОТНЫЙ КУЛАК П", "7700787729 ;7700827251 SOL AKS TAŞIYICI"),
+                    k("7700827248", "ПОВОРОТНЫЙ КУЛАК", "7700787730 ;7700827252 ")]
+            return [cat("Передняя подвеска", unit("Хвостовик - Тормозной диск", dets))]
+        return super().answer(method, params)
+
+
+def test_renault_side_in_replaced_numbers_turkish():
+    """R19 (12.10): «поворотный кулак передний левый» → оба кулака «разные детали узла»: сторона только в «SOL/SAĞ AKS
+    TAŞIYICI» у прежних номеров, а у второй записи правого кулака её нет вовсе."""
+    assert T.side("7700827251 SOL AKS TAŞIYICI").lr == "left" and T.side("SAĞ AKS TAŞIYICI").lr == "right"
+    assert T.side("SOLENOID").lr == "" and T.side("SAGE").lr == ""
+    p = run("X9FKXXEEBKCB57566 поворотный кулак передний левый", engine=Engine(FakeRenaultSides(), None, set()))["positions"][0]
+    assert [v["oem"] for v in p["variants"]] == ["7700827247"]

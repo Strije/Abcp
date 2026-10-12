@@ -1417,11 +1417,19 @@ class Engine:
         near = [t for g, _ in groups for p, _ in g.phrases for t in p]
         cands: dict[str, Candidate] = {}
         lrs: dict[str, set[str]] = {}
+        # Номер встречается в каталоге несколько раз, а сторона записана не везде (Renault R19: «SAĞ» — только у одной из
+        # двух записей правого кулака). Хоть одна запись — про другую сторону, и ни одна — про нужную: номер не берём
+        sides: dict[str, list[T.Side]] = {}
+        for d in pool:
+            sides.setdefault(_key(d.oem), []).append(T.side(d.context, self.pr_axis))
+        def other_side(k: str) -> bool:
+            ss = sides.get(k, [])
+            return any(want.conflicts(x) for x in ss) and not any((x.axis or x.lr) and not want.conflicts(x) for x in ss)
         for d in pool:
             if d.match is False:
                 continue
             ds = T.side(d.context, self.pr_axis)
-            if want.conflicts(ds):
+            if want.conflicts(ds) or other_side(_key(d.oem)):
                 continue
             lrs.setdefault(_key(d.oem), set()).add(ds.lr)
             member = (d.group_id, _key(d.oem)) in members
