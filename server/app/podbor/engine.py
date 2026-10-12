@@ -857,7 +857,10 @@ class Engine:
             pos = await self._by_units_llm(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
         miss = out.get("head_miss") or ""
-        if out["status"] in ("found", "choose") and miss and not out.get("via_units") \
+        glued = T.stem(miss.lower())
+        # «ДАТЧИККОЛЕНВАЛА» слитно: «датчик» из найденного «Импульсный датчик коленчатого вала» — часть слова клиента
+        inside = any(len(s) >= 4 and s in glued for x in out.get("variants", []) for s in T.stems(x.get("name", ""), self.stop))
+        if out["status"] in ("found", "choose") and miss and not out.get("via_units") and not inside \
                 and not (re.fullmatch(r"[а-яё]+", miss.lower()) and T._ADJ_END.search(miss.lower())):
             # Главного слова клиента нет ни в одной найденной детали, и узлы полного каталога его не нашли: «соленоиды АКПП»
             # → гидротрансформатор, «сальник распредвала» → распредвал, «барабан» → рычаг ручника (перепрогон 12.10: 11 из 32

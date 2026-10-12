@@ -656,6 +656,9 @@ def test_lost_head_word_shows_no_neighbor():
         assert neighbor not in res["text"] and "передали менеджеру" in res["text"], q
     found = run("X9FKXXEEBKCB57566 колодки тормозные передние", e)["positions"][0]   # слово на месте — показываем
     assert found["status"] in ("found", "choose") and found["variants"]
+    # Слитно («BMW ДАТЧИККОЛЕНВАЛА» в клиентских сценариях): часть слова — в найденном, это не потерянное слово
+    glued = run("X9FKXXEEBKCB57566 ПОДШИПНИКСТУПИЦЫ задний", e)["positions"][0]
+    assert glued["status"] in ("found", "choose") and glued["variants"]
 
 
 def test_dialog_answer_to_question_replaces_position():
