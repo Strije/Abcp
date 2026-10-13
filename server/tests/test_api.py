@@ -713,3 +713,15 @@ def test_bitrix_chat_app_in_open_lines(tmp_path):
         assert sum(1 for m, _ in calls if m in ("imbot.register", "imbot.app.register")) == n
         assert any(m == "imbot.app.update" for m, _ in calls)
         assert c.post("/v1/bitrix/bot", data={"event": "ONIMBOTJOINCHAT"}).json() == {"ok": True}
+
+
+def test_bitrix_hint_photo_links_are_photos():
+    """Max через ChatApp (13.10): фото приходит ссылкой «Открыть (https://…chatFiles/….png)» — робот принимал её за текст."""
+    from app.bitrix import client_text
+    from app.podbor.text import find_ident
+    msgs = [{"id": 1, "author_id": 7, "date": "2026-10-13T10:00:00+03:00",
+             "text": "[URL=https://ctrl-cu-central-2.chatapp.online/api2/chatFiles/15612/max/2026/05/24/e.png]Открыть[/URL]"},
+            {"id": 2, "author_id": 7, "date": "2026-10-13T10:01:00+03:00", "text": "https://avito.ru/item/123"},
+            {"id": 3, "author_id": 7, "date": "2026-10-13T10:02:00+03:00", "text": "Нужны колодки, фото выше"}]
+    d = client_text({"messages": msgs, "users": [{"id": 7, "connector": True}]}, 0, find_ident)
+    assert d["text"] == "Нужны колодки, фото выше" and d["photos"] == 1

@@ -372,6 +372,8 @@ async def operator_call(http: httpx.AsyncClient, endpoint: str, auth: str, metho
 
 ROBOT = re.compile(r"^\s*Отправлено роботом", re.I)   # рассылки магазина в том же чате — не слова клиента
 _BB_USER = re.compile(r"\[USER=\d+[^\]]*\](.*?)\[/USER\]", re.I | re.S)
+_ONLY_LINK = re.compile(r"\s*(?:(?:открыть|open|фото|файл|изображение)\s*)?\(?\s*(https?://\S+?)\s*\)?\s*", re.I)
+_IMAGE_LINK = re.compile(r"chatFiles|/disk/|\.(?:png|jpe?g|webp|gif|heic|bmp)(?:$|[?#])", re.I)
 HINT_RECENT_DAYS = 2
 HINT_MAX_MESSAGES = 15
 
@@ -398,6 +400,13 @@ def client_text(result: dict, after: int = 0, find_ident=None) -> dict:
         if str(m.get("author_id") or "0") not in clients:
             continue
         _, text = clean_bb(_BB_USER.sub(r"\1", str(m.get("text") or "")))
+        link = _ONLY_LINK.fullmatch(text or "")
+        if link:
+            # Max через ChatApp присылает фото ссылкой: «Открыть (https://…chatapp…/chatFiles/….png)» (13.10) — это фото,
+            # а не слова клиента; одна посторонняя ссылка — тоже не просьба о детали
+            if _IMAGE_LINK.search(link.group(1)) and int(m.get("id") or 0) > after:
+                photos += 1
+            continue
         if text and not ROBOT.match(text):
             mine.append((int(m.get("id") or 0), _when(m.get("date")), text))
         elif not text and (m.get("params") or {}).get("FILE_ID") and int(m.get("id") or 0) > after:
