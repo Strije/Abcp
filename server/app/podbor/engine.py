@@ -279,6 +279,9 @@ class Engine:
                 res["positions"].append(pos)
         if len(items) > MAX_POSITIONS:
             res["warnings"].append(f"Разобраны первые {MAX_POSITIONS} позиций из {len(items)}")
+        if T.OIL_SET.search(text) and not any("топлив" in (p.get("query") or "").lower() for p in res["positions"]):
+            # Набор для замены масла: топливный фильтр меняют не каждый раз — спрашиваем, а не кладём молча
+            res["warnings"].append("топливный фильтр меняют не при каждой замене масла — если нужен, напишите «и топливный»")
         return self._done(res, "ok", t0)
 
     async def _article(self, v: Vehicle, tree: TreeIndex, number: str, hint: str = "",
@@ -414,6 +417,8 @@ class Engine:
                 res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
                 return self._done(res, "ok", t0, mem)
         plan = D.plan(text, mem, self.stop, tree, analogs, self.clean)
+        if D.CORRECTION.search(text):
+            plan = dict(plan, sure=False)   # клиент поправляет робота — разговор целиком разбирает модель
         if not plan["sure"] and use_llm and self.llm is not None and getattr(self.llm, "enabled", False):
             # Правила не уверены («Хорошо, давайте», длинное сообщение с новыми деталями) — спрашиваем модель
             parsed = await U.understand_reply(self.llm, text, mem, analogs)
@@ -422,6 +427,11 @@ class Engine:
                 hp = D.from_llm(parsed, mem, analogs, text)
                 if hp["reply"] or hp["jobs"] or hp["handoff"]:
                     plan = hp
+        if plan["kind"] == "chat" and not plan.get("reply") and not plan.get("jobs") and "?" not in text \
+                and not D.STATUS.search(text) and not D.DEFER.search(text) and self._partish(text, tree):
+            # На реплике с деталями не молчим (Skoda 13.10: «фильтр салонный воздушный масляный топливный» → пусто):
+            # слово из прошлого ответа («масляный») не значит, что клиент говорит о показанном
+            plan = dict(plan, kind="new")
         arts = A.find(text, limit=6)
         if arts and plan["kind"] not in ("pick", "answer"):
             return await self._follow_articles(res, text, arts, plan, mem, positions, v, tree, t0)
@@ -735,6 +745,23 @@ class Engine:
                 out[i] = cand
         return out
 
+    def _adj_list(self, chunk: str, tree: TreeIndex) -> list[str]:
+        """«фильтр салонный воздушный маслянный топливный» без запятых (Skoda 13.10 — робот молчал): одно существительное и
+        несколько прилагательных, и каждое с ним — своя группа каталога → отдельные позиции. «Шаровая опора нижняя передняя» —
+        признаки одной детали (группа одна), «колодки передние задние» — стороны (_both_axes): не делим."""
+        words = [w for w in T.words(chunk) if T.stem(w) not in self.stop]
+        nouns = [w for w in words if not D.adj_word(w)]
+        adjs = [w for w in words if D.adj_word(w) and not T.side_of_word(T.stem(w))]
+        if len(nouns) != 1 or len(adjs) < 2 or len(adjs) + 1 != len(words):
+            return []
+        tops = []
+        for a in adjs:
+            r = tree.rank(T.stems(T.expand(f"{a} {nouns[0]}"), self.stop), T.Side())
+            if not r or r[0][1] < 0.8:
+                return []
+            tops.append(r[0][0].id)
+        return [f"{nouns[0]} {a}" for a in adjs] if len(set(tops)) == len(adjs) else []
+
     def split(self, chunks: list[str], tree: TreeIndex) -> list[tuple[str, T.Side]]:
         """«Масляный фильтр, воздушный, салонный» → три позиции; «колодки передние, комплект» → одна.
         «Колодки передние и задние» → две: одно слово стороны повторяет соседнюю деталь."""
@@ -748,6 +775,10 @@ class Engine:
             whole = T.side(chunk)
             pieces = self._share_head(share_noun(T.split_pieces(chunk), self.stop), tree)
             if len(pieces) == 1:
+                listed = self._adj_list(chunk, tree)
+                if listed:
+                    out += [(self.clean(q), whole) for q in listed]
+                    continue
                 both = self._both_axes(chunk)
                 if both:
                     out += both   # «колодки передние задние» — две позиции, а не вопрос «передние или задние?»
@@ -1169,8 +1200,10 @@ class Engine:
         kind = kind or kind_of(q)
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
                                "groups": [], "variants": [], "question": "", "note": "", "kind": kind}
-        if kind in ("battery", "tire", "tool", "chemistry", "accessory"):
-            pos["note"] = KIND_NOTE[kind]   # не каталог машины: подберём отдельно — так и пишем
+        if kind in ("fluid", "battery", "tire", "tool", "chemistry", "accessory"):
+            # Не каталог машины: подберёт менеджер — так и пишем. Масла и жидкости — тоже (решение 13.10): допусков и
+            # объёма заправки у нас нет, между двумя маслами каталога честно выбрать нечем, только аналогами
+            pos["note"] = KIND_NOTE.get(kind, "")
             return pos
         if self.outside(q):
             pos["note"] = "Это не деталь каталога автомобиля — подберём по названию."
@@ -1389,7 +1422,10 @@ class Engine:
             R.annotate(var, [query])
             pos["variants"].append(var)
             pos["note"] = (pos["note"] + " " if pos["note"] else "") + note2
-        if pos["question"].startswith("В каталоге несколько вариантов") and not pos.get("asked") \
+        if pos.get("kind") == "fluid":
+            # Масла на схеме — выбор, а не «стоят все», и «сравните со снятой деталью» к маслу не относится (Skoda 13.10)
+            pos.pop("differ", None)
+        elif pos["question"].startswith("В каталоге несколько вариантов") and not pos.get("asked") \
                 and node_parts(pos["variants"]):
             # Разные позиции одной схемы — разные детали, а не выбор: «сравните со снятой» тут не к месту
             pos["parts"] = True

@@ -2770,3 +2770,25 @@ def test_number_for_both_sides_kept():
     """Проверка 12.10: правило «номер записан о другой стороне» выбросило ШРУС Lancer на «правый», хотя второй узел — RH."""
     p = run("X9FKXXEEBKCB57566 ШРУС правый", engine=Engine(FakeBothSides(), None, set()))["positions"][0]
     assert [v["oem"] for v in p["variants"]] == ["3817A004"]
+
+
+def test_skoda_oil_change_conversation_13_10():
+    """Skoda Fabia 13.10 (госномер вместо VIN): номер не артикул; «набор для замены масла» — фильтры и шайба, масло менеджеру,
+    о топливном спрашиваем; список без запятых делится; «и топливный» — соседний фильтр, а не признак; поправка — модели."""
+    from app.podbor import dialog as D
+    from app.podbor import text as T
+    from app.podbor.article import find
+    from app.podbor.measure import ENGINE, INDEX, STOP
+
+    r = T.parse("A614HK92 набор для замены масла")
+    assert r.plate == "А614НК92" and not find(" ".join(r.chunks))
+    assert r.chunks == ["моторное масло, масляный фильтр, воздушный фильтр, салонный фильтр, шайба сливной пробки"]
+    assert T.OIL_SET.search("нужна замена масла") and not T.OIL_SET.search("масло моторное 5w30")
+    got = [q for q, _ in ENGINE.split(["фильтр салонный воздушный маслянныЙ ТОПЛИВНЫЙ"], INDEX)]
+    assert got == ["фильтр салонный", "фильтр воздушный", "фильтр маслянный", "фильтр топливный"]
+    assert len(ENGINE.split(["шаровая опора нижняя передняя"], INDEX)) == 1
+    assert D._sibling("Воздушный фильтр", "и топливный", INDEX, STOP) == "топливный фильтр"
+    assert D._sibling("Салонный фильтр", "угольный", INDEX, STOP) == ""
+    assert D._sibling("ШРУС наружный", "внутренний", INDEX, STOP) == ""
+    assert D.CORRECTION.search('Я же написал что нужен именно "набор"') and D.CORRECTION.search("не то, нужен задний")
+    assert not D.CORRECTION.search("давайте первый") and not D.CORRECTION.search("а задние?")

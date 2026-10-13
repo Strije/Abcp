@@ -29,6 +29,11 @@ QUESTION = re.compile(r"\?|\b(?:есть|нет|нету|имеется|быва
 BOTH = re.compile(r"\b(?:обе|оба|обои|обоих|те\s+и\s+те|и\s+те\s+и\s+другие|комплект\s+на\s+ось|на\s+обе\s+стороны|"
                   r"с\s+двух\s+сторон)\b", re.I)
 # Отсрочка и отказ: «подумаю», «закажу попозже», «не актуально» — это не выбор, отвечает менеджер
+# Клиент поправляет робота: «Я же написал, что нужен именно набор», «не то», «я имел в виду» — правила тут не судьи,
+# разговор целиком разбирает модель (Skoda 13.10: правила «уверенно» молчали)
+CORRECTION = re.compile(r"\bя\s+же\s+(?:на)?писал|\bне\s+(?:то|это|тот|та|те)\b(?!\s+(?:что|чтобы))|\bимел[аи]?\s+в\s+виду|"
+                        r"имелось\s+в\s+виду|\bвы\s+не\s+понял|\bнужен\s+именно|\bнужна\s+именно|\bнужно\s+именно|"
+                        r"\bнужны\s+именно|\bа\s+не\s+[а-яё]+\b.*\b(?:нужен|нужна|нужны|нужно)", re.I | re.S)
 DEFER = re.compile(r"подума|подумать|попозже|позже|потом\s+(?:закаж|напиш|отпиш)|отпиш[уе]с|перезвон|наберу|сообщу|"
                    r"не\s+надо|не\s+нужн|не\s+заказыв|отмен|не\s*актуал|передумал|в\s+другом\s+месте|нашл[иа]?\b|нашёл|нашел|"
                    r"определимся|согласую|пока\s+не|пока\s+ни|думает|думаю|отбой|решу|дам\s+ответ|"
@@ -848,6 +853,23 @@ def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
             "sure": not d.get("unsure")}
 
 
+def _sibling(query: str, text: str, tree, stop: frozenset[str]) -> str:
+    """«и топливный» после «Воздушный фильтр»: прилагательное клиента с тем же существительным ведёт в другую группу каталога —
+    это соседняя деталь («топливный фильтр»), а не признак прежней («Воздушный фильтр топливный», Skoda 13.10).
+    «внутренний» после «наружного ШРУСа», «угольный» после «фильтра салона» — та же группа или прилагательного нет: не сосед."""
+    words = [w for w in T.words(query) if T.stem(w) not in stop]
+    old = [w for w in words if adj_word(w) and not T.side_of_word(T.stem(w))]
+    nouns = [w for w in words if not adj_word(w)]
+    new = [w for w in T.words(text) if adj_word(w) and not T.side_of_word(T.stem(w)) and T.stem(w) not in stop]
+    if len(nouns) != 1 or len(old) != 1 or len(new) != 1 or T.same(T.stem(old[0]), T.stem(new[0])):
+        return ""
+    a = tree.rank(T.stems(f"{old[0]} {nouns[0]}", stop), T.Side())
+    b = tree.rank(T.stems(f"{new[0]} {nouns[0]}", stop), T.Side())
+    if a and b and a[0][1] >= 0.8 and b[0][1] >= 0.8 and a[0][0].id != b[0][0].id:
+        return f"{new[0].lower()} {nouns[0].lower()}"
+    return ""
+
+
 def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
           clean=lambda t: t.strip()) -> dict:
     """Что делать со следующим сообщением клиента. Общая для сервера и замера по переписке
@@ -932,13 +954,20 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
         # Реплика — одни прилагательные из каталога: «угольный» после салонного фильтра, «внутренний», «а верхнюю?»,
         # «моторное», «впускной» — признак к детали, по которой спрашивали, или к последней («фильтр салона угольный»).
         # «Не актуально», «да нормально» сюда не попадают: этих слов в каталоге нет
+        siblings: list[str] = []
         for i in targets(mem):
             p = positions[i]
+            sib = _sibling(p["query"], text, tree, stop)
+            if sib:
+                if sib not in siblings:
+                    siblings.append(sib)   # «и топливный» после воздушного и салонного — один топливный фильтр
+                continue
             q = replace_adj(p["query"], text)
             jobs.append((q, T.side(q)))
             if p.get("question"):
                 replaced.append(i)
-        out["kind"] = "attr"
+        jobs += [(q, T.side(q)) for q in siblings]
+        out["kind"] = "attr" if not siblings or len(jobs) > len(siblings) else "new"
     else:
         asked = [i for i, p in enumerate(positions) if p.get("asked")]
         alone = tree.rank(cont, T.Side()) if cont else []
