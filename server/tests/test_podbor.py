@@ -1387,6 +1387,10 @@ def test_missing_part_is_not_a_typo_of_neighbor_part():
     assert tree.fix(T.stem("провод")) == T.stem("провод")
     assert tree.fix(T.stem("впуск")) == T.stem("впуск")
     assert tree.fix(T.stem("калонка")) == T.stem("колонка")            # настоящая опечатка по-прежнему правится
+    # …и остаётся словом детали: иначе «колодки перед и зад» отбрасывались как «не деталь» — «напишите, какая деталь»
+    full = TreeIndex([{"name": "Рулевая колонка", "quickGroupId": 1, "link": True, "synonyms": ""}],
+                     e.stop, None, e.catalog.synonyms, e.catalog.not_typos)
+    assert T.stem("колодки") in full.vocab
 
 
 # ---------- почему несколько номеров одной детали ----------
