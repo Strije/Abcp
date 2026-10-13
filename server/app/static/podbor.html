@@ -576,7 +576,13 @@ $("#reset").addEventListener("click", resetChat);
 $("#text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } });
 $("#pull").addEventListener("click", pull);
 draw();
-if (BX) { frame().catch(() => {}); pull(); }   // библиотеку Битрикса — заранее, чтобы «Вставить» сработал сразу
+if (BX) {
+  // Библиотеку Битрикса — заранее, чтобы «Вставить» сработал сразу. Окно приложения Битрикс открывает крошечным
+  // (12.10: «размером 5 на 5») — просим нормальный размер, но не больше экрана
+  frame().then($b24 => $b24.parent.resizeWindow(Math.min(1000, Math.floor(screen.availWidth * 0.9)),
+                                                Math.min(820, Math.floor(screen.availHeight * 0.85)))).catch(() => {});
+  pull();
+}
 </script>
 </body>
 </html>
