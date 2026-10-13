@@ -2792,3 +2792,18 @@ def test_skoda_oil_change_conversation_13_10():
     assert D._sibling("ШРУС наружный", "внутренний", INDEX, STOP) == ""
     assert D.CORRECTION.search('Я же написал что нужен именно "набор"') and D.CORRECTION.search("не то, нужен задний")
     assert not D.CORRECTION.search("давайте первый") and not D.CORRECTION.search("а задние?")
+
+def test_same_car_twice_from_vin_is_not_a_choice():
+    """Прогон заявок 13.10: по одному VIN каталог отдаёт одну машину дважды — не спрашиваем «какая?»; разные — спрашиваем."""
+    from app.podbor.catalog import Vehicle
+    from app.podbor.engine import same_car
+
+    def car(brand, name, **a):
+        return Vehicle("C", "1", "s", brand, name, a)
+    assert same_car([car("PEUGEOT", "308 (T7)", manufactured="ГЛАВНЫЙ ИНДЕКС"), car("PEUGEOT", "308", manufactured="2008")])
+    assert same_car([car("CITROEN", "C4 (B7) - Ds4", engine="1.6 HDi 92 (DV6DTED M)"),
+                     car("CITROEN", "C4 (B7)", engine="1.6 HDi 16V 92 (DV6DTED M Euro 5)")])
+    assert same_car([car("PEUGEOT", "406 После Рестайлинга"), car("PEUGEOT", "406 restyl")])
+    assert not same_car([car("VW", "Golf", engine="1.4 L"), car("VW", "Golf", engine="2.0 L")])
+    assert not same_car([car("VW", "Golf", engine="CAXA 1.4"), car("VW", "Golf", engine="CBZB 1.2")])
+    assert not same_car([car("TOYOTA", "Camry"), car("TOYOTA", "Corolla")])

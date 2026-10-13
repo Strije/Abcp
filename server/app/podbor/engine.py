@@ -174,6 +174,8 @@ class Engine:
                 out["memory"]["pending"] = text[-1500:]
                 out["memory"]["unknown_vin"] = req.ident
             return out
+        if len(found) > 1 and vehicle is None and same_car(found):
+            found = found[:1]   # одна машина, описанная каталогом дважды (Peugeot «308 (T7)» и «308, 2008») — не спрашиваем
         if len(found) > 1 and vehicle is None:
             res["vehicles"] = [v.public() for v in found]
             return self._done(res, "choose_vehicle", t0)
@@ -2380,6 +2382,37 @@ def share_noun(pieces: list[str], stop: frozenset[str]) -> list[str]:
 def _has_original(c: Candidate, v: Vehicle) -> bool:
     o = curate(c.rows or [], c.d.oem, v.brand, set())
     return bool(o["original"])
+
+
+_MODEL_NOISE = re.compile(r"\([^)]*\)|после\s+рестайлинга|рестайлинг\w*|restyl\w*|facelift", re.I)
+
+
+def same_car(vehicles: list) -> bool:
+    """Каталог по одному VIN часто отдаёт одну машину дважды — из двух своих источников: «Peugeot 308 (T7)» и «Peugeot 308,
+    2008», Mazda с «America» и «US», две одинаковые Honda Accord (прогон заявок 13.10: все 8 проверенных «выберите машину»).
+    Одна машина — если совпали марка и модель, а объём, коробка и код мотора не расходятся там, где указаны у обеих."""
+    def key(v):
+        model = (_MODEL_NOISE.sub(" ", v.name).split() or [""])[0].lower()
+        short = v.short()
+        vol = re.search(r"\b\d\.\d\s*л", short)
+        box = re.search(r"АКПП|МКПП|вариатор", short)
+        return (v.brand.upper().replace(" ", ""), model, vol.group(0) if vol else "", box.group(0) if box else "",
+                str(v.attrs.get("engine") or "").upper().strip())
+    def motor_codes(s: str) -> set[str]:   # «1.6 HDi 92 (DV6DTED M)» и «… (DV6DTED M Euro 5)» — один мотор DV6DTED
+        return {t for t in re.findall(r"[A-Z0-9]{4,}", s) if re.search(r"\d", t) and re.search(r"[A-Z]", t)}
+
+    keys = [key(v) for v in vehicles]
+    first = keys[0]
+    for k in keys[1:]:
+        if k[:2] != first[:2]:
+            return False
+        if any(a and b and a != b for a, b in zip(k[2:4], first[2:4])):
+            return False
+        if k[4] and first[4] and k[4] != first[4]:
+            ca, cb = motor_codes(k[4]), motor_codes(first[4])
+            if not (ca and cb and ca & cb):
+                return False
+    return True
 
 
 def node_parts(variants: list[dict]) -> bool:
