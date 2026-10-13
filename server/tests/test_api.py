@@ -661,3 +661,55 @@ def test_scheme_image_is_served_through_our_server(monkeypatch):
         assert c.get("/v1/podbor/scheme/" + schemes.token("https://evil.example/a.gif")).status_code == 404
         sid = schemes.link(url).rsplit("/", 1)[1]               # короткий номер: адрес Laximo лежит у нас на диске
         assert "." not in sid and c.get("/v1/podbor/scheme/" + sid).status_code == 200 and len(calls) == 1
+
+
+def test_bitrix_chat_app_in_open_lines(tmp_path):
+    """13.10: открытые линии портала — в старом чате, встройки placement там не видны. «Подбор» — чат-приложение
+    (imbot.app.register): окно с подписями md5(хост+HASH) и md5(USER_ID+HASH), переписка — ключом приложения."""
+    from dataclasses import replace
+    import hashlib as HL
+    import json as J
+    import re as R
+    calls = []
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "bitrix.freno.ru":
+            method = request.url.path.rsplit("/", 1)[-1].removesuffix(".json")
+            body = J.loads(request.content or b"{}")
+            calls.append((method, body))
+            answers = {"app.info": {"CODE": "local.app1"}, "imbot.bot.list": [], "imbot.register": 77,
+                       "imbot.app.register": 5, "imbot.app.update": True, "im.chat.user.list": [7, 3],
+                       "im.dialog.messages.get": _hint_messages()}
+            return httpx.Response(200, json={"result": answers.get(method, True)})
+        return fake_abcp(request)
+
+    s = replace(S, state_dir=str(tmp_path), bitrix_client_id="local.app1", bitrix_client_secret="sec", podbor_password="")
+    install = {"auth[domain]": "bitrix.freno.ru", "auth[access_token]": "AT", "auth[refresh_token]": "RT",
+               "auth[expires_in]": "3600", "auth[client_endpoint]": "https://bitrix.freno.ru/rest/",
+               "auth[application_token]": "APPTOK"}
+    with TestClient(create_app(s, Abcp(s, transport=httpx.MockTransport(fake)))) as c:
+        assert c.post("/v1/bitrix/install", data=install).status_code == 200
+        reg = next(b for m, b in calls if m == "imbot.app.register")
+        assert reg["BOT_ID"] == 77 and reg["CONTEXT"] == "LINES" and reg["IFRAME"].endswith("/v1/bitrix/chatapp")
+        saved = J.loads((tmp_path / "bitrix.json").read_text(encoding="utf-8"))
+        secret = saved["chatapp_hash"]
+        assert saved["bot_id"] == 77 and saved["chatapp_id"] == 5 and len(secret) == 32
+        md5 = lambda x: HL.md5(x.encode()).hexdigest()  # noqa: E731
+        q = {"DOMAIN": "https://bitrix.freno.ru", "DOMAIN_HASH": md5("bitrix.freno.ru" + secret), "USER_ID": "7",
+             "USER_HASH": md5("7" + secret), "DIALOG_ID": "chat55", "CONTEXT": "textarea"}
+        r = c.get("/v1/bitrix/chatapp", params=q)
+        assert r.status_code == 200 and '"chatapp": true' in r.text
+        ticket = R.search(r'"ticket": "([^"]+)"', r.text).group(1)
+        d = c.get("/v1/bitrix/hint/dialog", headers={"X-Bx-Ticket": ticket}).json()
+        assert d["text"].startswith("VIN: XTA21703080123456")
+        # чужая подпись, чужой портал, не участник чата — отказ
+        assert c.get("/v1/bitrix/chatapp", params=q | {"USER_HASH": md5("7x")}).status_code == 403
+        assert c.get("/v1/bitrix/chatapp", params=q | {"DOMAIN": "https://evil.ru",
+                                                         "DOMAIN_HASH": md5("evil.ru" + secret)}).status_code == 403
+        assert c.get("/v1/bitrix/chatapp", params=q | {"USER_ID": "9", "USER_HASH": md5("9" + secret)}).status_code == 403
+        # повторная установка: бот и приложение не плодятся — приложение обновляется
+        n = sum(1 for m, _ in calls if m in ("imbot.register", "imbot.app.register"))
+        assert c.post("/v1/bitrix/install", data=install).status_code == 200
+        assert sum(1 for m, _ in calls if m in ("imbot.register", "imbot.app.register")) == n
+        assert any(m == "imbot.app.update" for m, _ in calls)
+        assert c.post("/v1/bitrix/bot", data={"event": "ONIMBOTJOINCHAT"}).json() == {"ok": True}

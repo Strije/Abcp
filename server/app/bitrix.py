@@ -12,7 +12,16 @@
 /v1/bitrix/hint с токеном оператора → выдаём пропуск на полчаса (Tickets) → страница подбора читает переписку
 клиента (im.dialog.messages.get от имени оператора), робот ищет, оператор вставляет ответ в поле и сам отправляет.
 Клиенту робот ничего не пишет. Нужны права приложения: imconnector, imopenlines, im, placement.
+
+Чат-приложение (imbot.app.register, 13.10): открытые линии портала идут в старом чате, встройки placement там не видны —
+только «чат-приложения» (как у ChatApp). При установке регистрируем бота-владельца «Подбор» и приложение-окно
+/v1/bitrix/chatapp. Окно получает DIALOG_ID, USER_ID и подписи md5(хост+HASH), md5(USER_ID+HASH) — проверяем; ключа
+менеджера нет, поэтому переписку читаем ключом приложения, убедившись, что пользователь — участник этого чата.
+Нужно право imbot.
 """
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -23,7 +32,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
@@ -33,6 +42,9 @@ CONNECTOR = "avtodrug_app"
 CONNECTOR_NAME = "Приложение Автодруг"
 KEEP_DAYS = 180  # переписку на нашем сервере храним полгода (полная история — в Битрикс24)
 HINT_TITLE = "Подбор"
+BOT_CODE = "avtodrug_podbor"
+CHATAPP_CODE = "avtodrug_podbor_frame"
+CHATAPP_ICON = Path(__file__).parent / "static" / "podbor_chat_icon.png"   # 108×66: серая и голубая машинка
 
 # Иконка канала в настройках открытых линий: машинка в круге
 ICON_SVG = ("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20"
@@ -210,6 +222,63 @@ class Bitrix:
         except RuntimeError as e:
             # Уже привязан при прошлой установке или у приложения нет прав placement/im — канал чата работает и без подсказчика
             log.info("bitrix hint placement: %s", e)
+        try:
+            await self.register_chatapp()
+        except Exception as e:  # noqa: BLE001 — нет права imbot и т.п.: остальное работает и без чат-приложения
+            log.info("bitrix chat app: %s", e)
+
+    async def register_chatapp(self):
+        """Бот-владелец и чат-приложение «Подбор» в меню чатов открытых линий (старый чат). Повторная установка не
+        плодит ботов: ищем своего по коду; приложение — обновляем, если уже есть."""
+        s = self.state.load()
+        secret = s.get("chatapp_hash") or secrets.token_hex(16)
+        bot_id = s.get("bot_id")
+        if not bot_id:
+            bots = (await self.call("imbot.bot.list", {})).get("result") or {}
+            bots = bots.values() if isinstance(bots, dict) else bots
+            bot_id = next((int(b["ID"]) for b in bots if str(b.get("CODE")) == BOT_CODE), None)
+        if not bot_id:
+            bot_id = int((await self.call("imbot.register", {
+                "CODE": BOT_CODE, "TYPE": "B", "OPENLINE": "N", "EVENT_HANDLER": f"{self.public_url}/v1/bitrix/bot",
+                "PROPERTIES": {"NAME": "Подбор", "LAST_NAME": "Автодруг", "COLOR": "ORANGE",
+                               "WORK_POSITION": "Помощник менеджера: подбор деталей по переписке"},
+            })).get("result"))
+        fields = {"IFRAME": f"{self.public_url}/v1/bitrix/chatapp", "IFRAME_WIDTH": "900", "IFRAME_HEIGHT": "650",
+                  "HASH": secret, "ICON_FILE": base64.b64encode(CHATAPP_ICON.read_bytes()).decode(), "CONTEXT": "LINES",
+                  "HIDDEN": "N", "EXTRANET_SUPPORT": "N", "LIVECHAT_SUPPORT": "N", "IFRAME_POPUP": "N",
+                  "LANG": [{"LANGUAGE_ID": "ru", "TITLE": "Подбор", "DESCRIPTION": "Подбор деталей по переписке с клиентом"}]}
+        app_id = s.get("chatapp_id")
+        if app_id:
+            try:
+                await self.call("imbot.app.update", {"APP_ID": app_id, "FIELDS": fields})
+            except RuntimeError:
+                app_id = None   # удалили в портале — регистрируем заново
+        if not app_id:
+            app_id = int((await self.call("imbot.app.register", {"BOT_ID": bot_id, "CODE": CHATAPP_CODE, **fields})).get("result"))
+        self.state.update(bot_id=bot_id, chatapp_id=app_id, chatapp_hash=secret)
+
+    async def chat_member(self, dialog: str, user_id: str) -> bool | None:
+        """Пользователь — участник чата? None — портал не ответил (ключ приложения не видит этот чат)."""
+        try:
+            users = (await self.call("im.chat.user.list", {"CHAT_ID": int(dialog.removeprefix("chat"))})).get("result") or []
+        except (RuntimeError, ValueError):
+            return None
+        return str(user_id) in {str(u) for u in users}
+
+    async def dialog_messages(self, dialog: str) -> dict:
+        """Переписка чата ключом приложения в виде im.dialog.messages.get. Установивший приложение не участник чата —
+        через историю сессии открытой линии (так работала выгрузка переписки, bitrix_export)."""
+        try:
+            return (await self.call("im.dialog.messages.get", {"DIALOG_ID": dialog, "LIMIT": 50})).get("result") or {}
+        except RuntimeError:
+            chat = dialog.removeprefix("chat")
+            info = (await self.call("imopenlines.dialog.get", {"CHAT_ID": chat})).get("result") or {}
+            parts = str(info.get("entity_data_1") or "").split("|")
+            sid = parts[5] if len(parts) > 5 and parts[5].isdigit() else ""
+            if not sid:
+                raise
+            h = (await self.call("imopenlines.session.history.get", {"CHAT_ID": chat, "SESSION_ID": sid})).get("result") or {}
+            return history_as_messages(h)
 
     async def activate(self, line: str):
         await self.call("imconnector.activate", {"CONNECTOR": CONNECTOR, "LINE": int(line), "ACTIVE": "1"})
@@ -245,6 +314,30 @@ class Bitrix:
 
 # ---------- подсказчик подбора в чате открытой линии ----------
 
+def history_as_messages(h: dict) -> dict:
+    """imopenlines.session.history.get → вид im.dialog.messages.get (messages с author_id, users с connector)."""
+    msgs = h.get("message") or {}
+    msgs = list(msgs.values()) if isinstance(msgs, dict) else msgs
+    users = h.get("users") or {}
+    users = list(users.values()) if isinstance(users, dict) else users
+    return {"messages": [{"id": m.get("id"), "author_id": m.get("senderid") or m.get("author_id") or 0, "date": m.get("date"),
+                          "text": m.get("text") or "", "params": m.get("params") or {}} for m in msgs],
+            "users": [{"id": u.get("id"), "connector": bool(u.get("connector")), "extranet": bool(u.get("extranet"))}
+                      for u in users]}
+
+
+def chatapp_ok(params: dict, secret: str, domain: str) -> bool:
+    """Подписи окна чат-приложения: DOMAIN_HASH = md5(хост + HASH), USER_HASH = md5(USER_ID + HASH), и портал — наш."""
+    raw = str(params.get("DOMAIN") or "")
+    host = (urlparse(raw).hostname or raw).lower()
+    if not secret or not host or host != domain.lower():
+        return False
+    good_d = hashlib.md5((host + secret).encode()).hexdigest()
+    good_u = hashlib.md5((str(params.get("USER_ID") or "") + secret).encode()).hexdigest()
+    return (hmac.compare_digest(good_d, str(params.get("DOMAIN_HASH") or ""))
+            and hmac.compare_digest(good_u, str(params.get("USER_HASH") or "")))
+
+
 class Tickets:
     """Пропуск страницы подсказчика: токен оператора и диалог. Только в памяти процесса и на полчаса
     (токен Битрикса живёт час): перезапуск службы — оператор просто открывает «Подбор» заново."""
@@ -254,13 +347,13 @@ class Tickets:
     def __init__(self):
         self.items: dict[str, dict] = {}
 
-    def issue(self, auth: str, endpoint: str, dialog: str) -> str:
+    def issue(self, auth: str, endpoint: str, dialog: str, **extra) -> str:
         now = time.time()
         self.items = {k: v for k, v in self.items.items() if v["exp"] > now}
         while len(self.items) >= self.LIMIT:
             self.items.pop(next(iter(self.items)))
         t = secrets.token_urlsafe(24)
-        self.items[t] = {"auth": auth, "endpoint": endpoint, "dialog": dialog, "exp": now + self.TTL}
+        self.items[t] = {"auth": auth, "endpoint": endpoint, "dialog": dialog, "exp": now + self.TTL, **extra}
         return t
 
     def get(self, ticket: str) -> dict | None:

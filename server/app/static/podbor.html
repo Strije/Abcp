@@ -409,10 +409,25 @@ function copyText(text) {
   if (!ok && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
 }
 
+// Чат-приложение старого чата (меню открытой линии, 13.10): с окном говорим postMessage — «put» кладёт текст в поле ввода
+const FC = {source: null, origin: "", id: ""};
+if (BX && BX.chatapp) window.addEventListener("message", e => {
+  let d = {};
+  try { d = JSON.parse(e.data); } catch (x) {}
+  if (d.action === "init") { FC.id = d.uniqueLoadId; FC.source = e.source; FC.origin = e.origin; }
+});
+function fcSend(data) {
+  if (!FC.source) return false;
+  FC.source.postMessage(JSON.stringify(Object.assign({uniqueLoadId: FC.id}, data)), FC.origin);
+  return true;
+}
+
 async function insertDraft(ti, btn) {
   const text = $("#draft-" + ti).textContent, turn = chat.turns[ti];
   let how = "copy";
-  try {
+  if (BX.chatapp) {
+    if (fcSend({action: "put", message: text})) how = "insert";
+  } else try {
     const $b24 = await Promise.race([frame(), new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 1500))]);
     const r = await $b24.parent.message.send("im:setImTextareaContent",
       {requestId: window.B24Js.Text.getUuidRfc4122(), text, isSafely: true, safelyTime: 1500});
@@ -579,7 +594,8 @@ draw();
 if (BX) {
   // Библиотеку Битрикса — заранее, чтобы «Вставить» сработал сразу. Окно приложения Битрикс открывает крошечным
   // (12.10: «размером 5 на 5») — просим нормальный размер, но не больше экрана
-  frame().then($b24 => $b24.parent.resizeWindow(Math.min(1000, Math.floor(screen.availWidth * 0.9)),
+  // У чат-приложения размер задан при регистрации, библиотека встроек ему не нужна
+  if (!BX.chatapp) frame().then($b24 => $b24.parent.resizeWindow(Math.min(1000, Math.floor(screen.availWidth * 0.9)),
                                                 Math.min(820, Math.floor(screen.availHeight * 0.85)))).catch(() => {});
   pull();
 }

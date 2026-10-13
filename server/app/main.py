@@ -895,16 +895,46 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         if str(info.get("CODE") or info.get("client_id") or "") != bx.client_id:
             return hint_error("Чужое приложение", 403)
         ticket = state["bx_tickets"].issue(auth, endpoint, dialog)
-        boot = json.dumps({"ticket": ticket, "dialog": dialog})
+        return hint_page(ticket, dialog)
+
+    def hint_page(ticket: str, dialog: str, chatapp: bool = False) -> Response:
+        boot = json.dumps({"ticket": ticket, "dialog": dialog, "chatapp": chatapp})
         page = podbor_page.read_text(encoding="utf-8").replace("<head>", f"<head>\n<script>window.BX_HINT = {boot};</script>", 1)
         return Response(page, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
 
+    @app.api_route("/v1/bitrix/chatapp", methods=["GET", "POST"])
+    async def bitrix_chatapp(request: Request):
+        """«Подбор» в меню чата открытой линии — чат-приложение (imbot.app.register): старый чат портала не показывает
+        встройки placement (13.10). Проверяем подписи окна, что пользователь — участник чата, и отдаём ту же страницу
+        подбора; переписку она читает ключом приложения (ключа менеджера окно не получает)."""
+        bx: bitrix.Bitrix = state["bx"]
+        d = dict(request.query_params) | {k: v for k, v in (await bitrix_body(request)).items() if isinstance(v, str)}
+        saved = bx.state.load()
+        if not bx.configured or not bitrix.chatapp_ok(d, saved.get("chatapp_hash", ""), state["s"].bitrix_domain):
+            log.info("bitrix chat app refused: domain %r", str(d.get("DOMAIN") or "")[:80])
+            return hint_error("Нет доступа", 403)
+        dialog, user = str(d.get("DIALOG_ID") or ""), str(d.get("USER_ID") or "")
+        if not re.fullmatch(r"chat\d+", dialog):
+            return hint_error("Откройте «Подбор» из чата с клиентом.")
+        if await bx.chat_member(dialog, user) is False:
+            return hint_error("Вы не участник этого чата.", 403)
+        return hint_page(state["bx_tickets"].issue("", "", dialog, app=True, user=user), dialog, chatapp=True)
+
+    @app.post("/v1/bitrix/bot")
+    async def bitrix_bot_event(request: Request):
+        """События бота-владельца чат-приложения: сам он ничего не отвечает — нужен, чтобы Битрикс принял регистрацию."""
+        return {"ok": True}
+
     @app.get("/v1/bitrix/hint/dialog")
     async def bitrix_hint_dialog(after: int = 0, t: dict = Depends(bx_ticket)):
-        """Сообщения клиента из этого чата (от имени оператора). after — последнее уже разобранное сообщение."""
+        """Сообщения клиента из этого чата: от имени оператора или, у чат-приложения, ключом приложения.
+        after — последнее уже разобранное сообщение."""
         try:
-            d = await bitrix.operator_call(state["abcp"].http, t["endpoint"], t["auth"], "im.dialog.messages.get",
-                                           {"DIALOG_ID": t["dialog"], "LIMIT": 50})
+            if t.get("app"):
+                d = {"result": await state["bx"].dialog_messages(t["dialog"])}
+            else:
+                d = await bitrix.operator_call(state["abcp"].http, t["endpoint"], t["auth"], "im.dialog.messages.get",
+                                               {"DIALOG_ID": t["dialog"], "LIMIT": 50})
         except Exception as e:
             log.info("bitrix hint dialog failed: %s", type(e).__name__)
             raise HTTPException(502, "Битрикс24 не отдал переписку — попробуйте ещё раз")
