@@ -568,7 +568,9 @@ class Catalog:
                     try:
                         return check_error(await self.call(method, params))
                     except Exception as e:   # noqa: BLE001
-                        if "TOO_MANY_REQUESTS" not in str(e) or attempt == 3:
+                        # Через наш сервер гостевой лимит отвечает по-русски — тоже ждём и повторяем, а не «узлов нет»
+                        busy = "TOO_MANY_REQUESTS" in str(e) or "Слишком много запросов" in str(e) or "429" in str(e)
+                        if not busy or attempt == 3:
                             raise
                         await asyncio.sleep(15 * (attempt + 1))
 
