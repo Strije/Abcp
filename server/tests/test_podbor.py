@@ -1374,6 +1374,21 @@ def test_tree_fix_by_sound_keeps_real_words():
     assert tree.fix(T.stem("доброго")) == T.stem("доброго")             # слова не из каталога остаются как есть
 
 
+def test_missing_part_is_not_a_typo_of_neighbor_part():
+    """X-Trail 2017 (13.10): группы колодок в каталоге машины нет — «колодки перед» не должны стать «колонкой»
+    (шарнир рулевой колонки). Деталь, похожая на другую деталь в одну букву, — не опечатка: пусть ищется дальше."""
+    from app.podbor.catalog import TreeIndex
+    e = Engine(Fake(), None, set())
+    tree = TreeIndex([{"name": "Рулевая колонка", "quickGroupId": 1, "link": True, "synonyms": ""},
+                      {"name": "Привод", "quickGroupId": 2, "link": True, "synonyms": ""},
+                      {"name": "Выпускной коллектор", "quickGroupId": 3, "link": True, "synonyms": ""}],
+                     e.stop, None, [], e.catalog.not_typos)
+    assert tree.fix(T.stem("колодки")) == T.stem("колодки")
+    assert tree.fix(T.stem("провод")) == T.stem("провод")
+    assert tree.fix(T.stem("впуск")) == T.stem("впуск")
+    assert tree.fix(T.stem("калонка")) == T.stem("колонка")            # настоящая опечатка по-прежнему правится
+
+
 # ---------- почему несколько номеров одной детали ----------
 
 def test_differ_overlap_partner_and_economy():
