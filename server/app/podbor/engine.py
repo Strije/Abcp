@@ -682,7 +682,10 @@ class Engine:
             for w, key in D.brand_words(q):
                 if len(w) < 3:
                     continue   # «GE» — код мотора Mazda, а не фирма
-                rest = re.sub(rf"(?<![\wа-яё]){re.escape(w)}(?![\wа-яё])", " ", q, flags=re.I)
+                # С фирмой уходит и подводка к ней: «фильтр воздушный фирмы фильтрон» оставлял «… фирмы» — слова нет в каталоге,
+                # позиция снималась как частичное совпадение, хотя Filtron нашли (Rav4 13.10)
+                rest = re.sub(rf"(?<![\wа-яё])(?:(?:от\s+)?(?:фирм[аыеу]|производител[яьи]|бренд[аы]?|марк[иа])\s+)?"
+                              rf"{re.escape(w)}(?![\wа-яё])", " ", q, flags=re.I)
                 rest = re.sub(r"\s+", " ", rest).strip(" ,;")
                 if key == car or not T.stems(rest, self.stop):
                     continue

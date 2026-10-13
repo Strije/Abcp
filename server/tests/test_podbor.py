@@ -2807,3 +2807,16 @@ def test_same_car_twice_from_vin_is_not_a_choice():
     assert not same_car([car("VW", "Golf", engine="1.4 L"), car("VW", "Golf", engine="2.0 L")])
     assert not same_car([car("VW", "Golf", engine="CAXA 1.4"), car("VW", "Golf", engine="CBZB 1.2")])
     assert not same_car([car("TOYOTA", "Camry"), car("TOYOTA", "Corolla")])
+
+def test_brand_lead_word_goes_with_brand():
+    """Rav4 13.10: «фильтр воздушный фирмы фильтрон» — с фирмой уходит и «фирмы», иначе позиция снималась как частичная."""
+    from types import SimpleNamespace
+    from app.podbor import text as T
+    from app.podbor.engine import Engine, load_rules
+
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules())
+    v = SimpleNamespace(brand="TOYOTA")
+    # Латиница («Filtron», «NGK») узнаётся по справочнику ABCP, которого в тестах нет — проверяем кириллицей
+    for said in ("фильтр воздушный фирмы фильтрон", "фильтр воздушный от фирмы фильтрон", "фильтр масляный производителя манн"):
+        (q, _), = eng._split_brands([(said, T.Side())], v)[0]
+        assert not any(w in q.lower() for w in ("фирм", "производител", "filtron", "фильтрон", "ngk")), q
