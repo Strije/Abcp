@@ -2793,7 +2793,14 @@ def test_skoda_oil_change_conversation_13_10():
     from app.podbor import dialog as D
     from app.podbor import text as T
     from app.podbor.article import find
-    from app.podbor.measure import ENGINE, INDEX, STOP
+    from app.podbor.catalog import TreeIndex
+
+    # Своё дерево, а не measure.INDEX: тот собирается из кэша деревьев, которого в Actions нет
+    ENGINE = Engine(Fake(), None, set())
+    STOP = ENGINE.stop
+    INDEX = TreeIndex(node(0, "x", link=False, children=[
+        node(1, "Фильтр салонный"), node(2, "Фильтр воздушный"), node(3, "Фильтр масляный"), node(4, "Фильтр топливный"),
+        node(5, "Шаровая опора"), node(6, "ШРУС")]), STOP, None, [])
 
     r = T.parse("A614HK92 набор для замены масла")
     assert r.plate == "А614НК92" and not find(" ".join(r.chunks))
