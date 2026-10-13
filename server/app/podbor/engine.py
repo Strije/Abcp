@@ -1464,9 +1464,14 @@ class Engine:
         Слова группы там мешают: «Сайлентблок задней цапфы» в «Рычагах и тягах подвески» терял половину веса."""
         gscore = {g.id: s for g, s in groups}
         gwords = {g.id: T.stems(g.name, self.stop) for g, _ in groups}
-        # Слова названия и, если их там нет, слова покупателя из словаря: «Холостой шкив» — это и «ролик» (lexicon.py)
-        names = {id(d): LEX.name_stems(d.name, self.stop) for d in pool}
         known = tree.known(q)
+        names = {id(d): T.stems(d.name, self.stop) for d in pool}
+        # Главного слова клиента нет ни в одном названии — тогда и слова покупателя из словаря: «Холостой шкив» — это
+        # «ролик» (lexicon.py). Есть хоть одно название с ним — словарь не нужен: на «датчик коленвала» у Audi он делал
+        # «датчиком» и «Расходомер воздуха» (ДМРВ), и датчик детонации переставал отсекаться (сценарий, 13.10)
+        lead = T.head(known) if known else None
+        if lead and not any(T.same(lead, t) for st in names.values() for t in st):
+            names = {id(d): LEX.name_stems(d.name, self.stop) for d in pool}
         extra = [s for s in q if s not in known and any(T.same(s, t) for st in names.values() for t in st)]
         chosen = {g.id for g, _ in groups}
         near = [t for g, _ in groups for p, _ in g.phrases for t in p]
@@ -2203,9 +2208,9 @@ def prefer_named(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
     # на «датчик распредвала» (12.10) выпадал, а «Датчик детонации» оставался
     # Только когда клиент назвал и уточнение: на одно «бампер» и «Гаситель энергии бампера» содержит «всё»
     full = lambda c: len(q) >= 2 and all(any(T.same(s, t) for t in T.stems(c.d.name)) for s in q)  # noqa: E731
-    # …и деталь, которую так зовёт покупатель: «Холостой шкив» на «ролик» (словарь, lexicon.py)
-    named = [c for c in tier if T.same(_name_head(c.d.name), head) or full(c)
-             or any(T.same(h, head) for h in LEX.heads(c.d.name))]
+    named = [c for c in tier if T.same(_name_head(c.d.name), head) or full(c)]
+    # …а если так названной нет — та, которую так зовёт покупатель: «Холостой шкив» на «ролик» (словарь, lexicon.py)
+    named = named or [c for c in tier if any(T.same(h, head) for h in LEX.heads(c.d.name))]
     if not named or len(named) == len(tier):
         return tier
     # Убираем только обвес той же стороны, что и сама деталь: передний подшипник без явной стороны рядом с задней
