@@ -18,6 +18,7 @@ from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
 from . import emb as EMB
+from . import lexicon as LEX
 from . import article as A
 from . import differ as DF
 from . import makes as MK
@@ -565,7 +566,8 @@ class Engine:
             for g in p.get("groups", []):
                 grp = tree.groups.get(g.get("id"))
                 have += [s for ph, _ in (grp.phrases if grp else []) for s in ph]
-        have += [s for v in p.get("variants", [])[:6] for s in T.stems(v.get("name", ""), self.stop)]
+        # Слова покупателя из словаря тоже считаются: «ролик обводной» и «Холостой шкив» (lexicon.py)
+        have += [s for v in p.get("variants", [])[:6] for s in LEX.name_stems(v.get("name", ""), self.stop)]
         return sum(1 for w in words if any(T.same(w, h) for h in have)) / len(words), len(words)
 
     def _coverage(self, p: dict, tree: TreeIndex | None = None) -> float:
@@ -1250,7 +1252,7 @@ class Engine:
             lost = bool(raw_head) and raw_head not in known and tree.fix(raw_head) not in known                 and raw_head not in T.ADJ and raw_head not in _GENERIC_HEADS
             head = raw_head if lost else T.head(known)
             aliases = [head] + _PART_ALIASES.get(head, []) + _NAME_KIN.get(head, [])
-            has = lambda name: any(T.same(a, s) for a in aliases for s in T.stems(name, self.stop))  # noqa: E731
+            has = lambda name: any(T.same(a, s) for a in aliases for s in LEX.name_stems(name, self.stop))  # noqa: E731
             # Иначе — только при неполном совпадении с группой: «Стойки стабилизатора» у Toyota совпали точно,
             # а деталь в ней — «Шарнир переднего стабилизатора»; искать «стойку» по узлам — найти «Опору стойки»
             # Сайлентблок — всегда: «сайлентблок задней цапфы» точно привёл в «Рычаги и тяги подвески»,
@@ -1462,7 +1464,8 @@ class Engine:
         Слова группы там мешают: «Сайлентблок задней цапфы» в «Рычагах и тягах подвески» терял половину веса."""
         gscore = {g.id: s for g, s in groups}
         gwords = {g.id: T.stems(g.name, self.stop) for g, _ in groups}
-        names = {id(d): T.stems(d.name, self.stop) for d in pool}
+        # Слова названия и, если их там нет, слова покупателя из словаря: «Холостой шкив» — это и «ролик» (lexicon.py)
+        names = {id(d): LEX.name_stems(d.name, self.stop) for d in pool}
         known = tree.known(q)
         extra = [s for s in q if s not in known and any(T.same(s, t) for st in names.values() for t in st)]
         chosen = {g.id for g, _ in groups}
@@ -2200,7 +2203,9 @@ def prefer_named(tier: list["Candidate"], q: list[str]) -> list["Candidate"]:
     # на «датчик распредвала» (12.10) выпадал, а «Датчик детонации» оставался
     # Только когда клиент назвал и уточнение: на одно «бампер» и «Гаситель энергии бампера» содержит «всё»
     full = lambda c: len(q) >= 2 and all(any(T.same(s, t) for t in T.stems(c.d.name)) for s in q)  # noqa: E731
-    named = [c for c in tier if T.same(_name_head(c.d.name), head) or full(c)]
+    # …и деталь, которую так зовёт покупатель: «Холостой шкив» на «ролик» (словарь, lexicon.py)
+    named = [c for c in tier if T.same(_name_head(c.d.name), head) or full(c)
+             or any(T.same(h, head) for h in LEX.heads(c.d.name))]
     if not named or len(named) == len(tier):
         return tier
     # Убираем только обвес той же стороны, что и сама деталь: передний подшипник без явной стороны рядом с задней

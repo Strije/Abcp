@@ -2846,3 +2846,25 @@ def test_brand_lead_word_goes_with_brand():
     for said in ("фильтр воздушный фирмы фильтрон", "фильтр воздушный от фирмы фильтрон", "фильтр масляный производителя манн"):
         (q, _), = eng._split_brands([(said, T.Side())], v)[0]
         assert not any(w in q.lower() for w in ("фирм", "производител", "filtron", "фильтрон", "ngk")), q
+
+class FakePulleys(Fake):
+    """Группа «Ремень приводной, ролики»: «Холостой шкив» (это ролик) и «Шкив коленвала» (не ролик) — слова «ролик» нет нигде."""
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(192, "Ремень приводной, ролики")])
+        if method == "listQuickDetail":
+            return [cat("Двигатель", unit("Ременный привод", [det("123030R010", "Шкив коленвала"),
+                                                            det("11925ED320", "Холостой шкив (в сборе)")]))]
+        return super().answer(method, params)
+
+
+def test_lexicon_other_names_inside_group(monkeypatch):
+    """13.10: словарь модели «другие имена» — «Холостой шкив» покупатель зовёт роликом. Только внутри найденной группы."""
+    from app.podbor import lexicon as LEX
+    monkeypatch.setitem(LEX._STATE, "names", {})
+    p = run("X9FKXXEEBKCB57566 ролик обводной", engine=Engine(FakePulleys(), None, set()))["positions"][0]
+    before = [v["oem"] for v in p["variants"]]
+    monkeypatch.setitem(LEX._STATE, "names", {"холостой шкив (в сборе)": [["ролик"], ["обводн", "паразитн"]]})
+    assert LEX.heads("Холостой шкив (в сборе)") == ["ролик"] and LEX.heads("Втулка") == []
+    p = run("X9FKXXEEBKCB57566 ролик обводной", engine=Engine(FakePulleys(), None, set()))["positions"][0]
+    assert [v["oem"] for v in p["variants"]] == ["11925ED320"], (before, p["variants"])
