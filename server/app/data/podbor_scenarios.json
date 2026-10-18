@@ -56,7 +56,7 @@
     {"say": "а оригинал есть?", "expect": {"status": "answer", "text": ["оригинал"]}}]},
   {"name": "Разговор: какой лучше?", "turns": [
     {"say": "XW8ZZZ8K7AG200538 колодки передние", "expect": {"axis": "front"}},
-    {"say": "Какой лучше?", "expect": {"status": "answer", "text": ["советуем"]}}]},
+    {"say": "Какой лучше?", "expect": {"status": "answer", "text": ["менеджер"]}}]},
   {"name": "Разговор: фирма, которой нет в ответе", "turns": [
     {"say": "XW8ZZZ8K7AG200538 свечи зажигания", "expect": {"found": ["свеч"]}},
     {"say": "А Бош есть?", "expect": {"status": "answer"}}]},
