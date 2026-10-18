@@ -3010,3 +3010,43 @@ def test_gate_also_checks_confident_rules_answers(monkeypatch):
     assert ps[0]["status"] == "not_found" and ps[0]["arbiter"] == "НЕ" and ps[0]["gate_rules"] and not ps[0]["groups"]
     assert ps[1]["status"] == "found" and ps[1]["groups"] and "gate_rules" not in ps[1]
     assert asked == []
+
+
+def test_gate_removes_weak_chatter_before_asking_the_model(monkeypatch):
+    """Слабый ответ правил + уверенное «не деталь» от замка (запас ≥ 0.5): модель не зовём, позиции нет. Спорное (запас
+    ниже 0.5) по-прежнему идёт к модели."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor import emb as EMB
+    from app.podbor.engine import Engine, load_rules
+
+    class FakeEmb:
+        async def embed(self, texts):
+            return list(texts)
+
+        def top(self, vec, names, k=5):
+            return [("Двигатель", 0.6)]
+
+        def gate(self, vec, rules_score, emb_sim):
+            return {"прокладка ещё не доехала": ("НЕ", 0.7), "двигатель сзади": ("НЕ", 0.35)}.get(vec, ("НЕ", 0.0))
+
+    asked = []
+
+    class Llm:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=0):
+            asked.append(user)
+            return '{"choice": "Двигатель"}'
+
+    monkeypatch.setattr(EMB, "get", lambda: FakeEmb())
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules(), llm=Llm())
+    tree = SimpleNamespace(groups={}, fix=lambda s: s)
+
+    def weak(q):
+        return {"query": q, "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+                "groups": [{"name": "Прокладка двигателя", "score": 0.5}]}
+    ps = [weak("прокладка ещё не доехала"), weak("двигатель сзади")]
+    asyncio.run(eng._arbitrate(None, tree, ps))
+    assert ps[0]["status"] == "not_found" and ps[0]["gate_pre"] and ps[0]["arbiter"] == "НЕ"
+    assert len(asked) == 1 and "двигатель сзади" in asked[0]   # к модели ушло только спорное
