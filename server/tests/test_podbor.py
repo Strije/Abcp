@@ -2969,3 +2969,44 @@ def test_missing_part_in_full_catalog_is_explained_not_guessed():
     blind = run("XW7BF4FK30S064389 Фильтр салона", Engine(FakeNoCabin(units=False), None, set(), llm=Llm()))
     assert blind["positions"][0]["status"] == "not_found" and not blind["positions"][0].get("no_catalog_part")
     assert "такой детали нет" not in blind["text"]   # каталог не просмотрен — не утверждаем, что детали нет
+
+
+def test_gate_also_checks_confident_rules_answers(monkeypatch):
+    """Уверенный ответ правил на болтовню («двигатель» → «Двигатель») замок снимает; настоящая деталь остаётся.
+    Лишних запросов векторов нет (вектор считается и без замка), модель в этих позициях не спрашивается."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.podbor import emb as EMB
+    from app.podbor.engine import Engine, load_rules
+
+    class FakeEmb:
+        async def embed(self, texts):
+            return list(texts)
+
+        def top(self, vec, names, k=5):
+            return [(vec_group[vec], 0.7)]
+
+        def gate(self, vec, rules_score, emb_sim):
+            return ("НЕ", 0.6) if vec == "двигатель" else ("НЕ", 0.1)
+
+    vec_group = {"двигатель": "Двигатель", "колодки": "Колодки тормозные"}
+    asked = []
+
+    class Llm:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=0):
+            asked.append(user)
+            return '{"choice": "НЕ"}'
+
+    monkeypatch.setattr(EMB, "get", lambda: FakeEmb())
+    eng = Engine(SimpleNamespace(laximo=None), None, set(), load_rules(), llm=Llm())
+    tree = SimpleNamespace(groups={}, fix=lambda s: s)
+    ps = [{"query": "двигатель", "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+           "groups": [{"name": "Двигатель", "score": 1.1}]},
+          {"query": "колодки", "status": "found", "kind": "part", "note": "", "variants": [], "side": {},
+           "groups": [{"name": "Колодки тормозные", "score": 1.1}]}]
+    asyncio.run(eng._arbitrate(None, tree, ps))
+    assert ps[0]["status"] == "not_found" and ps[0]["arbiter"] == "НЕ" and ps[0]["gate_rules"] and not ps[0]["groups"]
+    assert ps[1]["status"] == "found" and ps[1]["groups"] and "gate_rules" not in ps[1]
+    assert asked == []

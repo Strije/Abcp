@@ -629,6 +629,7 @@ class Engine:
             return set()
         names = [g.name for g in tree.groups.values()]
         todo = []
+        done_gate: set[int] = set()   # уверенные ответы правил, снятые замком
         feats: dict[int, tuple] = {}   # для «замка»: вектор фразы, оценка правил, близость лучшей группы эмбеддингов
         for i, vec in zip(idx, vecs):
             p = positions[i]
@@ -636,13 +637,21 @@ class Engine:
             top = [n for n, _ in ranked]
             rules = [g["name"] for g in p.get("groups", [])[:3]]
             if not top or (rules and rules[0] in top and self._score(p) >= SURE_SCORE and not self._weak(p, tree)):
+                # Уверенные правила тоже проверяем «замком»: 117 из 159 ошибок эталона — уверенный ответ на болтовню и
+                # не-детали («этот же мотор», «прокладка ещё не доехала»). Вектор уже посчитан: лишних запросов нет.
+                # Модель на эталоне (по 10 частям): ошибок 8,2% → 5,0%, верных групповых ответов потеряно 7 из 539
+                verdict = emb.gate(vec, self._score(p), ranked[0][1]) if top and hasattr(emb, "gate") else None
+                if verdict and verdict[1] >= GATE_MARGIN:
+                    positions[i] = dict(p, status="not_found", variants=[], groups=[], question="", note="",
+                                        dropped=(p.get("query") or "")[:200], arbiter=verdict[0], gate=True, gate_rules=True)
+                    done_gate.add(i)
                 continue
             feats[i] = (vec, self._score(p), ranked[0][1])
             todo.append((i, list(dict.fromkeys(rules + top[:3]))))
         todo = todo[:MAX_ARBITER]
         picks = await asyncio.gather(*(U.pick_group(self.llm, positions[i]["query"], c) for i, c in todo),
                                      return_exceptions=True)
-        done = set()
+        done = set(done_gate)
         for (i, cands), pick in zip(todo, picks):
             old = positions[i]
             if not isinstance(pick, str) or not pick:
