@@ -268,7 +268,7 @@ class Engine:
         if not meta:
             if llm is not False:
                 await self._arbitrate(v, tree, res["positions"])
-            self._drop_lost(res["positions"], tree)
+            await self._recheck_dropped(v, res["positions"], self._drop_lost(res["positions"], tree))
         if not meta:
             for p, (k, attrs) in zip(res["positions"], reqs):
                 p["want_qty"], p["want_attrs"] = k, attrs
@@ -528,10 +528,11 @@ class Engine:
             return f"«{query}» — это может быть разное. Уточните, пожалуйста, что именно нужно: {examples} или что-то другое?"
         return ""
 
-    def _drop_lost(self, positions: list[dict], tree: TreeIndex | None = None) -> None:
+    def _drop_lost(self, positions: list[dict], tree: TreeIndex | None = None) -> list[int]:
         """Главное слово клиента не нашлось в каталоге и группа оценена слабо («кольцо подвесного» → уплотнения форсунки) или
         нашлась только часть слов («тормозной бачок» → бачок омывателя): показывать чужую деталь хуже, чем честно передать
         менеджеру. Модель уже посмотрела (арбитраж) и лучше не нашла."""
+        dropped: list[int] = []
         for i, p in enumerate(positions):
             if p.get("kind", "") not in ("", "part") or p["status"] == "not_found" or "llm_part" in p or "qualifier_from" in p                     or p.get("via_units"):
                 continue
@@ -539,6 +540,30 @@ class Engine:
             if lost or self._partial(p, tree):
                 positions[i] = dict(p, status="not_found", variants=[], groups=[], question="", note="",
                                     dropped=(p.get("note") or p.get("query") or "")[:200])
+                dropped.append(i)
+        return dropped
+
+    async def _recheck_dropped(self, v: Vehicle, positions: list[dict], idxs: list[int]) -> None:
+        """Отброшенное за потерянное слово («Фильтр салона» → масляный/топливный) до отказа ищем в узлах полного каталога
+        машины (слова, затем модель). Не нашли и каталог машины просмотрен — клиенту «такой детали в каталоге нет», а не
+        «не смогли уверенно подобрать» (18.10, Hyundai Elantra 2003: салонного фильтра нет ни в группах, ни в узлах)."""
+        for i in idxs:
+            p = positions[i]
+            query = p.get("query") or ""
+            want = T.Side((p.get("side") or {}).get("axis", ""), (p.get("side") or {}).get("lr", ""))
+            qs = T.stems(T.expand(query), self.stop)
+            try:
+                alt = await self._by_units(v, query, want, "")
+                if not alt and not self.outside(qs) and not self._vague(qs, query):
+                    alt = await self._by_units_llm(v, query, want, "")
+                # Находку принимаем только если в ней есть все слова клиента: на «Фильтр салона» узел «воздушный фильтр»
+                # (двигателя) подходил по слову «фильтр» и выдавался за салонный — проверено 18.10 на Elantra 2003
+                if alt and alt.get("status") in ("found", "choose") and alt.get("variants") and not self._partial(alt):
+                    positions[i] = alt | {"query": query, "was_dropped": p.get("dropped")}
+                elif await self.catalog.unit_tree(v) is not None:
+                    positions[i] = dict(p, no_catalog_part=True)
+            except Exception:   # noqa: BLE001 — запасной путь: ошибка = остаётся как было
+                continue
 
     @staticmethod
     def _score(p: dict) -> float:

@@ -3050,3 +3050,46 @@ def test_gate_removes_weak_chatter_before_asking_the_model(monkeypatch):
     asyncio.run(eng._arbitrate(None, tree, ps))
     assert ps[0]["status"] == "not_found" and ps[0]["gate_pre"] and ps[0]["arbiter"] == "НЕ"
     assert len(asked) == 1 and "двигатель сзади" in asked[0]   # к модели ушло только спорное
+
+
+def test_dropped_position_is_rechecked_in_full_catalog_and_explained():
+    """18.10, боевой путь: `_drop_lost` отбрасывает «Фильтр салона» (сосед без слова «салона») — до отказа ищем в узлах
+    полного каталога; не нашли и каталог просмотрен → no_catalog_part; каталог недоступен → флага нет."""
+    class Llm:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=1200):
+            return "{}"
+
+    def check(units):
+        eng = Engine(FakeNoCabin(units=units), None, set(), llm=Llm())
+        v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
+        positions = [{"query": "Фильтр салона", "status": "not_found", "kind": "part", "groups": [], "variants": [],
+                      "side": {}, "note": "", "dropped": "Фильтр салона"}]
+        asyncio.run(eng._recheck_dropped(v, positions, [0]))
+        return positions[0]
+    assert check(True).get("no_catalog_part") is True
+    assert not check(False).get("no_catalog_part")
+
+
+def test_dropped_recheck_does_not_accept_a_unit_that_misses_the_clients_word():
+    """«Фильтр салона»: узел «воздушный фильтр» (двигателя) совпал по слову «фильтр», слова «салона» в нём нет — чужую
+    деталь не показываем, говорим, что в каталоге такой детали нет."""
+    class Llm:
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=1200):
+            return "{}"
+
+    eng = Engine(FakeNoCabin(), None, set(), llm=Llm())
+    v = asyncio.run(eng.catalog.vehicles("XW7BF4FK30S064389"))[0]
+
+    async def wrong_unit(vv, query, want, kind):
+        return {"query": query, "status": "found", "kind": "part", "note": "", "side": {}, "via_units": True,
+                "groups": [{"id": -1, "name": "воздушный фильтр", "path": "", "score": 0.7}],
+                "variants": [{"oem": "281132D000", "name": "Фильтр воздушный", "unit": "воздушный фильтр"}]}
+    eng._by_units = wrong_unit
+    positions = [{"query": "Фильтр салона", "status": "not_found", "kind": "part", "groups": [], "variants": [],
+                  "side": {}, "note": "", "dropped": "Фильтр салона"}]
+    asyncio.run(eng._recheck_dropped(v, positions, [0]))
+    assert positions[0]["status"] == "not_found" and positions[0].get("no_catalog_part")
