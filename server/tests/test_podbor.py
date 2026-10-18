@@ -2930,3 +2930,42 @@ def test_emb_sends_texts_as_is_without_giga_instruct_prefix(monkeypatch):
     out = asyncio.run(e.embed(["колодки тормозные"]))
     assert sent["input"] == ["колодки тормозные"] and out is not None
     assert sent["url"].endswith("/embeddings") and "cloud.ru" not in sent["url"]
+
+
+class FakeNoCabin(Fake):
+    """18.10, Hyundai Elantra 2003: в быстрых группах нет «Фильтра салонного», в полном каталоге тоже (есть только узел
+    вентилятора отопителя). units=False — полный каталог машины недоступен."""
+
+    def __init__(self, units=True):
+        super().__init__()
+        self.units = units
+
+    def answer(self, method, params):
+        if method == "listQuickGroup":
+            return node(0, "Легковые", link=False, children=[node(1, "Детали для ТО", link=False, children=[
+                node(2, "Фильтр масляный"), node(3, "Фильтр воздушный", "воздухан"), node(4, "Фильтр топливный")])])
+        if method == "listCategories":
+            self.calls.append((method, None, None))
+            return [{"categoryId": "7", "name": "Отопление", "ssd": "s7", "childrens": "false", "parentCategoryId": "0"}] \
+                if self.units else []
+        if method == "listUnits":
+            return [{"unitId": "u1", "name": "Климатическая установка - узел вентилятора", "ssd": "su1"}]
+        return super().answer(method, params)
+
+
+def test_missing_part_in_full_catalog_is_explained_not_guessed():
+    """Соседние фильтры (масляный, топливный) вместо салонного не показываем; если полный каталог машины просмотрен и
+    детали там нет — так и говорим клиенту, а не «не смогли уверенно подобрать»."""
+    class Llm:   # модель узлы не выбрала (в каталоге их нет): ответ без номеров
+        enabled = True
+
+        async def chat(self, system, user, max_tokens=1200):
+            return "{}"
+
+    res = run("XW7BF4FK30S064389 Фильтр салона", Engine(FakeNoCabin(), None, set(), llm=Llm()))
+    p = res["positions"][0]
+    assert p["status"] == "not_found" and p.get("no_catalog_part") and not p["variants"]
+    assert "такой детали нет" in res["text"] and "не смогли уверенно" not in res["text"]
+    blind = run("XW7BF4FK30S064389 Фильтр салона", Engine(FakeNoCabin(units=False), None, set(), llm=Llm()))
+    assert blind["positions"][0]["status"] == "not_found" and not blind["positions"][0].get("no_catalog_part")
+    assert "такой детали нет" not in blind["text"]   # каталог не просмотрен — не утверждаем, что детали нет

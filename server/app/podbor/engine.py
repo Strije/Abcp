@@ -936,6 +936,7 @@ class Engine:
                 await self._confirm_replacements(v, alt)
                 return alt
         pos = await self._position(v, tree, query, want, kind)
+        units_tried = False   # искали ли деталь в узлах полного каталога машины (для честного «такой детали нет»)
         if pos["status"] == "not_found" and want.axis == "rear" and _DISC.search(query):
             # «Диски задние» на машине с барабанами: дисков в каталоге нет — даём барабаны и говорим об этом
             alt = await self._position(v, tree, "барабан тормозной", want, kind)
@@ -952,10 +953,12 @@ class Engine:
         if pos["status"] == "not_found" and not pos["groups"] and not pos["note"] and pos["kind"] in ("", "part"):
             # Быстрые группы Laximo (около 680) — урезанный список: подрамника, поперечины и многого другого там нет.
             # Ищем по узлам полного каталога машины: по словам, а не нашлось — узлы выбирает модель
+            units_tried = True
             pos = await self._by_units(v, query, want, kind) or pos
         if pos["status"] == "not_found" and pos["kind"] in ("", "part") and not pos.get("via_units") \
                 and not self.outside(qs) and not self._vague(qs, query):
             # Не нашли ни группами, ни словами по узлам (бывает и с пояснением «шланг уточним отдельно»): узлы выбирает модель
+            units_tried = True
             pos = await self._by_units_llm(v, query, want, kind) or pos
         out = await self._qualifier(v, tree, query, want, kind, pos) or pos
         miss = out.get("head_miss") or ""
@@ -967,8 +970,19 @@ class Engine:
             # Главного слова клиента нет ни в одной найденной детали, и узлы полного каталога его не нашли: «соленоиды АКПП»
             # → гидротрансформатор, «сальник распредвала» → распредвал, «барабан» → рычаг ручника (перепрогон 12.10: 11 из 32
             # «не та деталь»). Соседа не показываем — менеджеру. «Вентилируемый» — признак, а не деталь: такое оставляем
-            out = dict(out, status="not_found", variants=[], groups=[], question="", note="",
-                       dropped=(out.get("note") or query)[:200])
+            # Узлы полного каталога до этого пробовали только для «не нашли совсем» — здесь «нашли соседа», и без этого
+            # отказ был бы без проверки (18.10, Elantra 2003: «Фильтр салона» → масляный/топливный → менеджеру)
+            alt = await self._by_units(v, query, want, kind)
+            if not alt and not self.outside(qs) and not self._vague(qs, query):
+                alt = await self._by_units_llm(v, query, want, kind)
+            if alt:
+                out = alt
+            else:
+                units_tried = True
+                out = dict(out, status="not_found", variants=[], groups=[], question="", note="",
+                           dropped=(out.get("note") or query)[:200])
+        if units_tried and out["status"] == "not_found" and out.get("kind", "") in ("", "part") and not out.get("via_units") and not out.get("note") and await self.catalog.unit_tree(v) is not None:
+            out = dict(out, no_catalog_part=True)   # полный каталог машины просмотрен: такой детали в нём нет
         await self._confirm_replacements(v, out)
         return out
 
@@ -2883,6 +2897,9 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 lines.append("   " + p["note"])   # «нашёлся только внутренний вариант — нужный уточним»
             elif "Уточните, пожалуйста, что именно нужно" in p["note"] or "это только признак" in p["note"]:
                 lines.append("   " + p["note"])   # «бачок», «комплект»: деталь не названа — спрашиваем, а не гадаем
+            elif p.get("no_catalog_part"):
+                lines.append("   В каталоге для вашей машины такой детали нет (у некоторых моделей её не вносят в каталог, "
+                             "хотя в продаже она есть) — передали менеджеру, он подберёт по модели и напишет.")
             elif p.get("dropped"):
                 lines.append("   Не смогли уверенно подобрать эту деталь по каталогу — передали менеджеру, он уточнит и напишет.")
             else:
