@@ -21,6 +21,16 @@ MAX_REMEMBERED = 12
 ACCEPT = re.compile(r"\b(?:давайте|давай|беру|берём|берем|возьму|возьмём|возьмем|заказыва\w*|закаж\w*|заказу\w*|заказать|"
                     r"оформ\w*|выбер\w*|выбираю|подходит|устраивает)\b", re.I)
 CHEAPER = re.compile(r"дешевл|подешевл|бюджетн|недорог|дорог", re.I)
+# Вопрос о качестве детали («какой лучше», «посоветуйте», «отзывы») — не выбираем сами, передаём менеджеру.
+# Имя не QUALITY: ниже есть старый QUALITY (вопрос по отзывам о показанном) — позднее объявление перекрыло бы это.
+# Голые «лучше»/«хорошо» не берём: «лучше завтра», «хорошо, спасибо» — не вопрос о качестве.
+QUALITY_ASK = re.compile(r"качеств\w*|посовет\w*|порекоменд\w*|рекоменд\w*|надёжн\w*|надежн\w*|долговеч\w*|"
+                         r"не\s+сломается|не\s+подвед[её]т|рейтинг\w*|отзыв\w*|какая\s+фирма\w*|какой\s+фирмы|"
+                         r"что\s+(?:брать|взять)|какую?\s+брать|(?:какой|какая|какое|какие)\s+(?:из\s+них\s+)?(?:лучш|хорош)\w*|"
+                         r"(?:самый|самая|самое)\s+(?:лучш|хорош)\w*|\bлучш(?:ий|ая|ее|ие)\b|хорош\w*\s*\?", re.I)
+QUALITY_TEXT = "По качеству деталей подсказывает менеджер: он уточнит и ответит. Цены и сроки мы показываем сразу."
+QUALITY_OFF = re.compile(r"дешев\w*|дорог\w*|выгодн\w*|быстр\w*|на\s+сегодня|в\s+наличии|по\s+наличию|в\s+сборе|аналог\w*", re.I)
+PRICIEST = re.compile(r"самый\s+дорог|наоборот\s+дорог|подороже|дороже\s+всех|самый\s+дорог\w*", re.I)
 ORIGINAL = re.compile(r"\bориг(?:инал\w*)?\b", re.I)
 BEST = re.compile(r"\b(?:какой|какая|какие|какую|что|кого)\b.{0,25}\b(?:лучше|посовету\w*|порекоменду\w*|совету\w*)\b"
                   r"|\bчто\s+лучше\b|\bлучше\s+взять\b", re.I)
@@ -164,6 +174,8 @@ def remember(res: dict, prev: dict | None, replaced: list[int] | None = None) ->
                 continue
         positions.append(p)
     mem["positions"] = positions[-MAX_REMEMBERED:]
+    if res.get("focus") is not None:
+        mem["focus"] = res["focus"]
     return mem
 
 
@@ -350,6 +362,7 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
         return None
     question = bool(QUESTION.search(text)) and not ACCEPT.search(text)
     picks, unclear, answers, ask_brand = [], [], [], []
+    manager_quality: list[str] = []   # вопросы о качестве — не отвечаем сами, передаём менеджеру
     touched = False
     last_turn = max(p.get("turn", 0) for p in positions)
     recent = [p for p in positions if p.get("turn", 0) == last_turn]
@@ -423,14 +436,18 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                 answers += [_analogs_answer(p, analogs) for p in scope]
             continue
         if question:
-            if CHEAPER.search(piece):
+            if PRICIEST.search(piece):
+                touched = True
+                for p in scope:
+                    answers.append(("priciest", p, _priciest(p)))
+            elif CHEAPER.search(piece):
                 touched = True
                 for p in scope:
                     answers.append(("cheapest", p, _cheapest(p)))
             elif BEST.search(piece):
-                touched = True
+                touched = True   # «какой лучше», «посоветуйте» — качество детали: решение пользователя 16.10, менеджеру
                 for p in scope:
-                    answers.append(("best", p, _best(p)))
+                    manager_quality.append(p["query"])
             elif ONLY_ORIGINAL.search(piece) and not orig:
                 touched = True   # «аналоги есть?», «только оригинал?»
                 answers += [_analogs_answer(p, analogs) for p in scope]
@@ -470,6 +487,16 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     touched = True
                     answers += [("quality", p, x) for p, x in rated]
             continue
+        if QUALITY_ASK.search(piece) and not QUALITY_OFF.search(piece) and not uniq and not ACCEPT.search(piece):
+            touched = True   # качество детали (лучший, хороший, отзывы) — не выбираем сами, передаём менеджеру
+            for p in scope:
+                manager_quality.append(p["query"])
+            continue
+        if PRICIEST.search(piece) and not uniq and not ACCEPT.search(piece):
+            touched = True   # «самый дорогой», «наоборот дорогой» — запрос максимума, а не отказ от цены
+            for p in scope:
+                answers.append(("priciest", p, _priciest(p)))
+            continue
         if (CHEAPER.search(piece) or NOT_ORIGINAL.search(piece)) and not uniq and not ACCEPT.search(piece):
             touched = True   # «дорого», «любую другую фирму» — самый недорогой, а если аналогов нет — так и скажем
             for p in scope:
@@ -488,7 +515,7 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     picks.append(_pick(p, x, c, _qty(piece)))
                 else:
                     unclear.append(group[0][0])
-        elif ACCEPT.search(piece) or (named and _qty(piece)):
+        elif ACCEPT.search(piece):   # фирма и количество без слова подтверждения — не выбор, спросим
             touched = True
             for p in scope:
                 vis = shown(p, analogs)
@@ -498,8 +525,12 @@ def offer_reply(text: str, mem: dict, stop: frozenset[str], analogs: int = 3) ->
                     unclear.append(p)
     if not touched:
         return None
-    if answers or ask_brand:
-        return {"kind": "answer", "answers": answers, "ask_brand": ask_brand, "picks": picks}
+    if answers or ask_brand or manager_quality:
+        out = {"kind": "answer", "answers": answers, "ask_brand": ask_brand, "picks": picks}
+        if manager_quality:
+            out["clarify"] = QUALITY_TEXT
+            out["handoff"] = [f"качество: {q}" for q in dict.fromkeys(manager_quality)]
+        return out
     return {"kind": "order", "picks": picks, "unclear": list(dict.fromkeys(p["query"] for p in unclear))}
 
 
@@ -575,6 +606,19 @@ def _pick(p: dict, x: dict, cheaper: bool, qty: int) -> dict:
     axis, lr = shown_side(p, x["var"])
     return {"query": p["query"], "name": x["var"]["name"], "who": x["who"], "offer": o, "qty": qty, "kind": p.get("kind", ""),
             "axis": axis, "lr": lr, "amount": x["var"].get("amount", "")}
+
+
+def _priciest(p: dict) -> dict | None:
+    """Самый дорогой из показанных (запрос максимума): та же форма, что у _cheapest."""
+    best = None
+    for x in all_offers(p):
+        o = x["offer"]
+        if best is None or o["price"] > best[0]:
+            best = (o["price"], o["days"], x)
+    if not best:
+        return None
+    price, days, x = best
+    return dict(x, offer=dict(x["offer"], price=price, days=days, cheaper=None))
 
 
 def _cheapest(p: dict) -> dict | None:
@@ -790,19 +834,28 @@ def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
         return positions[i - 1] if i and 0 < i <= len(positions) else None
 
     picks, answers, ask_brand, jobs, unclear = [], [], [], [], []
-    # Модель любит читать «2 штуки», «ну да», «одну нам надо» как выбор первого варианта. Выбор принимаем, только
-    # если клиент назвал вариант (цену, фирму, номер, «оригинал») или вариант один — иначе спрашиваем какой
-    named = bool(_numbers(text) or brand_words(text) or _ordinal(text) or ORIGINAL.search(text)) if text else True
+    manager_qty: list[str] = []
+    manager_quality: list[str] = []
+    manager_unparsed: list[str] = []   # в названии позиции оказалась фраза клиента — не деталь, уточнит менеджер
+    # Модель любит читать «2 штуки», «ну да», «одну нам надо» как выбор первого варианта. С 16.10.2026 выбор принимаем,
+    # только если клиент подтвердил (ACCEPT: «беру», «оформляем», «давайте»); назвать фирму или количество — ещё не выбор
     for x in d.get("picks", []):
         p = pos(x["p"])
         vis = shown(p, analogs) if p else []
         if p and 0 < x["v"] <= len(vis):
-            if named or len(vis) == 1:
+            # выбор оформляем только по подтверждению («оформляем», «беру»); фирма или количество — не подтверждение
+            if ACCEPT.search(text):   # модельный выбор — в заказ только по подтверждению, даже если вариант один
                 picks.append(_pick(p, vis[x["v"] - 1], False, x.get("qty") or _qty(text)))
             else:
                 unclear.append(p["query"])
+    focus_pos = None
+    for a in d.get("asks", []) + [dict(p=x["p"]) for x in d.get("picks", []) if x.get("p")]:
+        if pos(a.get("p")):
+            focus_pos = a["p"]
     for a in d.get("asks", []):
-        for p in ([pos(a["p"])] if pos(a.get("p")) else recent):
+        # без номера позиции — о той, о которой говорили последним (фокус), а не о позициях последнего хода
+        base_p = [pos(a["p"])] if pos(a.get("p")) else ([pos(focus_pos)] if focus_pos and pos(focus_pos) else recent)
+        for p in base_p:
             about = a["about"]
             if about == "cheaper":
                 has = any(x["who"] == "" for x in all_offers(p))
@@ -815,7 +868,7 @@ def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
                          (x["offer"]["brand"], x["offer"]["number"]) not in seen][:3]
                 answers += [("more", p, x) for x in extra] or [_analogs_answer(p, analogs)]
             elif about == "best":
-                answers.append(("best", p, _best(p)))
+                manager_quality.append(p["query"])   # «лучший» — качество детали, решает менеджер
             elif about == "stock":
                 vis = shown(p, analogs)
                 here = [x for x in vis if x["offer"]["days"] <= 0][:3]
@@ -825,6 +878,12 @@ def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
                 spec = _spec(p, analogs)
                 if spec:
                     answers.append(("spec", p, spec))
+            elif about == "qty":
+                amounts = [x for x in shown(p, analogs) if str(x["var"].get("amount") or "").strip()]
+                if amounts:
+                    answers.append(("qty", p, amounts[0]))
+                else:
+                    manager_qty.append(p["query"])
             elif about == "brand" and a.get("brand"):
                 key = _bk(a["brand"])
                 hit = next((x for x in all_offers(p) if _bk(x["offer"]["brand"]) == key), None)
@@ -842,14 +901,24 @@ def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
         side = T.Side(r.get("axis") or "", r["lr"] if r.get("lr") in ("left", "right") else "")
         jobs.append((side_query(base, side) if side.axis or side.lr else base, side))
     for n in d.get("new_parts", []):
-        jobs.append((n["part"], T.Side(n.get("axis") or "", n["lr"] if n.get("lr") in ("left", "right") else "")))
+        name = str(n["part"]).strip()
+        # название детали — короткое; фраза клиента в названии («машине рычаг состоит…») — менеджеру, а не позиция
+        # (до 8 слов: «Подшипник ступицы колеса передний левый в сборе» — настоящее название, 7 слов)
+        if len(name.split()) > 8 or re.search(r"\b(состоит|нужн|нужен|нужна|хочу|надо|подойд|есть ли|сколько)\w*", name, re.I):
+            manager_unparsed.append(name[:80])
+            continue
+        jobs.append((name, T.Side(n.get("axis") or "", n["lr"] if n.get("lr") in ("left", "right") else "")))
     clarify = d.get("clarify", "") if (d.get("unsure") or not (picks or answers or ask_brand or jobs or unclear)) else ""
     reply = None
     if picks or answers or ask_brand or clarify or unclear:
         reply = {"kind": "order" if (picks or unclear) and not answers and not ask_brand else "answer",
                  "picks": picks, "answers": answers, "ask_brand": ask_brand, "unclear": list(dict.fromkeys(unclear)),
                  "clarify": clarify}
-    return {"kind": "llm", "reply": reply, "jobs": jobs, "replaced": [], "handoff": d.get("manager", []),
+    if (manager_quality or manager_unparsed) and not reply and not jobs:
+        reply = {"kind": "answer", "answers": [], "picks": [], "unclear": [],
+                 "clarify": (QUALITY_TEXT if manager_quality else "Эту позицию лучше уточнит менеджер: он ответит вам здесь же.")}
+    return {"kind": "llm", "reply": reply, "jobs": jobs, "replaced": [], "handoff": list(d.get("manager", [])) + [f"качество: {q}" for q in manager_quality] + [f"количество: {q}" for q in manager_qty] + [f"не разобрана позиция: {q}" for q in manager_unparsed],
+            "focus": focus_pos,
             "sure": not d.get("unsure")}
 
 
@@ -922,7 +991,7 @@ def _plan(text: str, mem: dict, stop: frozenset[str], tree, analogs: int = 3,
         if r.get("answers") and all(k == "stock" or k == "fastest" for k, _, _ in r["answers"]):
             out["handoff"] = [s for s in out["handoff"] if not STOCK.search(s)]   # про наличие бот ответил сам
         kind = "answer" if r["kind"] == "answer" else "pick" if r.get("picks") else "pick_unclear"
-        return out | {"kind": kind, "reply": r}
+        return out | {"kind": kind, "reply": r, "handoff": out["handoff"] + r.get("handoff", [])}
 
     jobs, replaced = out["jobs"], out["replaced"]
     last_turn = max((p.get("turn", 0) for p in positions), default=0)

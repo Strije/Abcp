@@ -2868,3 +2868,65 @@ def test_lexicon_other_names_inside_group(monkeypatch):
     assert LEX.heads("Холостой шкив (в сборе)") == ["ролик"] and LEX.heads("Втулка") == []
     p = run("X9FKXXEEBKCB57566 ролик обводной", engine=Engine(FakePulleys(), None, set()))["positions"][0]
     assert [v["oem"] for v in p["variants"]] == ["11925ED320"], (before, p["variants"])
+
+
+def test_quality_question_goes_to_manager_not_to_a_pick():
+    """16.10: вопрос о качестве детали («какой лучше», «посоветуйте», «отзывы») — к менеджеру; «лучше завтра» и
+    «хорошо, спасибо» — не вопрос о качестве. QUALITY_ASK не должен затеняться старым QUALITY (два объявления в модуле)."""
+    from app.podbor import dialog as D
+    assert D.QUALITY_ASK is not D.QUALITY
+    for yes in ("Какой лучше?", "Лучший", "посоветуйте что взять", "какие отзывы", "самый надёжный", "Какая фирма хорошая?"):
+        assert D.QUALITY_ASK.search(yes), yes
+    for no in ("Хорошо, спасибо", "лучше завтра", "давайте дешевле", "хорошо"):
+        assert not D.QUALITY_ASK.search(no), no
+    e = Engine(Fake(), None, set())
+    mem = run("XW7BF4FK30S064389 колодки задние", e)["memory"]
+    r = run("Какой лучше?", e, memory=mem)
+    assert r["status"] != "order" and "менеджер" in r["text"].lower()
+    assert run("Хорошо, давайте этот вариант", e, memory=mem)["status"] == "order"   # «хорошо» + подтверждение — заказ
+
+
+def test_priciest_answer_and_cheaper_are_different_questions():
+    e = Engine(Fake(), None, set())
+    mem = run("XW7BF4FK30S064389 колодки задние", e)["memory"]
+    r = run("а самый дорогой какой?", e, memory=mem)
+    assert r["status"] == "answer" and "самый дорогой вариант" in r["text"]
+    assert "дешевле" not in r["text"].lower()
+
+
+def test_from_llm_name_filter_keeps_real_long_names_and_unparsed_goes_to_manager():
+    """В названии позиции фраза клиента («машине рычаг состоит из двух сайлентблоков») — не деталь; а настоящее
+    длинное название («Подшипник ступицы колеса передний левый в сборе») терять нельзя."""
+    from app.podbor.dialog import from_llm
+    base = {"picks": [], "asks": [], "refine": [], "manager": [], "clarify": "", "unsure": False}
+    long_ok = from_llm(dict(base, new_parts=[{"part": "Подшипник ступицы колеса передний левый в сборе"}]), {}, 3, "")
+    assert [q for q, _ in long_ok["jobs"]] == ["Подшипник ступицы колеса передний левый в сборе"]
+    bad = from_llm(dict(base, new_parts=[{"part": "машине рычаг состоит из двух сайлентблоков"}]), {}, 3, "")
+    assert bad["jobs"] == [] and any(h.startswith("не разобрана позиция") for h in bad["handoff"])
+    assert bad["reply"] and "менеджер" in bad["reply"]["clarify"]
+    nine = from_llm(dict(base, new_parts=[{"part": "Мне нужен тормозной диск"}]), {}, 3, "")
+    assert nine["jobs"] == []
+
+
+def test_emb_sends_texts_as_is_without_giga_instruct_prefix(monkeypatch):
+    """С 15.10 векторы Gemini (Timeweb): префикс «Instruct:» был нужен только Giga и ухудшил бы поиск."""
+    import numpy as np
+    from app.podbor import emb as EMB
+    sent = {}
+
+    class R:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [1.0, 0.0]}]}
+
+    class H:
+        async def post(self, url, json=None, **kw):
+            sent.update(url=url, **json)
+            return R()
+
+    e = EMB.Emb(["A"], np.zeros((1, 2), dtype=np.float32), "k")
+    e.http = H()
+    out = asyncio.run(e.embed(["колодки тормозные"]))
+    assert sent["input"] == ["колодки тормозные"] and out is not None
+    assert sent["url"].endswith("/embeddings") and "cloud.ru" not in sent["url"]

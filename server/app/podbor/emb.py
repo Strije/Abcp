@@ -4,8 +4,10 @@
 у правил в тройке — 85%. Схема «правила уверены и их группа в пятёрке эмбеддингов, иначе арбитр»: 196 верно / 56 ошибок
 против 142 / 69 у правил. Сами эмбеддинги группу не выбирают — только предлагают; выбирает модель.
 
-Векторы групп считаются заранее (лаборатория, Giga-Embeddings-instruct-3B) и лежат файлом EMB_VECTORS (names, vecs);
-вектор фразы — один запрос к Cloud.ru (EMB_API_KEY). Нет ключа или файла — выключено, робот работает как раньше.
+Векторы групп считаются заранее (лаборатория; с 15.10.2026 gemini/gemini-embedding-2 через Timeweb AI Gateway, 3072 измерения —
+до этого Giga-Embeddings-instruct-3B в Cloud.ru, у которого кончился баланс) и лежат файлом EMB_VECTORS (names, vecs);
+вектор фразы — один запрос к шлюзу (EMB_BASE_URL, EMB_MODEL, EMB_API_KEY). Фраза уходит как есть, без префикса «Instruct:»
+(он нужен был только Giga): векторы групп и веса замка обязаны быть посчитаны той же моделью, что стоит в EMB_MODEL. Нет ключа или файла — выключено, робот работает как раньше.
 
 «Замок» (EMB_GATE, 12.10.2026): линейная модель на векторе фразы решает, деталь это или нет (НЕ / УТОЧ / МЕН / НЕТ).
 Обучена на 550 размеченных фразах (лаборатория, emb_s7b_train.py); при проверке по частям эталона поднимает итог арбитра
@@ -19,9 +21,8 @@ from pathlib import Path
 
 import httpx
 
-URL = os.environ.get("EMB_BASE_URL", "https://foundation-models.api.cloud.ru/v1").rstrip("/")
-MODEL = os.environ.get("EMB_MODEL", "ai-sage/Giga-Embeddings-instruct-3B")
-QI = "Дана фраза клиента магазина автозапчастей. Найди группу деталей каталога, о которой идёт речь"
+URL = os.environ.get("EMB_BASE_URL", "https://api.timeweb.ai/v1").rstrip("/")
+MODEL = os.environ.get("EMB_MODEL", "gemini/gemini-embedding-2")
 _STATE: dict = {}
 
 
@@ -63,7 +64,7 @@ class Emb:
         """Векторы фраз (нормированные) или None, если сервис не ответил — тогда арбитр работает по-старому."""
         try:
             r = await self.http.post(f"{URL}/embeddings", json={"model": MODEL, "encoding_format": "base64",
-                                                                 "input": [f"Instruct: {QI}\nQuery: {t}" for t in texts]})
+                                                                 "input": list(texts)})
             data = sorted(r.json()["data"], key=lambda x: x["index"]) if r.status_code == 200 else None
         except (httpx.HTTPError, ValueError, KeyError):
             data = None

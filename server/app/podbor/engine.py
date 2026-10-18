@@ -430,6 +430,8 @@ class Engine:
                 hp = D.from_llm(parsed, mem, analogs, text)
                 if hp["reply"] or hp["jobs"] or hp["handoff"]:
                     plan = hp
+                    if hp.get("focus") is not None:
+                        res["focus"] = hp["focus"]
         if plan["kind"] == "chat" and not plan.get("reply") and not plan.get("jobs") and "?" not in text \
                 and not D.STATUS.search(text) and not D.DEFER.search(text) and self._partish(text, tree):
             # На реплике с деталями не молчим (Skoda 13.10: «фильтр салонный воздушный масляный топливный» → пусто):
@@ -3264,7 +3266,9 @@ def reply_text(r: dict, numbers: bool = False) -> str:
         lines += [r["clarify"], ""]
     for a in r.get("answers", []):
         t, title = a["type"], _title(a)
-        if t == "cheapest":
+        if t == "priciest":
+            lines += [f"{title} — самый дорогой вариант:", _offer_line(a["offer"], numbers, who=a["who"])]
+        elif t == "cheapest":
             lines += [f"{title} — самый недорогой вариант:", _offer_line(a["offer"], numbers, who=a["who"])]
         elif t == "original":
             lines += [f"{title} — оригинал:", _offer_line(a["offer"], numbers, who="оригинал")]
@@ -3277,6 +3281,8 @@ def reply_text(r: dict, numbers: bool = False) -> str:
                    "оригинал": "это оригинал"}.get(a.get("why", ""), "")
             lines += [f"{title} — советуем этот вариант" + (f": {why}." if why else "."),
                       _offer_line(a["offer"], numbers, who=a["who"])]
+        elif t == "qty":
+            lines.append(f"{title}: на машину нужно {a['amount']}.")
         elif t == "brand":
             lines += [f"{title} — есть:", _offer_line(a["offer"], numbers, who=a["who"])]
         elif t in ("stock", "fastest", "more", "quality"):

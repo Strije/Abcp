@@ -557,7 +557,7 @@ class Catalog:
             return saved["units"]
         base = {"catalog": v.catalog, "vehicleId": v.vehicle_id}
         out: list[dict] = []
-        sem = asyncio.Semaphore(6)   # у VW сотни категорий: не заваливаем Laximo запросами разом
+        sem = asyncio.Semaphore(3)   # у VW сотни категорий: не заваливаем Laximo запросами разом
 
         async def ask(method: str, params: dict):
             async with sem:
