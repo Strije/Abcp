@@ -864,6 +864,8 @@ class Engine:
         «Колодки передние и задние» → две: одно слово стороны повторяет соседнюю деталь."""
         out: list[tuple[str, T.Side]] = []
         for chunk in chunks:
+            if T.is_comment(chunk):
+                continue   # рассуждение клиента («кажется…», «состоит из…») — не позиция
             # «…колодки и диски, спасибо» — вежливый хвост через запятую не делает из одной позиции две
             segs = chunk.split(",")
             while len(segs) > 1 and all(w in self.stop for w in T.words(segs[-1])):

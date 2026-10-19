@@ -243,6 +243,17 @@ def drop_negated(text: str) -> str:
     return out if re.search(r"[а-яёa-z]{3}", out, re.I) else (text or "")
 
 
+# Рассуждение клиента, а не название детали: «Кажется ролик тут будет это натяжитель в сборе», «На машине рычаг состоит
+# из двух сайлентблоков» (19.10, живой прогон: такие фразы становились позициями с текстом клиента вместо детали)
+_COMMENT = re.compile(r"(?<![а-яё])(?:кажется|наверное|по-моему|по\s+моему|вроде\s+бы|состоит\s+из|у\s+меня\s+стоит|"
+                      r"стоит\s+у\s+меня|он\s+же|она\s+же|оно\s+же|получается|почему|это\s+только|а\s+не\s+полностью)(?![а-яё])",
+                      re.I)
+
+
+def is_comment(text: str) -> bool:
+    return len(re.findall(r"[а-яёa-z0-9]+", text or "", re.I)) >= 4 and bool(_COMMENT.search(text or ""))
+
+
 def split_pieces(chunk: str) -> list[str]:
     return [p.strip() for p in re.split(r",|\+|\s+и\s+|/", expand(chunk)) if p.strip()]
 

@@ -3300,3 +3300,13 @@ def test_heater_valve_never_falls_back_to_engine_valves():
     stop = frozenset(rules["stop"]) | frozenset(T.stem(w) for w in rules["stop"])
     tree = TreeIndex(node(0, "Легковые", link=False, children=[node(160, "Клапаны")]), stop, None, rules["synonyms"])
     assert tree.rank(T.stems("электро клапана печки", stop), T.Side()) == []
+
+
+def test_client_reasoning_is_not_a_position():
+    """19.10, живой прогон: рассуждения клиента становились позициями."""
+    assert T.is_comment("Кажется ролик тут будет это натяжитель в сборе")
+    assert T.is_comment("На машине рычаг состоит из двух сайлентблоков и одной шаровой")
+    assert not T.is_comment("ролик натяжителя ремня генератора")
+    assert not T.is_comment("кажется ролик")   # короткое — не трогаем
+    e = Engine(Fake(), None, set())
+    assert e.split(["Кажется ролик тут будет это натяжитель в сборе"], _index()) == []

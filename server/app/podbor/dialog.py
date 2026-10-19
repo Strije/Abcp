@@ -926,7 +926,7 @@ def from_llm(d: dict, mem: dict, analogs: int = 3, text: str = "") -> dict:
         name = str(n["part"]).strip()
         # название детали — короткое; фраза клиента в названии («машине рычаг состоит…») — менеджеру, а не позиция
         # (до 8 слов: «Подшипник ступицы колеса передний левый в сборе» — настоящее название, 7 слов)
-        if len(name.split()) > 8 or re.search(r"\b(состоит|нужн|нужен|нужна|хочу|надо|подойд|есть ли|сколько)\w*", name, re.I):
+        if len(name.split()) > 8 or T.is_comment(name) or re.search(r"\b(состоит|нужн|нужен|нужна|хочу|надо|подойд|есть ли|сколько)\w*", name, re.I):
             manager_unparsed.append(name[:80])
             continue
         jobs.append((name, T.Side(n.get("axis") or "", n["lr"] if n.get("lr") in ("left", "right") else "")))
