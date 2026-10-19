@@ -988,8 +988,9 @@ class Engine:
                                settled=True)
             await self._confirm_replacements(v, pos)
             return pos
-        if _SPARK.search(query) and not any("свеч" in g.name.lower() and "зажиган" in g.name.lower()
-                                            for g in tree.groups.values()):
+        bare_plugs = _BARE_PLUGS.fullmatch(query.strip()) is not None   # «свечи», «нужны свечи» — без «зажигания»
+        if (_SPARK.search(query) or bare_plugs) and not any("свеч" in g.name.lower() and "зажиган" in g.name.lower()
+                                                            for g in tree.groups.values()):
             # «Свечи зажигания» на дизеле (Mercedes E 290 Turbodiesel, 12.10): группы свечей зажигания в каталоге нет,
             # правила находили «Свечи накаливания» по слову «свечи» и тут же выбрасывали за потерянное «зажигания» —
             # «передано менеджеру». Клиенту нужны свечи накаливания: показываем их и говорим почему. У бензиновой
@@ -3330,6 +3331,8 @@ WEAK_SCORE = 0.65   # оценка группы каталога ниже — р
 _PRICE_TAIL = re.compile(r"[\s,]*(?:сколько\s+)?(?:стоят|стоит|стоимость|цена|почем|почём)\s*[?.!]*\s*$", re.I)
 _BRAKE = re.compile(r"диск|колодк|барабан|суппорт|тормоз", re.I)
 _DISC = re.compile(r"диск\w*\s+тормоз|тормозн\w*\s+диск|^диск", re.I)
+# 19.10, живой прогон: Santa Fe 2019 (дизель) — «нужны свечи» уходило в «не смогли подобрать», а «свечи зажигания» — в накаливания
+_BARE_PLUGS = re.compile(r"(?:(?:нужн[аыо]?|надо|нужен|есть|ещ[её]|и|а|какие|комплект|набор)\s+)*свеч(?:и|ей|ку|ки|а)?(?:\s+(?:нужн[аыо]?|надо|есть|\d+\s*шт\.?))?[?.!]*", re.I)
 _SPARK = re.compile(r"свеч\w*\s+(?:\w+\s+)?зажиган|зажиган\w*\s+свеч", re.I)
 _AROUND = re.compile(r"\bв\s+круг\b|\bпо\s+кругу\b|\bсо\s+всех\s+сторон\b|\bна\s+все\s+колес\w*|\bна\s+все\s+колёс\w*"
                      r"|\bвсе\s+четыре\b|\bна\s+4\s+колеса\b|\bна\s+все\s+4\b", re.I)

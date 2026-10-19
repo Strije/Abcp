@@ -2570,6 +2570,10 @@ def test_spark_plugs_on_diesel_become_glow_plugs():
     assert p["status"] != "not_found" and p["query"] == "Свечи накаливания"
     assert p["variants"][0]["oem"] == "1854999" and "дизельный" in p["note"]
     assert not res.get("handoff")
+    # 19.10, Santa Fe 2019 (дизель): просто «нужны свечи» — то же самое, а не «не смогли подобрать»
+    res = run("X9FKXXEEBKCB57566 нужны свечи", engine=Engine(FakeDiesel(), None, set()))
+    p = res["positions"][0]
+    assert p["status"] != "not_found" and p["query"] == "Свечи накаливания" and "дизельный" in p["note"]
     # Бензиновая машина (групп накаливания нет): свечи накаливания не подсовываем
     res = run("X9FKXXEEBKCB57566 Свечи зажигания")
     assert not any("накал" in v["name"].lower() for p in res["positions"] for v in p["variants"])
