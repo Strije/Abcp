@@ -745,3 +745,25 @@ def test_llm_retries_without_temperature_when_model_rejects_it():
     assert asyncio.run(llm.chat("s", "u")) == "да"
     assert asyncio.run(llm.chat("s", "u")) == "да"
     assert ["temperature" in b for b in bodies] == [True, False, False]   # второй раз — сразу без temperature
+
+
+def test_llm_switches_to_max_completion_tokens_and_drops_temperature():
+    """Модель (gpt-6-luna) отвергает и max_tokens, и temperature — по одному за ответ; робот приспосабливается."""
+    import asyncio, json as _json
+    import httpx
+    from types import SimpleNamespace
+    from app.llm import LLM
+    bodies = []
+
+    def handler(req):
+        body = _json.loads(req.content)
+        bodies.append(sorted(k for k in body if k in ("max_tokens", "max_completion_tokens", "temperature")))
+        if "max_tokens" in body:
+            return httpx.Response(400, json={"error": {"message": "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."}})
+        if "temperature" in body:
+            return httpx.Response(400, json={"error": {"message": "Unsupported parameter: 'temperature'"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "да"}}], "usage": {}})
+    llm = LLM(SimpleNamespace(llm_url="https://llm.test/v1", llm_key="k", state_dir=""), transport=httpx.MockTransport(handler))
+    assert asyncio.run(llm.chat("s", "u")) == "да"
+    assert asyncio.run(llm.chat("s", "u")) == "да"
+    assert bodies[-1] == ["max_completion_tokens"] and len(bodies) == 4   # 3 попытки в первый раз, 1 — во второй
