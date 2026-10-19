@@ -3186,3 +3186,12 @@ def test_followup_thanks_and_status_question_get_a_reply():
     assert "пишите" in bye["text"] and bye["status"] == "answer"
     st = run("Подскажите, датчик не пришёл ещё?", e, memory=mem)
     assert st["status"] == "chat" and "менеджеру" in st["text"]
+
+
+def test_fresh_chats_typo_rear_and_pronoun_filler():
+    """Свежие чаты 19.10: «затние подшипники» — задние (опечатка); «колодки к ним …» — «ним» не слово детали."""
+    assert T.side("в3 затние подшипники").axis == "rear"
+    assert T.side("затяжной болт").axis == ""
+    from app.podbor.engine import Engine, load_rules
+    eng = Engine(Fake(), None, set(), load_rules())
+    assert T.stems("колодки к ним", eng.stop) == [T.stem("колодки")]
