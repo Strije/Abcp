@@ -3209,3 +3209,13 @@ def test_heater_valve_is_not_engine_valve():
     top = lambda q: tree.rank(T.stems(q, stop), T.side(q))[0][0].name
     assert top("электро клапана печки 2 штуки") == "Клапан, управление"
     assert top("датчик насос тнвд") == "Электроника двигателя, датчики"
+
+
+def test_heater_valve_never_falls_back_to_engine_valves():
+    """Camry 19.10: группы «Клапан, управление» нет — «клапан печки» не должен стать клапанами двигателя."""
+    from app.podbor.catalog import TreeIndex
+    from app.podbor.engine import load_rules
+    rules = load_rules()
+    stop = frozenset(rules["stop"]) | frozenset(T.stem(w) for w in rules["stop"])
+    tree = TreeIndex(node(0, "Легковые", link=False, children=[node(160, "Клапаны")]), stop, None, rules["synonyms"])
+    assert tree.rank(T.stems("электро клапана печки", stop), T.Side()) == []
