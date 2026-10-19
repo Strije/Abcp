@@ -725,3 +725,23 @@ def test_bitrix_hint_photo_links_are_photos():
             {"id": 3, "author_id": 7, "date": "2026-10-13T10:02:00+03:00", "text": "Нужны колодки, фото выше"}]
     d = client_text({"messages": msgs, "users": [{"id": 7, "connector": True}]}, 0, find_ident)
     assert d["text"] == "Нужны колодки, фото выше" and d["photos"] == 1
+
+
+def test_llm_retries_without_temperature_when_model_rejects_it():
+    """16.10.2026: агент Timeweb перешёл на модель без temperature — 400 на каждый запрос, робот молча жил без модели."""
+    import asyncio, json as _json
+    import httpx
+    from types import SimpleNamespace
+    from app.llm import LLM
+    bodies = []
+
+    def handler(req):
+        body = _json.loads(req.content)
+        bodies.append(body)
+        if "temperature" in body:
+            return httpx.Response(400, json={"error": {"message": "Unsupported parameter: 'temperature' is not supported"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "да"}}], "usage": {}})
+    llm = LLM(SimpleNamespace(llm_url="https://llm.test/v1", llm_key="k", state_dir=""), transport=httpx.MockTransport(handler))
+    assert asyncio.run(llm.chat("s", "u")) == "да"
+    assert asyncio.run(llm.chat("s", "u")) == "да"
+    assert ["temperature" in b for b in bodies] == [True, False, False]   # второй раз — сразу без temperature

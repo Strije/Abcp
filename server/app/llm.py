@@ -21,6 +21,7 @@ class LLMError(Exception):
 class LLM:
     def __init__(self, settings: Settings, transport: httpx.AsyncBaseTransport | None = None):
         self.enabled = bool(settings.llm_url and settings.llm_key)
+        self.no_temperature = False   # модель отвергла temperature — больше не шлём
         self.http = httpx.AsyncClient(
             base_url=(settings.llm_url or "http://llm.invalid") + "/",
             headers={"Authorization": f"Bearer {settings.llm_key}", "Content-Type": "application/json"},
@@ -41,9 +42,17 @@ class LLM:
             raise LLMError("модель не подключена")
         body = {"model": "agent", "messages": [{"role": "system", "content": system},
                                                {"role": "user", "content": user}],
-                "temperature": 0, "max_tokens": max_tokens, "stream": False}
+                "max_tokens": max_tokens, "stream": False}
+        if not self.no_temperature:
+            body["temperature"] = 0
         try:
             r = await self.http.post("chat/completions", json=body)
+            if r.status_code == 400 and "temperature" in r.text and "temperature" in body:
+                # 16.10.2026 агент Timeweb перешёл на openai/gpt-6-luna: «temperature не поддерживается» — 400 на КАЖДЫЙ
+                # запрос, и робот трое суток молча работал без модели (разбор реплик, арбитр, узлы). Повторяем без неё
+                self.no_temperature = True
+                body.pop("temperature")
+                r = await self.http.post("chat/completions", json=body)
         except httpx.HTTPError as e:
             raise LLMError(f"модель не ответила: {type(e).__name__}") from e
         if r.status_code != 200:
