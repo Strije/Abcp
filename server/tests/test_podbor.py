@@ -3195,3 +3195,17 @@ def test_fresh_chats_typo_rear_and_pronoun_filler():
     from app.podbor.engine import Engine, load_rules
     eng = Engine(Fake(), None, set(), load_rules())
     assert T.stems("колодки к ним", eng.stop) == [T.stem("колодки")]
+
+
+def test_heater_valve_is_not_engine_valve():
+    """19.10, свежие чаты: «электро клапана печки» — кран отопителя, а не клапаны двигателя."""
+    from app.podbor.catalog import TreeIndex
+    from app.podbor.engine import load_rules
+    rules = load_rules()
+    stop = frozenset(rules["stop"]) | frozenset(T.stem(w) for w in rules["stop"])
+    tree = TreeIndex(node(0, "Легковые", link=False, children=[node(765, "Клапан, управление"), node(160, "Клапаны"),
+                                                                node(101, "Электроника двигателя, датчики"), node(140, "Датчики")]),
+                     stop, None, rules["synonyms"])
+    top = lambda q: tree.rank(T.stems(q, stop), T.side(q))[0][0].name
+    assert top("электро клапана печки 2 штуки") == "Клапан, управление"
+    assert top("датчик насос тнвд") == "Электроника двигателя, датчики"
