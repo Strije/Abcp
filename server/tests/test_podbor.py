@@ -1708,6 +1708,24 @@ def test_followup_article_numbers_pick_shown_and_check_new():
     assert out["reply"]["kind"] == "order" and len(out["reply"]["picks"]) == 1
     assert out["reply"]["picks"][0]["qty"] == 2 and out["reply"]["picks"][0]["offer"]["number"] == "33944 01"
     assert out["positions"][0]["want_qty"] == 2 and out["status"] == "ok"
+    # 19.10 (решение пользователя): без «оформляйте/беру» — не заказ, а вопрос «Правильно понял — оформляем? … да»
+    assert out["reply"].get("confirm")
+    res = {"positions": [], "reply": None, "warnings": []}
+    out = asyncio.run(eng._follow_articles(res, "Оформляйте: " + text, A.find(text), {"jobs": []}, {}, mem_pos, None, None, 0))
+    assert not out["reply"].get("confirm")   # «оформляйте» — сразу заказ
+
+
+def test_article_pick_waits_for_yes():
+    """Номер из показанного → «Правильно понял — оформляем: … Всё верно?»; «да» → «Оформляем», «нет» → не оформляем."""
+    from app.podbor.engine import reply_text
+    from app.podbor import dialog as D
+    pick = {"query": "Сайлентблоки", "name": "Сайлентблок", "who": "", "offer": {"brand": "Lemforder", "number": "3394401",
+            "price": 1300.0, "days": 7, "cheaper": None}, "qty": 2, "kind": "part", "axis": "", "lr": "", "amount": ""}
+    text = reply_text({"kind": "order", "picks": [pick], "unclear": [], "confirm": True})
+    assert text.startswith("Правильно понял — оформляем:") and "Всё верно?" in text
+    mem = D.remember({"reply": {"kind": "order", "picks": [pick], "confirm": True}, "request": {}}, {"positions": []})
+    assert mem["confirm"] == [pick]
+    assert D.NO_THANKS.search("нет, не надо") and not D.NO_THANKS.search("да, оформляйте")
 
 def test_ball_joint_from_lever_crosses():
     """Suzuki Swift 08.10: на «шаровые» каталог дал только рычаги в сборе, а среди их аналогов есть шаровые опоры —

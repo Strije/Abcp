@@ -412,6 +412,10 @@ class Engine:
             res["positions"] = [dict(p, schemes=[], note=filter_help(name))]
             res["handoff"] = [f"{p['query']} — клиент не знает «{name}», номер уточнить по машине"]
             return self._done(res, "ok", t0, mem, [unsure])
+        waiting = mem.get("confirm") or []
+        if waiting and (D.YES.fullmatch(text.strip()) or D.ACCEPT.search(text)) and not D.NO_THANKS.search(text):
+            res["reply"] = {"kind": "order", "answers": [], "picks": waiting, "unclear": [], "clarify": ""}
+            return self._done(res, "order", t0, mem)
         offered = D.asked_part(mem.get("asked", "")) if D.YES.fullmatch(text.strip()) else ""
         if offered and self._partish(offered, tree):
             # «Да» на «Топливный фильтр нужен?» — робот сам предложил деталь, её и ищем (с моделью и без)
@@ -499,10 +503,12 @@ class Engine:
         jobs = [(q, s) for q, s in (plan.get("jobs") or [])
                 if not any(A.norm(a) in A.norm(q) for a in arts) and self._partish(q, tree)]
         res["positions"] += list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
+        confirm = bool(picks) and not D.ACCEPT.search(text)
         if picks:
-            res["reply"] = await self._reply({"kind": "order", "picks": picks, "unclear": []}, positions, v)
+            # 19.10 (решение пользователя): номер из показанного без «оформляйте/беру» — не заказ, а «Правильно понял…? да»
+            res["reply"] = await self._reply({"kind": "order", "picks": picks, "unclear": [], "confirm": confirm}, positions, v)
         if not res["positions"]:
-            return self._done(res, "order" if picks else "chat", t0, mem)
+            return self._done(res, ("answer" if confirm else "order") if picks else "chat", t0, mem)
         return self._done(res, "ok", t0, mem)
 
     def _word(self, s: str, tree: TreeIndex) -> bool:
@@ -804,7 +810,7 @@ class Engine:
             answers.append(got or item("no_brand", p, None, word=a["word"]))
         picks = [{"type": "pick", **x} for x in r.get("picks", [])]
         return {"kind": r["kind"], "answers": answers, "picks": picks, "unclear": r.get("unclear", []),
-                "clarify": r.get("clarify", "")}
+                "clarify": r.get("clarify", ""), **({"confirm": True} if r.get("confirm") else {})}
 
     # ---------- позиции ----------
 
@@ -3296,6 +3302,7 @@ MAX_ARBITER = 3     # не больше трёх вызовов модели н�
 UNIT_VARIANTS = 14   # сколько деталей узла проверяем по ценам, чтобы найти главную
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
+CONFIRM_ASK = "Всё верно? Напишите «да» — оформим, или поправьте, что не так."
 _CLOSING = re.compile(r"(?:(?:нет|не\s+надо|не\s+нужно|ничего|больше\s+ничего|всё|все|только\s+это|пока\s+всё|пока\s+все|"
                       r"спасибо|благодарю|спс)[,.!)\s]*)+", re.I)
 GATE_PRE_MARGIN = 0.5   # запас замка, с которого слабый ответ правил снимается без вызова модели (эталон 18.10: см. _arbitrate_emb)
@@ -3419,7 +3426,7 @@ def reply_text(r: dict, numbers: bool = False) -> str:
         lines.append("")
     picks = r.get("picks", [])
     if picks:
-        lines.append("Оформляем:")
+        lines.append("Правильно понял — оформляем:" if r.get("confirm") else "Оформляем:")
         total, longest = 0.0, 0
         for x in picks:
             o, qty = x["offer"], x.get("qty") or 1
@@ -3437,7 +3444,7 @@ def reply_text(r: dict, numbers: bool = False) -> str:
             elif not x.get("qty") and k and int(k.group(0)) > 1:
                 lines.append(f"   Цена за штуку, на машину нужно {int(k.group(0))} — сколько штук оформить?")
         lines.append(f"Итого: {money(total)}. " + ("Всё в наличии." if longest <= 0 else f"Срок — {when(longest)}."))
-        lines.append(ANYTHING_ELSE)
+        lines.append(CONFIRM_ASK if r.get("confirm") else ANYTHING_ELSE)
     for q in r.get("unclear", []):
         lines.append(f"По позиции «{q}» напишите, какой вариант оформить — фирму или цену.")
     if r.get("kind") == "order" and not picks and not r.get("unclear"):
