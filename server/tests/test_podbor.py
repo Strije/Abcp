@@ -3152,3 +3152,10 @@ def test_negated_part_is_not_searched():
     eng = Engine(Fake(), None, set(), load_rules())
     q = T.stems(T.expand(T.drop_negated("рулевые тяги без наконечников 2шт")), eng.stop)
     assert tree.rank(q, T.Side())[0][0].name == "Тяга рулевая"
+
+
+def test_description_lines_are_not_positions():
+    """19.10: описание детали из ChatGPT («Функция: …», «Где стоит: …») становилось отдельными позициями."""
+    text = ("Шланг вакуумного насоса (Vacuum Pump Hose)\nФункция: Передача вакуума от насоса\n"
+            "Где стоит: Соединяет вакуумный насос с усилителем\n2. Колодки передние")
+    assert T.split_chunks(text) == ["Шланг вакуумного насоса (Vacuum Pump Hose)", "Колодки передние"]
