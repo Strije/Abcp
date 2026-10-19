@@ -628,7 +628,7 @@ class Engine:
         emb = EMB.get()
         handled = await self._arbitrate_emb(emb, v, tree, positions) if emb is not None else set()
         weak = [i for i, p in enumerate(positions)
-                if i not in handled and not p.get("parts") and self._weak(p, tree)][:MAX_ARBITER]
+                if i not in handled and not p.get("parts") and not p.get("absent") and self._weak(p, tree)][:MAX_ARBITER]
         if not weak:
             return
         parsed = await asyncio.gather(*(U.understand(self.llm, positions[i]["query"]) for i in weak),
@@ -661,7 +661,7 @@ class Engine:
         # Детали узла по позициям схемы (Audi: все рычаги) — структура каталога надёжнее мнения модели: не трогаем
         idx = [i for i, p in enumerate(positions)
                if p.get("kind", "") in ("", "part") and T.stems(p.get("query", ""), self.stop) and not p.get("parts")
-               and not p.get("via_units") and not p.get("settled")]
+               and not p.get("via_units") and not p.get("settled") and not p.get("absent")]
         vecs = await emb.embed([positions[i]["query"] for i in idx]) if idx else None
         if not vecs:
             return set()
@@ -1315,6 +1315,9 @@ class Engine:
             pos["note"] = vague   # «Комплект», «подшипник», «наружный»: гадать группу нельзя — спрашиваем, какая деталь
             return pos
         ranked = tree.rank(q, want)
+        if not ranked and tree.is_absent(q, want):
+            pos["absent"] = True   # строгий синоним: у машины такой группы нет — арбитр не подменяет соседом
+            return pos
         if not ranked or ranked[0][1] < 0.3:
             return pos
         if kind == "fluid" and not any(T.same(T.head_text(ranked[0][0].name, self.stop) or "", T.stem(w))

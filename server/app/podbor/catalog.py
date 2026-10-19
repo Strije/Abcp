@@ -414,9 +414,13 @@ class TreeIndex:
         mp = sum(self.weight(t) for t in p if any(T.same(s, t) for s in q))
         return mq / wq, mp / wp
 
+    def is_absent(self, q: list[str], want: T.Side) -> bool:
+        """Строгий синоним, а ни одной его группы у машины нет: детали в каталоге этой машины точно нет."""
+        bare = frozenset(s.rstrip(".") for s in q)
+        return bool(self.absent) and ((bare, want.axis) in self.absent or (bare, "") in self.absent)
+
     def rank(self, q: list[str], want: T.Side) -> list[tuple[Group, float]]:
-        bare = frozenset(s.rstrip(".") for s in q)   # «фильтр топл.» = синоним «фильтр топл»
-        if self.absent and ((bare, want.axis) in self.absent or (bare, "") in self.absent):
+        if self.is_absent(q, want):
             return []
         q = self.known(q)
         # Главное слово: «ремень генератора», «датчик положения распредвала», «топливный фильтр» → «фильтр»
