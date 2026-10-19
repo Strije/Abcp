@@ -61,6 +61,7 @@ _ORD = {"перв": 1, "втор": 2, "трет": 3, "четверт": 4, "че�
 
 # «Да» на вопрос самого робота («Топливный фильтр нужен?») — согласие с предложенной деталью, а не выбор варианта.
 # 11.10, Audi A4: позиций в памяти не было, на «Да» робот спросил «Какой вариант оформить?», на «А какие есть?» — снова
+NO_THANKS = re.compile(r"(?<![а-яё])(?:нет|не\s+надо|не\s+нужно|отмен\w*|стоп)(?![а-яё])", re.I)
 YES = re.compile(r"(?:ну\s+)?(?:да(?:-да)?|ага|угу|конечно|верно|точно|именно|нужен|нужна|нужно|нужны|давайте|подберите)"
                  r"(?:[\s,]+(?:да|нужен|нужна|нужно|нужны|верно|его|её|ее|их|давайте|подберите|пожалуйста|он|она|они))*"
                  r"[\s.!)]*", re.I)
@@ -165,7 +166,12 @@ def remember(res: dict, prev: dict | None, replaced: list[int] | None = None) ->
     mem = dict(prev or {})
     mem.pop("unknown_vin", None)   # снова ставит Engine.run, пока VIN каталог не знает
     mem.pop("asked", None)
-    clarify = ((res.get("reply") or {}).get("clarify") or "").strip()
+    reply = res.get("reply") or {}
+    if reply.get("confirm") and reply.get("picks"):
+        mem["confirm"] = reply["picks"]   # ждём «да» на «Правильно понял — оформляем?»
+    else:
+        mem.pop("confirm", None)
+    clarify = (reply.get("clarify") or "").strip()
     if clarify.endswith("?"):
         mem["asked"] = clarify[-300:]   # вопрос робота: «да» на него — согласие с предложенным (YES, asked_part)
     if req.get("ident") or req.get("plate") or not mem:
