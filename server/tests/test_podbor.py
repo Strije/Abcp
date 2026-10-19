@@ -3159,3 +3159,14 @@ def test_description_lines_are_not_positions():
     text = ("Шланг вакуумного насоса (Vacuum Pump Hose)\nФункция: Передача вакуума от насоса\n"
             "Где стоит: Соединяет вакуумный насос с усилителем\n2. Колодки передние")
     assert T.split_chunks(text) == ["Шланг вакуумного насоса (Vacuum Pump Hose)", "Колодки передние"]
+
+
+def test_unanswered_question_is_acknowledged_and_thanks_closed():
+    """19.10, живой прогон: на «нет спасибо» и на вопрос, ушедший менеджеру, робот отвечал пустотой."""
+    from app.podbor.engine import Engine
+    res = {"handoff": []}
+    assert "менеджеру" in Engine._ack("А отдельно крестовину поставщики не возят?", res)["clarify"]
+    assert res["handoff"] == ["А отдельно крестовину поставщики не возят?"]
+    res = {"handoff": ["нет, спасибо"]}
+    assert "пишите" in Engine._ack("Нет спасибо только это", res)["clarify"] and res["handoff"] == []
+    assert Engine._ack("ок", {"handoff": []}) is None

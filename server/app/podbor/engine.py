@@ -446,6 +446,10 @@ class Engine:
                 res["reply"] = await self._reply(plan["reply"], positions, v)
             if not plan["jobs"]:
                 if not plan["reply"]:
+                    ack = self._ack(text, res)
+                    if ack:
+                        res["reply"] = await self._reply(ack, positions, v)
+                        return self._done(res, "answer", t0, mem)
                     return self._done(res, "chat", t0, mem)
                 return self._done(res, "answer" if plan["reply"]["kind"] == "answer" else "order", t0, mem)
             res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s)
@@ -721,6 +725,23 @@ class Engine:
                 positions[i] = alt | {"query": old["query"], "llm_part": pick, "was_score": self._score(old)}
                 done.add(i)
         return done
+
+    @staticmethod
+    def _ack(text: str, res: dict) -> dict | None:
+        """Молчать в ответ нельзя (19.10, живой прогон: «нет спасибо», «А отдельно крестовину поставщики не возят?» — пустой
+        ответ, клиент не знает, услышали ли его). Вопрос, который ушёл менеджеру, — так и говорим; «нет, спасибо» —
+        вежливо закрываем. Просто «ок», «понял» — молчим, как раньше."""
+        t = (text or "").strip()
+        if t and _CLOSING.fullmatch(t):
+            res["handoff"] = [h for h in res.get("handoff") or [] if not _CLOSING.fullmatch(h.strip())]
+            return {"kind": "answer", "answers": [], "picks": [], "unclear": [],
+                    "clarify": "Хорошо! Если понадобится что-то ещё по этой машине — пишите."}
+        if "?" in t or res.get("handoff"):
+            if t and not res.get("handoff"):
+                res["handoff"] = [t[:300]]
+            return {"kind": "answer", "answers": [], "picks": [], "unclear": [],
+                    "clarify": "Передал ваш вопрос менеджеру — он ответит здесь же."}
+        return None
 
     def _split_brands(self, items: list[tuple[str, T.Side]], v: Vehicle) -> tuple[list, list[dict]]:
         """Фирмы из текста позиций: (позиции без слов фирмы, что спросить у поставщиков). Фирма машины («Ниссан»)
@@ -3261,6 +3282,8 @@ MAX_ARBITER = 3     # не больше трёх вызовов модели н�
 UNIT_VARIANTS = 14   # сколько деталей узла проверяем по ценам, чтобы найти главную
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
+_CLOSING = re.compile(r"(?:(?:нет|не\s+надо|не\s+нужно|ничего|больше\s+ничего|всё|все|только\s+это|пока\s+всё|пока\s+все|"
+                      r"спасибо|благодарю|спс)[,.!)\s]*)+", re.I)
 GATE_PRE_MARGIN = 0.5   # запас замка, с которого слабый ответ правил снимается без вызова модели (эталон 18.10: см. _arbitrate_emb)
 SURE_SCORE = 0.8    # правила уверены (эталон 08.10: при ≥0.8 первая группа верна в 142 случаях из 156)
 _ID_MODS = ("главн", "основн")   # слова в названии узла, которые превращают деталь в другую (главный цилиндр ≠ рабочий)
