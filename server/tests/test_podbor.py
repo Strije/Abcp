@@ -3012,3 +3012,48 @@ def test_dropped_recheck_does_not_accept_a_unit_that_misses_the_clients_word():
                   "side": {}, "note": "", "dropped": "Фильтр салона"}]
     asyncio.run(eng._recheck_dropped(v, positions, [0]))
     assert positions[0]["status"] == "not_found" and positions[0].get("no_catalog_part")
+
+
+def test_review_synonyms_route_to_the_right_group():
+    """19.10, разбор эталона пользователем: трос ручника уходил в «Капот», противотуманка — в заднюю, поршень суппорта —
+    в поршень двигателя, стойка стаба — в стабилизатор, моторчик омывателя — в мотор дворников, подушка руля — в опоры
+    двигателя. Дерево — маленькое, с теми же номерами групп, что у Laximo."""
+    from app.podbor.catalog import TreeIndex
+    from app.podbor.engine import load_rules
+    rules = load_rules()
+    stop = frozenset(w for w in rules["stop"]) | frozenset(T.stem(w) for w in rules["stop"])
+    tree = TreeIndex(node(0, "Легковые", link=False, children=[
+        node(822, "Капот", "трос капота, замок капота"), node(560, "Тросы, тяги и рычаги тормозной системы"),
+        node(561, "Стояночный тормоз"), node(630, "Фара противотуманная"), node(667, "Задняя противотуманная фара"),
+        node(117, "Поршень"), node(13389, "Поршень суппорта"), node(483, "Стабилизатор"), node(484, "Стойки стабилизатора"),
+        node(720, "Насос омывателя"), node(719, "Двигатель стеклоочистителя"), node(1059, "Система подушек безопасности"),
+        node(13383, "Рулевое колесо"), node(475, "Опоры двигателя"), node(469, "Опора амортизатора подвески"),
+        node(390, "Подшипник направляющий (сцепление)"), node(808, "Внутренний замок")]), stop, None, rules["synonyms"])
+
+    def top(q):
+        r = tree.rank(T.stems(q, stop), T.side(q))
+        return r[0][0].name if r else ""
+    assert top("трос ручника") == "Тросы, тяги и рычаги тормозной системы"
+    assert top("троса ручника на оба колеса") == "Тросы, тяги и рычаги тормозной системы"
+    assert top("трос для открытия капота") == "Капот"           # трос капота — по-прежнему капот
+    assert top("противотуманная фара правая") == "Фара противотуманная"
+    assert top("поршень переднего суппорта") == "Поршень суппорта"
+    assert top("стойка стаба справа") == "Стойки стабилизатора"
+    assert top("моторчик омывателя") == "Насос омывателя"
+    assert top("подушка руля") == "Система подушек безопасности"
+    assert top("опорные подшипники") == "Опора амортизатора подвески"
+    assert top("трос открывания двери") == "Внутренний замок"
+
+
+def test_vague_single_words_ask_what_exactly():
+    """«Диски», «пыльник», «трос», «АКПП» без уточнения — спросить, а не отвечать общей группой; с уточнением — не спрашивать."""
+    from app.podbor.engine import Engine, load_rules
+    eng = Engine(Fake(), None, set(), load_rules())
+    q = lambda s: T.stems(s, eng.stop)
+    asks = lambda s: [a["text"] for a in eng.ask if all(any(T.same(w, x) for x in q(s)) for w in a["query"])
+                      and not any(T.same(w, x) for w in a["unless"] for x in q(s))]
+    assert asks("диски") and not asks("диски тормозные передние") and not asks("колодки и диски")
+    assert asks("пыльник") and not asks("пыльник шруса")
+    assert asks("трос") and not asks("трос ручника") and not asks("трос капота")
+    assert asks("акпп") and not asks("масло акпп") and not asks("фильтр акпп")
+    assert asks("вентилятор") and not asks("вентилятор печки")
