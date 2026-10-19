@@ -437,6 +437,12 @@ class Engine:
             # На реплике с деталями не молчим (Skoda 13.10: «фильтр салонный воздушный масляный топливный» → пусто):
             # слово из прошлого ответа («масляный») не значит, что клиент говорит о показанном
             plan = dict(plan, kind="new")
+        r0 = plan.get("reply") or {}
+        if text.strip() and _CLOSING.fullmatch(text.strip()) and not plan.get("jobs")                 and not r0.get("picks") and not r0.get("answers"):
+            # «Нет, спасибо», «только это» в ответ на «Что-то ещё нужно?» — закрываем, а не переспрашиваем «что оформить?»
+            # (19.10: модель отвечала «Уточните, какие детали и варианты оформить?»)
+            res["reply"] = await self._reply(self._ack(text, res), positions, v)
+            return self._done(res, "answer", t0, mem)
         arts = A.find(text, limit=6)
         if arts and plan["kind"] not in ("pick", "answer"):
             return await self._follow_articles(res, text, arts, plan, mem, positions, v, tree, t0)
@@ -465,6 +471,9 @@ class Engine:
         if plan["kind"] == "new":
             jobs = self.split(req.chunks, tree)
         if not jobs:
+            ack = self._ack(text, res) if "?" in text else None   # вопрос без ответа — не молчим
+            if ack:
+                res["reply"] = await self._reply(ack, positions, v)
             return self._done(res, "chat", t0, mem)
         res["positions"] = list(await asyncio.gather(*(self.position(v, tree, q, s) for q, s in jobs[:MAX_POSITIONS])))
         return self._done(res, "ok", t0, mem, replaced)
@@ -2919,7 +2928,8 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
         return (f"Машину нашли{': ' + car if car else ''}. Напишите, какая деталь нужна — название, номер "
                 f"или ссылку на товар, проверим по VIN.")
     if st == "chat":
-        return ""   # не про подбор: оплата, адрес, «когда забрать» — отвечает менеджер
+        # не про подбор: оплата, адрес, «когда забрать» — отвечает менеджер; клиенту — только что вопрос передан (19.10)
+        return reply_text(res["reply"], numbers) if res.get("reply") else ""
     if st in ("order", "answer"):
         return reply_text(res["reply"], numbers)
     v = res["vehicle"]

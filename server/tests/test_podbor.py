@@ -596,7 +596,8 @@ def test_dialog_side_choice_and_cheaper():
     vague = run("Заказывайте", e, memory=rear["memory"])
     assert vague["status"] == "order" and not vague["reply"]["picks"] and "какой вариант" in vague["text"]
     other = run("До скольки работаете?", e, memory=rear["memory"])
-    assert other["status"] == "chat" and other["text"] == ""
+    # не про подбор — отвечает менеджер; с 19.10 клиент видит, что вопрос передан, а не тишину
+    assert other["status"] == "chat" and "менеджеру" in other["text"]
 
 
 def test_yes_to_robot_question_searches_offered_part():
@@ -3174,3 +3175,14 @@ def test_unanswered_question_is_acknowledged_and_thanks_closed():
     res = {"handoff": ["нет, спасибо"]}
     assert "пишите" in Engine._ack("Нет спасибо только это", res)["clarify"] and res["handoff"] == []
     assert Engine._ack("ок", {"handoff": []}) is None
+
+
+def test_followup_thanks_and_status_question_get_a_reply():
+    """19.10, живой прогон: «нет спасибо» — вежливо закрыть (а не «какие варианты оформить?»); вопрос о статусе — сказать,
+    что передали менеджеру (а не молчать)."""
+    e = Engine(Fake(), None, set())
+    mem = run("XW7BF4FK30S064389 колодки задние", e)["memory"]
+    bye = run("нет спасибо", e, memory=mem)
+    assert "пишите" in bye["text"] and bye["status"] == "answer"
+    st = run("Подскажите, датчик не пришёл ещё?", e, memory=mem)
+    assert st["status"] == "chat" and "менеджеру" in st["text"]
