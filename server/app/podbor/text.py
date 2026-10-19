@@ -218,6 +218,23 @@ def expand(text: str) -> str:
     return text
 
 
+_NEG = re.compile(r"(?<![а-яёa-z])(?:без|кроме)\s+([а-яёa-z-]+)(?:\s+([а-яёa-z-]+))?", re.I)
+_GEN_END = re.compile(r"(?:а|я|ов|ев|ей|и|ы|ых|их|ого|его)$")
+
+
+def drop_negated(text: str) -> str:
+    """«Рулевые тяги без наконечников» → «Рулевые тяги»: деталь после «без/кроме» клиенту НЕ нужна, искать по ней нельзя
+    (19.10, разбор эталона: робот давал наконечник). Второе слово («без датчика износа») уходит, если оно в родительном
+    падеже и не сторона: «колодки без датчика передние» — «передние» остаются."""
+    def rep(m: re.Match) -> str:
+        w2 = m.group(2) or ""
+        if w2 and (side_of_word(norm(w2)) or not _GEN_END.search(w2.lower())):
+            return " " + w2
+        return " "
+    out = re.sub(r"\s+", " ", _NEG.sub(rep, text or "")).strip()
+    return out if re.search(r"[а-яёa-z]{3}", out, re.I) else (text or "")
+
+
 def split_pieces(chunk: str) -> list[str]:
     return [p.strip() for p in re.split(r",|\+|\s+и\s+|/", expand(chunk)) if p.strip()]
 

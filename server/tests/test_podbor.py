@@ -3138,3 +3138,17 @@ def test_vague_single_words_ask_what_exactly():
     assert asks("трос") and not asks("трос ручника") and not asks("трос капота")
     assert asks("акпп") and not asks("масло акпп") and not asks("фильтр акпп")
     assert asks("вентилятор") and not asks("вентилятор печки")
+
+
+def test_negated_part_is_not_searched():
+    """19.10: «рулевые тяги без наконечников» → робот давал наконечник. После «без/кроме» деталь не ищем."""
+    assert T.drop_negated("рулевые тяги без наконечников") == "рулевые тяги"
+    assert T.drop_negated("колодки без датчика износа передние") == "колодки передние"
+    assert T.drop_negated("без разницы") == "без разницы"   # одна «без»-фраза без детали — не трогаем
+    from app.podbor.catalog import TreeIndex
+    from app.podbor.engine import Engine, load_rules
+    tree = TreeIndex(node(0, "Легковые", link=False, children=[node(520, "Тяга рулевая"),
+                                                                node(521, "Наконечник рулевой тяги")]), frozenset(), None, [])
+    eng = Engine(Fake(), None, set(), load_rules())
+    q = T.stems(T.expand(T.drop_negated("рулевые тяги без наконечников 2шт")), eng.stop)
+    assert tree.rank(q, T.Side())[0][0].name == "Тяга рулевая"

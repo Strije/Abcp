@@ -1264,10 +1264,13 @@ class Engine:
 
     async def _position(self, v: Vehicle, tree: TreeIndex, query: str, want: T.Side, kind: str = "",
                         unit_mode: bool = False) -> dict:
-        q = T.stems(T.expand(query), self.stop)
+        core = T.drop_negated(query)   # «тяги без наконечников»: наконечник не ищем и не требуем в названии
+        q = T.stems(T.expand(core), self.stop)
         kind = kind or kind_of(q)
         pos: dict[str, Any] = {"query": query, "side": {"axis": want.axis, "lr": want.lr}, "status": "not_found",
                                "groups": [], "variants": [], "question": "", "note": "", "kind": kind}
+        if core != query:
+            pos["core"] = core
         if kind in ("fluid", "battery", "tire", "tool", "chemistry", "accessory"):
             # Не каталог машины: подберёт менеджер — так и пишем. Масла и жидкости — тоже (решение 13.10): допусков и
             # объёма заправки у нас нет, между двумя маслами каталога честно выбрать нечем, только аналогами
