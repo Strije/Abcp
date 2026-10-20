@@ -1569,14 +1569,6 @@ class Engine:
         if lead and not any(T.same(lead, t) for st in names.values() for t in st):
             names = {id(d): LEX.name_stems(d.name, self.stop) for d in pool}
         extra = [s for s in q if s not in known and any(T.same(s, t) for st in names.values() for t in st)]
-        # Слово клиента, которого дерево машины не знает и которое не объясняет группа, обязано быть в названии детали:
-        # «направляющая втулка выжимного подшипника» не должна дать втулку клапана (20.10, варианты из «Направляющие суппорта»)
-        group_words = {s for ws in gwords.values() for s in ws}
-        # Слитное слово («ПОДШИПНИКСТУПИЦЫ») не берём: в нём есть известная основа — это не отдельное неизвестное слово
-        # Опечатку («подшибник») не берём: её исправляем дальше, и она — то же слово, что и в каталоге (Audi, сценарий 20.10)
-        core = [s for s in q if s not in known and not _word_in(s, group_words) and not T.side_of_word(s)
-                and not _word_in(s, _GENERIC_HEADS) and not any(len(k) >= 4 and k in s for k in known)
-                and tree.fix(s) == s]
         chosen = {g.id for g, _ in groups}
         near = [t for g, _ in groups for p, _ in g.phrases for t in p]
         cands: dict[str, Candidate] = {}
@@ -1602,7 +1594,17 @@ class Engine:
             ds = T.side(d.context, self.pr_axis)
             if want.conflicts(ds) or other_side(_key(d.oem)):
                 continue
-            if any(not any(T.same(s, t) for t in names[id(d)]) for s in core):
+            # Слово клиента, которого нет в названии детали и которое не объясняет её группа, — чужая деталь: «направляющая
+            # втулка выжимного подшипника» не даёт втулку клапана, даже если Laximo записал её в группу суппортов (20.10).
+            # Слитное («ПОДШИПНИКСТУПИЦЫ») и опечатку («подшибник») не считаем: их разбирают дальше по основе и исправлению
+            gw = gwords.get(d.group_id, [])
+            if any(not any(T.same(s, t) for t in names[id(d)]) for s in q
+                   if not T.side_of_word(s) and not _word_in(s, _GENERIC_HEADS) and not _word_in(s, gw)
+                   and tree.fix(s) == s and not any(len(k) >= 4 and k in s for k in known)):
+                continue
+            # «Замок двери» — не пульт: передатчик и приёмник дистанционного замка (20.10, «замок двери водительской на 308»)
+            if _word_in(T.stem("замок"), q) and not _word_in(T.stem("пульт"), q) and not _word_in(T.stem("брелок"), q) \
+                    and not _word_in(T.stem("дистанционн"), q) and _REMOTE_NAME.search(d.name.lower()):
                 continue
             lrs.setdefault(_key(d.oem), set()).add(ds.lr)
             member = (d.group_id, _key(d.oem)) in members
@@ -3217,6 +3219,10 @@ def lost_words(q: list[str], tree: TreeIndex, g, stop: frozenset[str] = frozense
 # Слова, без которых деталь та же: «прокладка выпускного коллектора двигателя», «клапан системы вентиляции»
 _LOST_IGNORE = {T.stem(w) for w in ("двигателя", "двигатель", "системы", "система", "включения", "автомобиля", "машины", "сборе", "сборка",
                                     "стекла", "комплект")}
+
+
+# Пульт и приёмник дистанционного замка — не «замок двери» (20.10)
+_REMOTE_NAME = re.compile(r"передатчик|приемник|приёмник|пульт|брелок")
 
 
 def _word_in(w: str, words) -> bool:

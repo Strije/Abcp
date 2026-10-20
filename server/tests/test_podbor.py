@@ -1393,6 +1393,17 @@ def test_unit_detail_needs_lead_word_and_every_qualifier():
     assert E._unit_detail_fits("Подшипник выжимной", "Сцепление", [T.stem("подшипник")], [T.stem("выжимного")], stop)
 
 
+def test_door_lock_is_not_a_remote_and_group_member_needs_the_words():
+    """20.10 (сервер): «замок двери водительской» → передатчик «…замками дверей» из группы «Центральный замок»;
+    «направляющая втулка выжимного подшипника» → втулка клапана, которую Laximo записал в группу суппортов."""
+    from app.podbor import engine as E
+    from app.podbor import text as T
+    assert E._REMOTE_NAME.search("передатчик системы дистанционного управления замками дверей (в сборе)")
+    assert not E._REMOTE_NAME.search("замок двери передней левой")
+    assert E._unit_detail_fits("Замок двери передней левой", "Дверь", [T.stem("замок")], [T.stem("двери")],
+                               E.Engine(Fake(), None, set()).stop)
+
+
 def test_missing_part_is_not_a_typo_of_neighbor_part():
     """X-Trail 2017 (13.10): группы колодок в каталоге машины нет — «колодки перед» не должны стать «колонкой»
     (шарнир рулевой колонки). Деталь, похожая на другую деталь в одну букву, — не опечатка: пусть ищется дальше."""
