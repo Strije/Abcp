@@ -1573,8 +1573,10 @@ class Engine:
         # «направляющая втулка выжимного подшипника» не должна дать втулку клапана (20.10, варианты из «Направляющие суппорта»)
         group_words = {s for ws in gwords.values() for s in ws}
         # Слитное слово («ПОДШИПНИКСТУПИЦЫ») не берём: в нём есть известная основа — это не отдельное неизвестное слово
+        # Опечатку («подшибник») не берём: её исправляем дальше, и она — то же слово, что и в каталоге (Audi, сценарий 20.10)
         core = [s for s in q if s not in known and not _word_in(s, group_words) and not T.side_of_word(s)
-                and not _word_in(s, _GENERIC_HEADS) and not any(len(k) >= 4 and k in s for k in known)]
+                and not _word_in(s, _GENERIC_HEADS) and not any(len(k) >= 4 and k in s for k in known)
+                and tree.fix(s) == s]
         chosen = {g.id for g, _ in groups}
         near = [t for g, _ in groups for p, _ in g.phrases for t in p]
         cands: dict[str, Candidate] = {}
