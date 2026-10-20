@@ -775,8 +775,11 @@ def test_lost_head_word_shows_no_neighbor():
     for q, neighbor in (("шланг колодок тормозных", "торм. колодок суппорта"), ("датчик ступицы", "Подшипник ступицы колеса")):
         res = run(f"X9FKXXEEBKCB57566 {q}", e)
         p = res["positions"][0]
-        assert p["status"] == "not_found" and not p["variants"] and p.get("dropped"), q
-        assert neighbor not in res["text"] and "передали менеджеру" in res["text"], q
+        # Пометку «снято» проверяем не всегда: слово клиента, которого нет в детали, теперь отсекает кандидат раньше (20.10),
+        # и клиент видит тот же ответ — «не нашли», без соседа
+        assert p["status"] == "not_found" and not p["variants"], q
+        # Честный ответ — «передали менеджеру» или «уточним и напишем» (сейчас второе: кандидат отсекается раньше)
+        assert neighbor not in res["text"] and ("передали менеджеру" in res["text"] or "уточним и напишем" in res["text"]), q
     found = run("X9FKXXEEBKCB57566 колодки тормозные передние", e)["positions"][0]   # слово на месте — показываем
     assert found["status"] in ("found", "choose") and found["variants"]
     # Слитно («BMW ДАТЧИККОЛЕНВАЛА» в клиентских сценариях): часть слова — в найденном, это не потерянное слово
@@ -1373,6 +1376,21 @@ def test_tree_fix_by_sound_keeps_real_words():
     assert tree.fix(T.stem("тармазные")) == T.stem("тормозные")
     assert tree.fix(T.stem("калектор")) == T.stem("коллектор")
     assert tree.fix(T.stem("доброго")) == T.stem("доброго")             # слова не из каталога остаются как есть
+
+
+def test_unit_detail_needs_lead_word_and_every_qualifier():
+    """20.10 (прогон фраз Битрикса): «направляющая втулка выжимного подшипника» → втулка клапана, «замок двери» → передатчик
+    «…замками дверей». Деталь берём, если главное слово в начале названия и каждое уточнение клиента есть в названии или узле."""
+    from app.podbor import engine as E
+    from app.podbor import text as T
+    stop = E.Engine(Fake(), None, set()).stop
+    head = [T.stem("направляющая")]
+    assert not E._unit_detail_fits("Направляющая втулка впускного клапана", "CYLINDER HEAD", head,
+                                   [T.stem("втулка"), T.stem("выжимного"), T.stem("подшипника")], stop)
+    assert not E._unit_detail_fits("Передатчик системы дистанционного управления замками дверей (в сборе)",
+                                   "LOCK CYLINDER SET", [T.stem("замок")], [T.stem("двери")], stop)
+    assert E._unit_detail_fits("Замок двери передней левой", "Дверь", [T.stem("замок")], [T.stem("двери")], stop)
+    assert E._unit_detail_fits("Подшипник выжимной", "Сцепление", [T.stem("подшипник")], [T.stem("выжимного")], stop)
 
 
 def test_missing_part_is_not_a_typo_of_neighbor_part():

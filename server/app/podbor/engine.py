@@ -1210,15 +1210,13 @@ class Engine:
             scored: dict[str, tuple[float, Detail]] = {}
             for gid in gids:
                 for d in await self.catalog.details(v, gid, True):
-                    st = T.stems(_ru_words(d.name), self.stop)
-                    if not any(T.same(a, x) for a in aliases for x in st) \
+                    if not _unit_detail_fits(d.name, d.unit, aliases, qual, self.stop) \
                             or any(m in d.name.lower() and m not in {w[:5] for w in q} for m in _ID_MODS):
                         continue
+                    st = T.stems(_ru_words(d.name), self.stop)
                     unit_st = T.stems(_ru_words(d.unit), self.stop)
                     in_name = sum(1 for w in qual if any(T.same(w, x) for x in st))
                     in_unit = sum(1 for w in qual if any(T.same(w, x) for x in unit_st))
-                    if qual and not in_name and not in_unit:
-                        continue
                     # «HOSE,BRAKE BOOSTER VACUUM» (уточнение в самом названии) важнее «ТРУБКИ ТОРМОЗНОЙ» из соседнего узла
                     score = 2 * in_name + in_unit + any(T.same(head, x) for x in st) + 0.5 * (gid in first)
                     k = _key(d.oem)
@@ -1571,6 +1569,12 @@ class Engine:
         if lead and not any(T.same(lead, t) for st in names.values() for t in st):
             names = {id(d): LEX.name_stems(d.name, self.stop) for d in pool}
         extra = [s for s in q if s not in known and any(T.same(s, t) for st in names.values() for t in st)]
+        # Слово клиента, которого дерево машины не знает и которое не объясняет группа, обязано быть в названии детали:
+        # «направляющая втулка выжимного подшипника» не должна дать втулку клапана (20.10, варианты из «Направляющие суппорта»)
+        group_words = {s for ws in gwords.values() for s in ws}
+        # Слитное слово («ПОДШИПНИКСТУПИЦЫ») не берём: в нём есть известная основа — это не отдельное неизвестное слово
+        core = [s for s in q if s not in known and not _word_in(s, group_words) and not T.side_of_word(s)
+                and not _word_in(s, _GENERIC_HEADS) and not any(len(k) >= 4 and k in s for k in known)]
         chosen = {g.id for g, _ in groups}
         near = [t for g, _ in groups for p, _ in g.phrases for t in p]
         cands: dict[str, Candidate] = {}
@@ -1595,6 +1599,8 @@ class Engine:
                 continue
             ds = T.side(d.context, self.pr_axis)
             if want.conflicts(ds) or other_side(_key(d.oem)):
+                continue
+            if any(not any(T.same(s, t) for t in names[id(d)]) for s in core):
                 continue
             lrs.setdefault(_key(d.oem), set()).add(ds.lr)
             member = (d.group_id, _key(d.oem)) in members
@@ -3214,6 +3220,20 @@ _LOST_IGNORE = {T.stem(w) for w in ("двигателя", "двигатель", 
 def _word_in(w: str, words) -> bool:
     """Слово — одно из общих: «прокладок» и «прокладка» — одно слово, а основа у них разная."""
     return bool(w) and any(T.same(w, k) for k in words)
+
+
+def _unit_detail_fits(name: str, unit: str, aliases: list[str], qual: list[str], stop) -> bool:
+    """Деталь узла подходит, если её главное слово стоит в начале названия и КАЖДОЕ уточнение клиента есть в названии
+    или в узле. 13.10–20.10: «направляющая втулка выжимного подшипника» привела к «Направляющая втулка впускного клапана»
+    (совпало только «втулка», «выжимного» не нашлось), «замок двери» — к передатчику «…замками дверей» (слово «замок»
+    было в середине названия). Лучше не найти и отдать менеджеру, чем показать чужую деталь."""
+    words = _ru_words(name).split()
+    st = T.stems(" ".join(words), stop)
+    lead = T.stems(" ".join(words[:2]), stop)
+    if not any(T.same(a, x) for a in aliases for x in lead):
+        return False
+    unit_st = T.stems(_ru_words(unit), stop)
+    return all(any(T.same(w, x) for x in st + unit_st) for w in qual)
 
 
 # ---------- требования клиента: количество и признаки ----------
