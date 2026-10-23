@@ -1404,6 +1404,18 @@ def test_door_lock_is_not_a_remote_and_group_member_needs_the_words():
                                E.Engine(Fake(), None, set()).stop)
 
 
+def test_no_vin_offers_plate_and_changes_on_repeat():
+    """Журнал 20–23.10: без VIN робот на каждую реплику отвечал одной и той же просьбой, госномер не предлагал.
+    Теперь — госномер в просьбе, а повтор без VIN называет другие пути."""
+    e = Engine(Fake(), None, set())
+    first = run("Фильтра хорошие на этот автомобиль", e)
+    assert first["status"] == "no_vin" and "госномер" in first["text"]
+    second = run("Фильтра хорошие на этот автомобиль", e, memory=first["memory"])
+    assert second["status"] == "no_vin" and second["text"] != first["text"] and "госномер" in second["text"]
+    # Номер кузова без дефиса (Daihatsu) по-прежнему принимается сразу
+    assert run("l275v1003754", e)["status"] != "no_vin"
+
+
 def test_missing_part_is_not_a_typo_of_neighbor_part():
     """X-Trail 2017 (13.10): группы колодок в каталоге машины нет — «колодки перед» не должны стать «колонкой»
     (шарнир рулевой колонки). Деталь, похожая на другую деталь в одну букву, — не опечатка: пусть ищется дальше."""

@@ -154,7 +154,10 @@ class Engine:
                                            "chunks": req.chunks, "vehicle": vehicle},
                                "status": "ok", "vehicle": None, "vehicles": [], "warnings": [], "positions": []}
         if not req.ident and not req.plate:
+            # Повтор без VIN (20–23.10, журнал): тот же вопрос подряд — клиент не знает, что дать; тогда называем другие пути
+            res["repeat"] = bool((memory or {}).get("asked_vin"))
             out = self._done(res, "no_vin", t0)
+            out["memory"]["asked_vin"] = True
             if req.chunks:   # запомнить, что просил клиент: когда пришлёт VIN, ответим на это
                 out["memory"]["pending"] = (pending + "\n" + text).strip()[-1500:]
             return out
@@ -1594,14 +1597,6 @@ class Engine:
             ds = T.side(d.context, self.pr_axis)
             if want.conflicts(ds) or other_side(_key(d.oem)):
                 continue
-            # Слово клиента, которого нет в названии детали и которое не объясняет её группа, — чужая деталь: «направляющая
-            # втулка выжимного подшипника» не даёт втулку клапана, даже если Laximo записал её в группу суппортов (20.10).
-            # Слитное («ПОДШИПНИКСТУПИЦЫ») и опечатку («подшибник») не считаем: их разбирают дальше по основе и исправлению
-            gw = gwords.get(d.group_id, [])
-            if any(not any(T.same(s, t) for t in names[id(d)]) for s in q
-                   if not T.side_of_word(s) and not _word_in(s, _GENERIC_HEADS) and not _word_in(s, gw)
-                   and tree.fix(s) == s and not any(len(k) >= 4 and k in s for k in known)):
-                continue
             # «Замок двери» — не пульт: передатчик и приёмник дистанционного замка (20.10, «замок двери водительской на 308»)
             if _word_in(T.stem("замок"), q) and not _word_in(T.stem("пульт"), q) and not _word_in(T.stem("брелок"), q) \
                     and not _word_in(T.stem("дистанционн"), q) and _REMOTE_NAME.search(d.name.lower()):
@@ -2899,7 +2894,10 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     «• Фирма — наименование — цена, срок», оригинал первым, дальше аналоги — что привезём быстрее."""
     st = res["status"]
     if st == "no_vin":
-        return ("Пришлите, пожалуйста, VIN (17 знаков) или frame — номер кузова японских машин, например GX110-1234567. "
+        if res.get("repeat"):
+            return ("Пока не получилось определить машину. Напишите, пожалуйста, любое из: VIN (17 знаков), номер кузова, "
+                    "госномер или марку, модель и год выпуска — подберём по нему.")
+        return ("Пришлите, пожалуйста, VIN (17 знаков), номер кузова японских машин (например GX110-1234567) или госномер. "
                 "Проверим по вашей машине.")
     if st == "vehicle_not_found":
         req = res.get("request") or {}
