@@ -127,6 +127,17 @@ def _slim_offers(o: dict | None) -> dict | None:
             "stats": o.get("stats") or {}}
 
 
+def ask_choice(text: str, asked: str) -> str:
+    """Ответ «1» или «2» на наш вопрос «радиатор печки (1) или охладитель масла (2)?» — это выбор, а не новая фраза (20.10).
+    Возвращаем фразу, по которой и ищем: клиенту не нужно печатать название детали."""
+    if not asked or "радиатор печки" not in asked or "охладитель масла" not in asked:
+        return ""
+    m = re.fullmatch(r"\s*([12])\s*[.)]?\s*", text or "")
+    if not m:
+        return ""
+    return "теплообменник печки" if m.group(1) == "1" else "теплообменник масляный"
+
+
 def _slim(p: dict) -> dict:
     fq = p.get("filter_q") or {}
     return {"query": p["query"], "side": p.get("side") or {}, "status": p["status"], "question": p.get("question", ""),

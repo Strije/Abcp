@@ -132,6 +132,10 @@ class Engine:
                   llm: bool | None = None) -> dict:
         """Заявка. С памятью прошлого ответа и без VIN в тексте — следующая реплика того же разговора."""
         t0 = time.time()
+        # «1» / «2» на наш вопрос про теплообменник — выбор варианта, не новая фраза (20.10)
+        pick = D.ask_choice(text, (memory or {}).get("asked", ""))
+        if pick:
+            text = pick
         # Прилагательные — из слов этой заявки и памяти разговора, не из прошлых чужих (см. T.ADJ)
         T.fresh_adj()
         T.mark_adj(" ".join([text] + [str(p.get("query") or "") for p in (memory or {}).get("positions") or []]))

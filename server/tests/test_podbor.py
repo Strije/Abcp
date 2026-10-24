@@ -1416,6 +1416,24 @@ def test_no_vin_offers_plate_and_changes_on_repeat():
     assert run("l275v1003754", e)["status"] != "no_vin"
 
 
+def test_heat_exchanger_asks_which_one():
+    """20.10: «теплообменник» — радиатор печки или охладитель масла: спрашиваем. Уточнение в самой фразе — не спрашиваем."""
+    e = Engine(Fake(), None, set())
+
+    def asked(q: str) -> bool:
+        # Условие правила из Engine._candidates: все слова query есть во фразе и ни одного слова из unless
+        st = T.stems(T.expand(q), e.stop)
+        return any(all(any(T.same(w, s) for s in st) for w in a["query"])
+                   and not any(T.same(w, s) for w in a["unless"] for s in st)
+                   for a in e.ask if a["text"].startswith("Уточните: нужен радиатор печки"))
+    assert asked("теплообменник")
+    assert not asked("теплообменник печки") and not asked("теплообменник масляный")
+    from app.podbor import dialog as D
+    q = "Уточните: нужен радиатор печки (1) или охладитель масла (2)? Напишите номер."
+    assert D.ask_choice("1", q) == "теплообменник печки" and D.ask_choice("2.", q) == "теплообменник масляный"
+    assert D.ask_choice("1", "Уточните: какой размер?") == "" and D.ask_choice("3", q) == ""
+
+
 def test_missing_part_is_not_a_typo_of_neighbor_part():
     """X-Trail 2017 (13.10): группы колодок в каталоге машины нет — «колодки перед» не должны стать «колонкой»
     (шарнир рулевой колонки). Деталь, похожая на другую деталь в одну букву, — не опечатка: пусть ищется дальше."""
