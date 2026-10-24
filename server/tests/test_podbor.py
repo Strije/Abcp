@@ -1425,13 +1425,17 @@ def test_heat_exchanger_asks_which_one():
         st = T.stems(T.expand(q), e.stop)
         return any(all(any(T.same(w, s) for s in st) for w in a["query"])
                    and not any(T.same(w, s) for w in a["unless"] for s in st)
-                   for a in e.ask if a["text"].startswith("Уточните: нужен радиатор печки"))
+                   for a in e.ask if a["text"].startswith("Уточните: нужен (1) радиатор печки"))
     assert asked("теплообменник")
     assert not asked("теплообменник печки") and not asked("теплообменник масляный")
     from app.podbor import dialog as D
-    q = "Уточните: нужен радиатор печки (1) или охладитель масла (2)? Напишите номер."
-    assert D.ask_choice("1", q) == "теплообменник печки" and D.ask_choice("2.", q) == "теплообменник масляный"
+    q = "Уточните: нужен (1) радиатор печки или (2) охладитель масла? Напишите номер."
+    assert D.ask_choice("1", q) == "радиатор печки" and D.ask_choice("2.", q) == "охладитель масла"
     assert D.ask_choice("1", "Уточните: какой размер?") == "" and D.ask_choice("3", q) == ""
+    tros = "Какой трос нужен: (1) трос ручника, (2) трос капота, (3) трос сцепления или (4) трос газа? Напишите номер."
+    assert D.ask_choice("3", tros) == "трос сцепления" and D.ask_choice("1", tros) == "трос ручника"
+    масло = "Какое масло нужно: (1) масло моторное или (2) масло трансмиссионное? Напишите номер и сколько литров."
+    assert D.ask_choice("2", масло) == "масло трансмиссионное"
 
 
 def test_missing_part_is_not_a_typo_of_neighbor_part():
