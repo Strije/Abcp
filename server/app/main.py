@@ -437,8 +437,9 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     def podbor_auth(request: Request) -> None:
         """Страница и подбор — только для своих: вход браузера (Basic), имя любое, пароль PODBOR_PASSWORD.
         Каждый подбор тратит запросы Laximo по тарифу магазина. Без пароля в настройках — подбора нет."""
-        if state["s"].podbor_open:
-            return   # массовое тестирование: PODBOR_OPEN=1 — без пароля (тратит Laximo и модель, держать включённым недолго)
+        if state["s"].podbor_open and not request.url.path.startswith(("/podbor/journal", "/v1/podbor/journal")):
+            return   # массовое тестирование: PODBOR_OPEN=1 — без пароля (тратит Laximo и модель, держать включённым недолго);
+            # журнал — переписка клиентов с VIN, он открытым не бывает никогда
         if state["bx_tickets"].get(request.headers.get("x-bx-ticket", "")):
             return   # подсказчик в чате Битрикс24: пропуск выдан оператору, которого проверил портал
         password = state["s"].podbor_password

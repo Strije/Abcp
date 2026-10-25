@@ -799,3 +799,9 @@ def test_podbor_journal_page_and_data(tmp_path):
         assert len(d) == 1 and d[0]["car"] == "Toyota Camry" and d[0]["bad"] == 1 and d[0]["empty"] == 1
         assert d[0]["suspect"] == 1 and d[0]["turns"][0]["judge"]["problems"][0]["what"] == "не те"
         assert d[0]["turns"][1]["feedback"] == [{"good": False, "comment": "щупа нет"}]
+    # PODBOR_OPEN=1 (массовое тестирование) открывает подбор, но не журнал с перепиской клиентов
+    s2 = replace(s, podbor_open=True)
+    app = create_app(s2, Abcp(s2, transport=httpx.MockTransport(fake_abcp)))
+    with TestClient(app) as c:
+        assert c.get("/v1/podbor/journal").status_code == 401 and c.get("/podbor/journal").status_code == 401
+        assert c.get("/podbor").status_code == 200
