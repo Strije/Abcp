@@ -17,7 +17,7 @@ VIN = "X9FKXXEEBKCB57566"
 
 def test_quality_tiers_from_file():
     assert Q.tier("KYB")[0] == "OE" and Q.tier("Kayaba")[0] == "OE" and Q.tier("Lemförder")[0] == "OE"
-    assert Q.tier("Mann-Filter")[0] == "OE" and Q.tier("Febest")[0] == "good"
+    assert Q.tier("Mann-Filter")[0] == "OE" and Q.tier("Masuma")[0] == "good" and Q.tier("Febest")[0] == "eco"
     assert Q.tier("Zekkert") == ("eco", "")
 
 
@@ -96,14 +96,15 @@ def test_conversation_vin_questions_buttons_then_podbor(tmp_path):
     assert r["status"] == "pref" and r["ack"] == "Принято: Качество"
     # Ответ текстом на уточнение — подбор с выбранным «качеством» и «срочно» из слов клиента
     r = asyncio.run(a.reply("tg-1", "диски не надо, нужно срочно"))
-    assert r["status"] == "ok" and "Колодки" in r["text"]
-    assert gw.calls[-1].startswith("sell:Качество; срочно")
+    # Не нашли — строка без модели; рамку ответа собирает код: потребность видна в заголовке
+    assert r["status"] == "ok" and "Колодки" in r["text"] and "качество, срочно" in r["text"]
+    assert r["text"].startswith("Здравствуйте!")
     # Тот же разговор: «надолго / срочно» не переспрашиваем (26.10, Audi: «Диски тормозные передние» снова получили
     # вопросы), только уточнение по делу — и одна кнопка «Подобрать»; предпочтения — с прошлого подбора
     r = asyncio.run(a.reply("tg-1", "а задние колодки?"))
     assert r["status"] == "ask" and "надолго" not in r["text"] and r["buttons"] == [[("✅ Подобрать", "go")]]
-    assert asyncio.run(a.reply("tg-1", "", action="go"))["status"] == "ok"
-    assert gw.calls[-1].startswith("sell:Качество; срочно")
+    r = asyncio.run(a.reply("tg-1", "", action="go"))
+    assert r["status"] == "ok" and "качество, срочно" in r["text"] and not r["text"].startswith("Здравствуйте")
     assert asyncio.run(a.reply("tg-1", "", action="go"))["status"] == "stale"   # кнопка от старого вопроса
     # Новый разговор (больше получаса) — снова выясняем потребность
     s = a.sessions.load("tg-1")
@@ -205,5 +206,5 @@ def test_separate_goes_to_selector_prompt(tmp_path):
             return {"content": "ok"}, {}
     a = C.Assistant(Engine(Fake(), None, set()), GW(), "m", tmp_path)
     asyncio.run(a.reply("tg-4", VIN + " сайлентблоки отдельно"))
-    asyncio.run(a.reply("tg-4", "", action="go"))
-    assert "ИМЕННО ОТДЕЛЬНО" in seen[0] and "только в сборе с рычагом" in seen[1]
+    r = asyncio.run(a.reply("tg-4", "", action="go"))
+    assert "ИМЕННО ОТДЕЛЬНО" in seen[0] and "отдельно не продаётся, только в сборе с рычагом" in r["text"]

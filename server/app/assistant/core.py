@@ -101,6 +101,21 @@ eco (эконом); why — почему бренд такого уровня. v
 • Альтернатива: Masuma — 960 ₽ · 1 дн.
 (пустая строка между деталями; разделы — «🔍 Проверьте при осмотре», «❓ Вопросы»; цены с пробелом в тысячах)"""
 
+SELLER_ITEM = """Ты — Кирилл, консультант магазина автозапчастей Автодруг92. Машина: {car}. Потребность клиента: {need}.
+Ниже — данные по ОДНОЙ детали: номер каталога и предложения поставщиков (бренд, цена, срок в днях, quality: OE —
+поставщик автозаводов, good — проверенный производитель аналогов, eco — эконом; why — описание бренда).
+Напиши блок только про эту деталь, строго в формате:
+🔧 **Название детали** · N шт.
+• Оригинал Toyota — 8 080 ₽ · 5 дн.
+• ✅ Качество: CTR — 1 470 ₽ · 1 дн. <why дословно>
+• Альтернатива: Masuma — 960 ₽ · 1 дн.
+{variants}
+Если certainty=maybe — одна строка «Зачем проверить: …» сразу после названия. via=assembly или note — одна строка,
+что производитель отдельно не продаёт. found=false — одна строка с reason или «передам менеджеру».
+Цены, сроки, бренды, номера — ТОЛЬКО из данных. О брендах — только why дословно, ничего от себя (никаких «лучше
+оригинала», «надёжнее», стран производства). Про гарантии не пиши. Цены с пробелом в тысячах. Без приветствий,
+без вступлений и выводов — только блок."""
+
 VARIANTS = {
     "quality": "- клиенту важно КАЧЕСТВО («делаем надолго»): по каждой детали «Оригинал», «Качество» — лучший OE-поставщик "
                "из данных (объясни why), при наличии «Хорошая альтернатива» (good). Эконом (eco) не предлагай, кроме случая, "
@@ -401,6 +416,41 @@ class Assistant:
                         "dropped": dropped + more})
         return out
 
+    async def sell_item(self, car: str, item: dict, used: dict, need: str, goal: str) -> str:
+        m, u = await self.gw.chat(self.model, [
+            {"role": "system", "content": SELLER_ITEM.format(car=car, need=need, variants=VARIANTS[goal])},
+            {"role": "user", "content": json.dumps(item, ensure_ascii=False)}], max_out=4000)
+        _add(used, u)
+        return (m.get("content") or "").strip()
+
+    async def sell_items(self, car: str, data: dict, used: dict, prefs: dict, greet: bool) -> str:
+        """Ответ по деталям: блоки пишутся параллельно (26.10: один длинный ответ на 13 позиций модель печатала
+        больше минуты), рамку — приветствие, «Проверьте при осмотре», вопросы — собирает код: всегда одинаково."""
+        goal = prefs.get("goal") if prefs.get("goal") in VARIANTS else "optimal"
+        need = GOALS[goal] + ("; срочно — в первую очередь то, что привезём за 1–2 дня" if prefs.get("when") == "urgent"
+                              else "; можно подождать ради цены и качества" if prefs.get("when") == "wait" else "")
+        items = data["items"]
+        async def block(it: dict) -> str:
+            if not it.get("found"):   # не нашли — без модели: честная строка с причиной
+                why = it.get("reason") or ""
+                return f"🔧 **{it['need']}** — " + (f"{why[0].lower()}{why[1:]}" if why else "передам менеджеру, он подберёт.")
+            return await self._safe(self.sell_item(car, it, used, need, goal), "")
+        blocks = await asyncio.gather(*(block(it) for it in items))
+        sure = [b or f"🔧 **{it['need']}** — передам менеджеру." for it, b in zip(items, blocks)
+                if it.get("certainty") != "maybe"]
+        maybe = [b or f"🔧 **{it['need']}** — передам менеджеру." for it, b in zip(items, blocks)
+                 if it.get("certainty") == "maybe"]
+        head = (f"Здравствуйте! Подобрал по вашему {car}" if greet else f"Подобрал по {car}") + \
+            f" — {GOALS[goal].lower()}" + (", срочно." if prefs.get("when") == "urgent" else ".")
+        parts = [head] + sure
+        if maybe:
+            parts += ["🔍 **Проверьте при осмотре**"] + maybe
+        qs = [q for q in data.get("questions") or [] if q.strip()]
+        if qs:
+            parts += ["❓ **Вопросы**\n" + "\n".join(f"{n}. {q}" for n, q in enumerate(qs, 1))]
+        parts.append("Напишите, какие варианты оформить.")
+        return "\n\n".join(parts)
+
     async def sell(self, car: str, data: dict, used: dict, prefs: dict | None = None, greet: bool = False) -> str:
         prefs = prefs or {}
         goal = prefs.get("goal") if prefs.get("goal") in VARIANTS else "optimal"
@@ -517,15 +567,21 @@ class Assistant:
             data = {"items": [], "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", []),
                     "client": text}
             return await self.sell(car, data, used, prefs, greet), data
+        t1 = time.time()
         picks = await asyncio.gather(*(self._safe(self.select(v, tree, it, used), {"found": False}) for it in items))
+        t2 = time.time()
         priced = await asyncio.gather(*(self._safe(self.priced(v, it, p), []) for it, p in zip(items, picks)))
+        t3 = time.time()
         data = {"items": [{"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
                            "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
                            "found": bool(p.get("found")) and bool(pr), "catalog": pr,
                            "separate": bool(it.get("separate")), "reason": "" if pr else p.get("reason", "")}
                           for it, p, pr in zip(items, picks, priced)],
                 "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", [])}
-        return await self.sell(car, data, used, prefs, greet), data
+        answer = await self.sell_items(car, data, used, prefs, greet)
+        # Сколько секунд на этапах — в расход (журнал и /v1/assistant): видно, что тормозит
+        used["timing"] = {"select": round(t2 - t1), "prices": round(t3 - t2), "sell": round(time.time() - t3)}
+        return answer, data
 
     def _done(self, sid: str, s: dict, text: str, answer: str, status: str, t0: float,
               used: dict | None = None, data: dict | None = None, buttons: list | None = None) -> dict:
