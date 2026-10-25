@@ -25,6 +25,19 @@ from . import wizard as W
 TREE_TTL = float("inf")
 VEHICLE_TTL = float("inf")
 DETAILS_TTL = float("inf")
+# В памяти — только последние машины: дерево групп ~0,6 МБ, узлы полного каталога ~1 МБ на машину, и раньше они
+# копились до перезапуска. Служба упиралась в MemoryMax=300M и её убивало ядро (18.10, 23.10 — посреди разговора
+# клиента, 25.10). Вытесненное берётся с диска, в Laximo заново не ходим.
+MAX_CARS = 30
+MAX_DETAILS = 600
+
+
+def _keep(cache: dict, key, value, limit: int):
+    """Положить в кэш свежим и выкинуть самые старые сверх limit (порядок вставки = порядок обращений)."""
+    cache.pop(key, None)
+    cache[key] = value
+    while len(cache) > limit:
+        cache.pop(next(iter(cache)))
 
 
 class LaximoError(Exception):
@@ -486,6 +499,11 @@ class Catalog:
         self._unit_ids: dict[str, dict[int, dict]] = {}
         self.learned: dict[str, list[str]] = self._load("learned.json") or {}
 
+    def sizes(self) -> dict:
+        """Сколько лежит в кэшах памяти — для /v1/podbor/laximo-usage (следим, что служба не растёт до MemoryMax)."""
+        return {"cars": len(self._trees), "unit_trees": len(self._unit_trees), "details": len(self._details),
+                "vehicles": len(self._vehicles)}
+
     # --- диск ---
     def _path(self, name: str) -> Path | None:
         return self.folder / name if self.folder else None
@@ -545,7 +563,7 @@ class Catalog:
                                       lambda: self.call("findVehicleByPlateNumber",
                                                         {"countryCode": "ru", "plateNumber": plate}))
         found = parse_vehicles(data)
-        self._vehicles[key] = (time.time(), found)
+        _keep(self._vehicles, key, (time.time(), found), MAX_CARS * 10)
         return found
 
     # --- полный каталог: узлы вне быстрых групп (подрамник, поперечина…) ---
@@ -613,10 +631,11 @@ class Catalog:
         (стороны, цены, варианты), работает тем же кодом. None — узлов нет."""
         key = self.tree_key(v) + "-u"
         if key in self._unit_trees:
+            _keep(self._unit_trees, key, self._unit_trees[key], MAX_CARS)
             return self._unit_trees[key]
         units = await self.units(v)
         if not units:
-            self._unit_trees[key] = None
+            _keep(self._unit_trees, key, None, MAX_CARS)
             return None
         ids: dict[int, dict] = {}
         by_cat: dict[str, list[dict]] = {}
@@ -626,8 +645,8 @@ class Catalog:
                                                     "children": []})
         tree = {"name": "units", "link": False,
                 "children": [{"name": c, "link": False, "children": ch} for c, ch in by_cat.items()]}
-        self._unit_ids[key] = ids
-        self._unit_trees[key] = TreeIndex(tree, self.stop, {}, [], self.not_typos)
+        _keep(self._unit_ids, key, ids, MAX_CARS)
+        _keep(self._unit_trees, key, TreeIndex(tree, self.stop, {}, [], self.not_typos), MAX_CARS)
         return self._unit_trees[key]
 
     def unit_file(self, v: Vehicle, u: dict) -> str:
@@ -826,10 +845,11 @@ class Catalog:
                 except Exception:
                     if not hit[1]:
                         raise  # нет ни свежего, ни старого дерева
-            self._raw[key] = hit
+            _keep(self._raw, key, hit, MAX_CARS)
             self._trees.pop(key, None)
-        if key not in self._trees:
-            self._trees[key] = TreeIndex(hit[1], self.stop, self.learned, self.synonyms, self.not_typos)
+        idx = self._trees[key] if key in self._trees else TreeIndex(hit[1], self.stop, self.learned, self.synonyms,
+                                                                   self.not_typos)
+        _keep(self._trees, key, idx, MAX_CARS)
         return self._trees[key]
 
     # --- детали группы ---
@@ -849,11 +869,7 @@ class Catalog:
             "catalog": v.catalog, "ssd": v.ssd, "vehicleId": v.vehicle_id,
             "quickGroupId": str(group_id), "all": "true" if full else "false"}))
         found = parse_details(data, group_id)
-        self._details[key] = (time.time(), found)
-        if len(self._details) > 2000:  # не копим бесконечно
-            oldest = sorted(self._details, key=lambda k: self._details[k][0])[:500]
-            for k in oldest:
-                self._details.pop(k, None)
+        _keep(self._details, key, (time.time(), found), MAX_DETAILS)
         return found
 
     def learn(self, group_id: int, detail_name: str):

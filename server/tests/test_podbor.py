@@ -441,16 +441,18 @@ def test_podbor_endpoint_hides_purchase_price():
     app = create_app(s, Abcp(s, transport=httpx.MockTransport(abcp)),
                      Laximo(s, transport=httpx.MockTransport(laximo)))
     with TestClient(app) as c:
-        # Без пароля и с чужим — нет; браузер получает запрос на вход
-        r = c.get("/podbor")
-        assert r.status_code == 401 and r.headers["www-authenticate"].startswith("Basic")
+        # Без пароля и с чужим — нет; страница уводит на форму входа (25.10: не всплывающее окно браузера)
+        r = c.get("/podbor", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/podbor/login?next=/podbor"
+        assert "www-authenticate" not in r.headers
         assert c.post("/v1/podbor", json={"text": "X9FKXXEEBKCB57566 свечи"}).status_code == 401
-        assert c.get("/podbor", auth=("менеджер", "не тот")).status_code == 401
+        usage = "/v1/podbor/laximo-usage"
+        assert c.get(usage, auth=("менеджер", "не тот")).status_code == 401
         # Браузер повторяет запомненный старый пароль — это не перебор, блокировки нет
         for _ in range(30):
-            assert c.get("/podbor", auth=("менеджер", "старый")).status_code == 401
+            assert c.get(usage, auth=("менеджер", "старый")).status_code == 401
         # Перебор разных паролей — блокировка, но правильный пароль проходит
-        codes = [c.get("/podbor", auth=("x", f"угадай-{i}")).status_code for i in range(12)]
+        codes = [c.get(usage, auth=("x", f"угадай-{i}")).status_code for i in range(12)]
         assert codes[-1] == 429 and codes.count(401) == 8
         assert c.get("/podbor", auth=auth).status_code == 200
         c.auth = auth
@@ -3354,3 +3356,16 @@ def test_client_reasoning_after_offer_is_not_ignored():
         out = run(text, e, memory=first["memory"], llm=False)
         assert out["text"].strip() and "менеджеру" in out["text"], text
         assert not out["positions"]
+
+
+def test_catalog_keeps_only_recent_cars_in_memory():
+    """25.10: деревья всех машин копились в памяти до перезапуска — служба упиралась в MemoryMax=300M и её убивало ядро.
+    В памяти — последние MAX_CARS машин, остальное с диска; самая свежая не вытесняется."""
+    from app.podbor import catalog as C
+    cache: dict = {}
+    for i in range(C.MAX_CARS + 5):
+        C._keep(cache, f"car{i}", i, C.MAX_CARS)
+    assert len(cache) == C.MAX_CARS and "car0" not in cache and f"car{C.MAX_CARS + 4}" in cache
+    C._keep(cache, "car10", 10, C.MAX_CARS)          # обращение освежает
+    C._keep(cache, "new", 0, C.MAX_CARS)
+    assert "car10" in cache and "car5" not in cache

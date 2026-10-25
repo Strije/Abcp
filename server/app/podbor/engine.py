@@ -124,7 +124,6 @@ class Engine:
         not_typos = frozenset(T.stem(w) for w in rules.get("not_typos", {}).get("words", []))
         self.catalog = Catalog(src.laximo, folder, self.stop, rules.get("synonyms", []), not_typos)
         self.warranty = {AB.get().key(b) for b in (warranty or set())}
-        self._own: dict[tuple[int, tuple[str, ...]], tuple | None] = {}
 
     # ---------- заявка целиком ----------
 
@@ -1729,11 +1728,14 @@ class Engine:
         в «Подшипнике ступичном» не чужая: «колеса» есть в разделе «Ступица колеса, составляющие»."""
         if not name:
             return False
-        key = (id(tree), tuple(name))
-        if key not in self._own:
+        # Кэш — у самого дерева: деревья вытесняются из памяти (Catalog.MAX_CARS), а id() освободившегося дерева
+        # может достаться новому — общий словарь по id() отдал бы чужой ответ
+        own = tree.__dict__.setdefault("_own", {})
+        key = tuple(name)
+        if key not in own:
             r = tree.rank(name, T.Side())
-            self._own[key] = r[0] if r and r[0][1] >= 1.0 else None
-        hit = self._own[key]
+            own[key] = r[0] if r and r[0][1] >= 1.0 else None
+        hit = own[key]
         if not hit or hit[0].id in chosen:
             return False
         words = hit[0].phrases[0][0]
