@@ -86,7 +86,8 @@ note пиши клиенту на «вы», не о нём в третьем л�
 
 SELECTOR = """Ты подбираешь одну деталь в каталоге машины {car}. Нужно: {need} (ось: {axis}; клиент писал: «{words}»).{separate}
 Ниже уже есть кандидаты из каталога и детали первой группы — если нужная деталь там есть, сразу вызывай pick.
-Иначе ищи search_catalog (другие формулировки: жаргон → каталожное название), открывай show_parts. Выбирай детали,
+Иначе ищи search_catalog (другие формулировки: жаргон → каталожное название), открывай show_parts; в быстрых группах
+нет — ищи search_units (узлы полного каталога) и открывай узел «u…» show_parts. Выбирай детали,
 которые и есть нужная (с нужной осью; левую и правую — обе). Названия и позиции бери только из инструментов.
 Мелкие детали (сайлентблок, пыльник, втулка, шаровая, отбойник, подшипник опоры) производитель часто отдельно не продаёт —
 только в сборе с рычагом, цапфой, стойкой; у неоригинальных фирм они есть. Если в группе нашлась только сборка — открой её
@@ -147,6 +148,10 @@ VARIANTS = {
 
 T_SEARCH = {"type": "function", "function": {
     "name": "search_catalog", "description": "Найти группы деталей в каталоге этой машины по словам: id, название, путь.",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
+T_UNITS = {"type": "function", "function": {
+    "name": "search_units", "description": "Поиск по узлам ПОЛНОГО каталога машины (медленнее): когда в быстрых группах "
+    "search_catalog нужной детали нет. Возвращает узлы с id «u…»; открывай их show_parts.",
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 T_PARTS = {"type": "function", "function": {
     "name": "show_parts", "description": "Детали группы каталога этой машины: название, позиция на схеме, примечание.",
@@ -282,8 +287,11 @@ class Assistant:
 
     # ---------- инструменты подборщика ----------
 
-    async def search(self, tree, query: str) -> list[dict]:
-        """Кандидаты из дерева групп машины: правила робота (основы, синонимы, опечатки) + векторы по смыслу."""
+    async def search(self, tree, query: str, v=None) -> list[dict]:
+        """Кандидаты из дерева групп машины: правила робота (основы, синонимы, опечатки) + векторы по смыслу.
+        Быстрых групп у машины нет (SsangYong Kyron: E_NOTSUPPORTED) — сразу узлы полного каталога."""
+        if tree is None:
+            return await self.search_units(v, query) if v is not None else []
         st = T.stems(query, self.eng.stop)
         out: dict[str, dict] = {}
         for g, _ in tree.rank(st, T.Side())[:8] if st else []:
@@ -298,10 +306,30 @@ class Assistant:
                     out.setdefault(f"g{g.id}", {"id": f"g{g.id}", "name": g.name, "path": g.path[-80:]})
         return list(out.values())[:14]
 
+    async def search_units(self, v, query: str) -> list[dict]:
+        """Узлы полного каталога машины (как у робота: Catalog.unit_tree — один раз обходит каталог, дальше с диска):
+        когда в быстрых группах нужной детали нет. id — «u<номер>»."""
+        ut = await self.cat.unit_tree(v)
+        st = T.stems(query, self.eng.stop)
+        if ut is None or not st:
+            return [{"info": "полного каталога по узлам у этой машины нет"}]
+        return [{"id": f"u{-g.id}", "name": g.name, "path": g.path[-80:]} for g, _ in ut.rank(st, T.Side())[:10]] \
+            or [{"info": "в узлах по этим словам ничего нет — попробуй другое название"}]
+
+    async def _details(self, v, tree, gid: str) -> list | None:
+        """Детали группы («g123») или узла полного каталога («u45»); None — такого id нет."""
+        if gid[1:].isdigit() and gid[:1] == "g" and tree is not None and int(gid[1:]) in tree.groups:
+            return await self.cat.details(v, int(gid[1:]), False)
+        if gid[1:].isdigit() and gid[:1] == "u":
+            ut = await self.cat.unit_tree(v)
+            if ut is not None and -int(gid[1:]) in ut.groups:
+                return await self.cat.details(v, -int(gid[1:]), False)
+        return None
+
     async def parts(self, v, tree, gid: str) -> list[dict]:
-        if not gid[1:].isdigit() or int(gid[1:]) not in tree.groups:
-            return [{"error": "нет такой группы, возьми id из search_catalog"}]
-        ds = await self.cat.details(v, int(gid[1:]), False)
+        ds = await self._details(v, tree, gid)
+        if ds is None:
+            return [{"error": "нет такой группы, возьми id из search_catalog или search_units"}]
         seen, out = set(), []
         for d in ds:
             if (d.name, d.code_on_image) in seen:
@@ -311,11 +339,9 @@ class Assistant:
                         "unit": d.unit[:50]})
         return out[:30] or [{"info": "в группе нет деталей"}]
 
-    async def assembly_rows(self, v, gid: str, assembly: str, want: str) -> list[dict]:
+    async def assembly_rows(self, v, gid: str, assembly: str, want: str, tree=None) -> list[dict]:
         """Как робот (_bushings_by_host): кроссы номера сборки у поставщиков — только строки нужной детали."""
-        if not gid[1:].isdigit():
-            return []
-        ds = await self.cat.details(v, int(gid[1:]), False)
+        ds = await self._details(v, tree if tree is not None else await self._tree(v), gid) or []
         hosts = [d for d in ds if d.name[:70] == assembly] or [d for d in ds if assembly[:20].lower() in d.name.lower()]
         wst = T.stems(T.expand(want))
         if not hosts or not wst:
@@ -329,6 +355,12 @@ class Assistant:
                     seen.add((r.get("brand"), r.get("number")))
                     out.append(r)
         return out
+
+    async def _tree(self, v):
+        try:
+            return await self.cat.tree(v)
+        except Exception:  # noqa: BLE001 — нет быстрых групп
+            return None
 
     # ---------- агенты ----------
 
@@ -351,7 +383,7 @@ class Assistant:
         async with self.pace:
             # Кандидаты и детали лучшей группы — сразу в первом сообщении (26.10: подборщик ходил по каталогу по 5–7 шагов,
             # подбор большого запроса шёл минуту): для частых деталей хватает одного вызова модели
-            first = await self.search(tree, item["need"])
+            first = await self.search(tree, item["need"], v)
             top = await self._safe(self.parts(v, tree, first[0]["id"]), []) if first else []
             msgs = [{"role": "system", "content": SELECTOR.format(
                         car=v.summary(), need=item["need"], axis=item.get("axis") or "любая", words=item.get("words", ""),
@@ -360,7 +392,7 @@ class Assistant:
                      + (f"\nДетали группы {first[0]['id']}: " + json.dumps(top, ensure_ascii=False) if first else "")
                      + "\nПодбери."}]
             for _ in range(SELECT_STEPS):
-                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_PARTS, T_ASSEMBLY, T_PICK])
+                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_ASSEMBLY, T_PICK])
                 _add(used, u)
                 calls = m.get("tool_calls") or []
                 msgs.append({"role": "assistant", "content": m.get("content") or "", **({"tool_calls": calls} if calls else {})})
@@ -385,7 +417,9 @@ class Assistant:
 
     async def _tool(self, v, tree, fn: str, args: dict) -> Any:
         if fn == "search_catalog":
-            return await self.search(tree, str(args.get("query", "")))
+            return await self.search(tree, str(args.get("query", "")), v)
+        if fn == "search_units":
+            return await self.search_units(v, str(args.get("query", "")))
         if fn == "assembly_parts":
             rows = await self.assembly_rows(v, str(args.get("id", "")), str(args.get("assembly", "")),
                                             str(args.get("want", "")))
@@ -439,10 +473,11 @@ class Assistant:
         gid = str(pick.get("id") or "")
         if not pick.get("found") or not gid[1:].isdigit():
             return []
+        tree = await self._tree(v)
         if pick.get("via") == "assembly":
             host = (pick.get("parts") or [{}])[0].get("name", "")
             want = pick.get("want") or item["need"]
-            rows = await self.assembly_rows(v, gid, host, want)
+            rows = await self.assembly_rows(v, gid, host, want, tree)
             if not rows:
                 return []
             cur = curate(rows, "", v.brand, set(), name=want)
@@ -451,7 +486,7 @@ class Assistant:
             return [{"part": f"{want} (к сборке «{host}»)", "oem": "", "pos": "", "via": "assembly",
                      "note": f"{nice_brand(oem_brand_for(v.brand))} отдельно не продаёт — только {host}",
                      "offers": offers, "dropped": []}]
-        ds = await self.cat.details(v, int(gid[1:]), False)
+        ds = await self._details(v, tree, gid) or []
         out: list[dict] = []
         for p in pick.get("parts") or []:
             d = next((d for d in ds if d.name[:70] == p.get("name") and (not p.get("pos") or d.code_on_image == p["pos"])), None) \
@@ -678,7 +713,8 @@ class Assistant:
                                   "Схему пришлю, когда подберу деталь — напишите, какая нужна.", "scheme", t0, used,
                                   buttons=_scheme_buttons(sch))
             items = (dec.get("items") or [])[:MAX_ITEMS]
-            if items and tree is None:
+            if items and tree is None and await self._safe(self.cat.unit_tree(v), None) is None:
+                # Ни быстрых групп, ни полного каталога по узлам — честно менеджеру
                 return self._done(sid, s, shown or text, NO_QUICK, "no_quick_groups", t0, used)
             recent = time.time() - float(s.get("last_ok") or 0) < CONVERSATION
             if ask and items and recent:
@@ -946,8 +982,10 @@ def _why_for(o: dict, part: str) -> dict:
 
 
 def _group_name(tree, gid) -> str:
-    """Группа каталога, которую выбрал подборщик, — для журнала и стенда."""
+    """Группа каталога, которую выбрал подборщик, — для журнала и стенда («u…» — узел полного каталога)."""
     g = str(gid or "")
+    if g[:1] == "u":
+        return "узел " + g
     return tree.groups[int(g[1:])].name if tree is not None and g[1:].isdigit() and int(g[1:]) in tree.groups else ""
 
 

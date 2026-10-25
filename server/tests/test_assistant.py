@@ -409,3 +409,26 @@ def test_photos_off_by_default(tmp_path):
     bot.assistant.sessions.save("tg-6", {"phone": "+7"})
     asyncio.run(bot.handle({"message": {"chat": {"id": 6, "type": "private"}, "photo": [{"file_id": "f", "file_size": 9}]}}))
     assert "Фото пока не читаю" in sent[-1]["text"]
+
+
+def test_full_catalog_units_for_car_without_quick_groups(tmp_path):
+    """26.10, SsangYong Kyron: «E_NOTSUPPORTED:ListQuickGroups» — Кирилл ищет по узлам полного каталога, как робот."""
+    from app.podbor.catalog import TreeIndex
+    from test_podbor import node
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path)
+    ut = TreeIndex(node(0, "units", link=False, children=[node(0, "Тормоза", link=False, children=[
+        node(-3, "Диск тормозной передний"), node(-4, "Суппорт задний")])]), a.eng.stop, {}, [], frozenset())
+    calls = []
+
+    async def unit_tree(v):
+        return ut
+
+    async def details(v, gid, full):
+        calls.append(gid)
+        return []
+    a.cat.unit_tree, a.cat.details = unit_tree, details
+    got = asyncio.run(a.search(None, "диски тормозные передние", v=object()))
+    assert got[0] == {"id": "u3", "name": "Диск тормозной передний", "path": got[0]["path"]}
+    assert asyncio.run(a.parts(object(), None, "u3")) == [{"info": "в группе нет деталей"}] and calls == [-3]
+    assert "error" in asyncio.run(a.parts(object(), None, "u99"))[0]
+    assert C._group_name(None, "u3") == "узел u3"
