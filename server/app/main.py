@@ -11,6 +11,7 @@ POST /v1/podbor/text         ответ клиенту из готового п�
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
 GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
 GET  /v1/podbor/laximo-usage сколько запросов ушло в Laximo и в языковую модель (пароль подбора)
+GET  /podbor/login           вход на страницы подбора формой (пароль PODBOR_PASSWORD → пропуск в cookie на 30 дней)
 GET  /podbor/journal         разговоры с роботом: реплики, ответы, оценки, находки судьи (пароль подбора)
 GET  /v1/podbor/journal?days= те же разговоры данными для страницы (до 90 дней)
 POST /v1/podbor/understand   только разбор текста моделью, без каталога — для сравнения с правилами
@@ -38,15 +39,17 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import time
+import urllib.parse
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from . import access, bitrix, podbor, push, releases, tokens
@@ -433,28 +436,24 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     PODBOR_BAD_LIMIT, PODBOR_BAD_WINDOW = 10, 600
     podbor_page = Path(__file__).parent / "static" / "podbor.html"
     journal_page = Path(__file__).parent / "static" / "podbor_journal.html"
+    login_page = Path(__file__).parent / "static" / "podbor_login.html"
+    PASS_COOKIE, PASS_DAYS = "podbor_pass", 30
 
-    def podbor_auth(request: Request) -> None:
-        """Страница и подбор — только для своих: вход браузера (Basic), имя любое, пароль PODBOR_PASSWORD.
-        Каждый подбор тратит запросы Laximo по тарифу магазина. Без пароля в настройках — подбора нет."""
-        if state["s"].podbor_open and not request.url.path.startswith(("/podbor/journal", "/v1/podbor/journal")):
-            return   # массовое тестирование: PODBOR_OPEN=1 — без пароля (тратит Laximo и модель, держать включённым недолго);
-            # журнал — переписка клиентов с VIN, он открытым не бывает никогда
-        if state["bx_tickets"].get(request.headers.get("x-bx-ticket", "")):
-            return   # подсказчик в чате Битрикс24: пропуск выдан оператору, которого проверил портал
+    def pass_sign(exp: int) -> str:
+        """Пропуск после входа формой: срок и подпись от секрета сервера и текущего пароля — смена пароля
+        отменяет все выданные пропуска. Пароля в cookie нет."""
+        pw = hashlib.sha256(state["s"].podbor_password.encode()).hexdigest()
+        return hmac.new(state["s"].token_secret, f"podbor|{exp}|{pw}".encode(), hashlib.sha256).hexdigest()
+
+    def pass_ok(value: str) -> bool:
+        exp, _, sig = (value or "").partition(".")
+        return exp.isdigit() and int(exp) > time.time() and bool(state["s"].podbor_password)             and hmac.compare_digest(sig, pass_sign(int(exp)))
+
+    def password_ok(given: str, ip: str) -> bool:
+        """Сверка пароля подбора с защитой от перебора (429 после 10 разных неверных за 10 минут)."""
         password = state["s"].podbor_password
-        if not password:
-            raise HTTPException(404, "Not Found")
-        ip = client_ip(request)
-        given = ""
-        scheme, _, value = request.headers.get("authorization", "").partition(" ")
-        if scheme.lower() == "basic":
-            try:
-                given = base64.b64decode(value.strip()).decode("utf-8").partition(":")[2]
-            except (binascii.Error, UnicodeDecodeError):
-                given = ""
         if given and hmac.compare_digest(given.encode(), password.encode()):
-            return
+            return True
         if given:
             now = time.time()
             seen = podbor_bad[ip]
@@ -464,7 +463,64 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             if h not in seen and len(seen) >= PODBOR_BAD_LIMIT:
                 raise HTTPException(429, "Слишком много неверных паролей, подождите 10 минут")
             seen[h] = now
-        raise HTTPException(401, "Нужен пароль", headers={"WWW-Authenticate": 'Basic realm="podbor", charset="UTF-8"'})
+        return False
+
+    def podbor_auth(request: Request) -> None:
+        """Страница и подбор — только для своих: вход формой (/podbor/login → пропуск в cookie) или Basic для скриптов,
+        имя любое, пароль PODBOR_PASSWORD. Каждый подбор тратит запросы Laximo по тарифу магазина.
+        Без пароля в настройках — подбора нет."""
+        if state["s"].podbor_open and not request.url.path.startswith(("/podbor/journal", "/v1/podbor/journal")):
+            return   # массовое тестирование: PODBOR_OPEN=1 — без пароля (тратит Laximo и модель, держать включённым недолго);
+            # журнал — переписка клиентов с VIN, он открытым не бывает никогда
+        if state["bx_tickets"].get(request.headers.get("x-bx-ticket", "")):
+            return   # подсказчик в чате Битрикс24: пропуск выдан оператору, которого проверил портал
+        if not state["s"].podbor_password:
+            raise HTTPException(404, "Not Found")
+        if pass_ok(request.cookies.get(PASS_COOKIE, "")):
+            return
+        given = ""
+        scheme, _, value = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() == "basic":
+            try:
+                given = base64.b64decode(value.strip()).decode("utf-8").partition(":")[2]
+            except (binascii.Error, UnicodeDecodeError):
+                given = ""
+        if password_ok(given, client_ip(request)):
+            return
+        if request.method == "GET" and request.url.path.startswith("/podbor"):
+            # Страница — на форму входа (раньше было окно браузера, его не закрыть и не сохранить пароль в менеджере)
+            raise HTTPException(303, "Нужен вход", headers={"Location": "/podbor/login?next=" + request.url.path})
+        raise HTTPException(401, "Нужен пароль")   # без WWW-Authenticate: окно браузера больше не всплывает
+
+    @app.get("/podbor/login")
+    async def podbor_login_page():
+        return FileResponse(login_page, media_type="text/html; charset=utf-8")
+
+    @app.post("/podbor/login")
+    async def podbor_login(request: Request):
+        form = urllib.parse.parse_qs((await request.body()).decode("utf-8", "replace"))
+        nxt = (form.get("next") or ["/podbor"])[0]
+        if not re.fullmatch(r"/podbor(/[a-z]+)?", nxt):
+            nxt = "/podbor"   # уводим только на свои страницы
+        if not state["s"].podbor_password:
+            raise HTTPException(404, "Not Found")
+        try:
+            ok = password_ok((form.get("password") or [""])[0], client_ip(request))
+        except HTTPException:
+            return RedirectResponse(f"/podbor/login?many=1&next={nxt}", status_code=303)
+        if not ok:
+            return RedirectResponse(f"/podbor/login?bad=1&next={nxt}", status_code=303)
+        exp = int(time.time()) + PASS_DAYS * 86400
+        r = RedirectResponse(nxt, status_code=303)
+        r.set_cookie(PASS_COOKIE, f"{exp}.{pass_sign(exp)}", max_age=PASS_DAYS * 86400, httponly=True, secure=True,
+                     samesite="lax", path="/")
+        return r
+
+    @app.get("/podbor/logout")
+    async def podbor_logout():
+        r = RedirectResponse("/podbor/login", status_code=303)
+        r.delete_cookie(PASS_COOKIE, path="/")
+        return r
 
     SHADOW_DAY_LIMIT = 400   # вызовов модели в сутки, после которых теневой разбор молчит (тариф помесячный)
     shadow_tasks: set = set()   # ссылки на фоновые задачи, пока не отработали
@@ -520,7 +576,15 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     @app.get("/v1/podbor/laximo-usage", dependencies=[Depends(podbor_auth)])
     async def laximo_usage():
         """Сколько запросов ушло в Laximo: сегодня, за месяц, по методам и дням; и в языковую модель."""
-        return state["laximo"].usage.report() | {"llm": state["llm"].report()}
+        return state["laximo"].usage.report() | {"llm": state["llm"].report(), "memory": memory_report()}
+
+    def memory_report() -> dict:
+        """Память службы (RSS, МБ) и кэши подбора: служба живёт под MemoryMax=300M, рост виден здесь раньше, чем убьёт ядро."""
+        try:
+            rss = int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE") // 1048576
+        except (OSError, ValueError, IndexError, AttributeError):
+            rss = None   # не Linux (тесты на Windows)
+        return {"rss_mb": rss, **state["podbor"].catalog.sizes()}
 
     @app.get("/v1/podbor/scheme/{tok}")
     async def podbor_scheme(tok: str, request: Request):

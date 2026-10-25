@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход — Автодруг92</title>
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #677085; --line: #e3e6ec; --accent: #e8590c; --bad: #c92a2a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1d2128; --text: #e6e9ef; --muted: #98a1b3; --line: #2e343e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px;
+         background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  form { width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  button { width: 100%; margin-top: 16px; font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 11px; cursor: pointer;
+           background: var(--accent); color: #fff; }
+  .err { color: var(--bad); font-size: 14px; margin: 10px 0 0; display: none; }
+</style>
+</head>
+<body>
+<form method="post" action="/podbor/login">
+  <h1>Подбор Автодруг92</h1>
+  <p>Страницы подбора и разговоров с роботом — для сотрудников магазина.</p>
+  <!-- Имя не проверяется, но с ним браузер и менеджер паролей запоминают вход -->
+  <label for="u">Имя</label>
+  <input id="u" name="username" autocomplete="username" value="менеджер">
+  <label for="p">Пароль</label>
+  <input id="p" name="password" type="password" autocomplete="current-password" required autofocus>
+  <input type="hidden" name="next" id="next" value="/podbor">
+  <button type="submit">Войти</button>
+  <div class="err" id="bad">Неверный пароль.</div>
+  <div class="err" id="many">Слишком много неверных паролей — подождите 10 минут.</div>
+</form>
+<script>
+  const q = new URLSearchParams(location.search);
+  if (/^\/podbor(\/[a-z]+)?$/.test(q.get("next") || "")) document.getElementById("next").value = q.get("next");
+  if (q.has("bad")) document.getElementById("bad").style.display = "block";
+  if (q.has("many")) document.getElementById("many").style.display = "block";
+</script>
+</body>
+</html>

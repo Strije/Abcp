@@ -792,7 +792,7 @@ def test_podbor_journal_page_and_data(tmp_path):
     app = create_app(s, Abcp(s, transport=httpx.MockTransport(fake_abcp)))
     with TestClient(app) as c:
         assert c.get("/v1/podbor/journal").status_code == 401
-        assert c.get("/podbor/journal").status_code == 401
+        assert c.get("/podbor/journal", follow_redirects=False).headers["location"] == "/podbor/login?next=/podbor/journal"
         h = {"Authorization": "Basic " + base64.b64encode(b"x:pw").decode()}
         assert "Разговоры с роботом" in c.get("/podbor/journal", headers=h).text
         d = c.get("/v1/podbor/journal?days=3", headers=h).json()["dialogs"]
@@ -803,5 +803,36 @@ def test_podbor_journal_page_and_data(tmp_path):
     s2 = replace(s, podbor_open=True)
     app = create_app(s2, Abcp(s2, transport=httpx.MockTransport(fake_abcp)))
     with TestClient(app) as c:
-        assert c.get("/v1/podbor/journal").status_code == 401 and c.get("/podbor/journal").status_code == 401
+        assert c.get("/v1/podbor/journal").status_code == 401
+        assert c.get("/podbor/journal", follow_redirects=False).status_code == 303
         assert c.get("/podbor").status_code == 200
+
+
+def test_podbor_login_form(tmp_path):
+    """25.10 (пользователь): вход формой, а не всплывающим окном браузера. Пропуск — подписанная cookie без пароля,
+    смена пароля его отменяет; уводим только на свои страницы."""
+    from dataclasses import replace
+    s = replace(S, state_dir=str(tmp_path), podbor_password="pw")
+    app = create_app(s, Abcp(s, transport=httpx.MockTransport(fake_abcp)))
+    with TestClient(app, base_url="https://testserver") as c:
+        assert "Пароль" in c.get("/podbor/login").text
+        r = c.post("/podbor/login", content="password=nope&next=/podbor/journal",
+                   headers={"content-type": "application/x-www-form-urlencoded"}, follow_redirects=False)
+        assert r.status_code == 303 and "bad=1" in r.headers["location"] and "podbor_pass" not in r.cookies
+        r = c.post("/podbor/login", content="password=pw&next=https://evil.example/",
+                   headers={"content-type": "application/x-www-form-urlencoded"}, follow_redirects=False)
+        assert r.headers["location"] == "/podbor" and "pw" not in r.headers["set-cookie"].split("podbor_pass=")[1][:3]
+        assert "HttpOnly" in r.headers["set-cookie"]
+        assert c.get("/v1/podbor/journal").status_code == 200     # пропуск из cookie
+        assert c.get("/podbor/journal").status_code == 200
+        c.get("/podbor/logout")
+        assert c.get("/v1/podbor/journal").status_code == 401
+    # Смена пароля — старые пропуска не действуют
+    with TestClient(app, base_url="https://testserver") as c:
+        c.post("/podbor/login", content="password=pw", headers={"content-type": "application/x-www-form-urlencoded"})
+        old_pass = c.cookies.get("podbor_pass")
+    s2 = replace(s, podbor_password="new")
+    app2 = create_app(s2, Abcp(s2, transport=httpx.MockTransport(fake_abcp)))
+    with TestClient(app2, base_url="https://testserver") as c:
+        c.cookies.set("podbor_pass", old_pass)
+        assert old_pass and c.get("/v1/podbor/journal").status_code == 401
