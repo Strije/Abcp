@@ -44,6 +44,7 @@ NO_CAR = ("По этому номеру машина в каталоге не н
           "госномер — либо напишите марку, модель, год и объём двигателя, передам менеджеру.")
 FAILED = "Сейчас не получается подобрать автоматически — передал ваш вопрос менеджеру, он ответит здесь же."
 MAX_QUESTIONS = 3       # вопросов до подбора — не больше трёх
+CONVERSATION = 30 * 60  # тот же разговор: «надолго или подешевле» не переспрашиваем (дольше — спросим снова)
 
 GOALS = {"quality": "Качество", "optimal": "Оптимально", "cheap": "Подешевле"}
 WHEN = {"urgent": "Срочно, 1–2 дня", "wait": "Могу подождать"}
@@ -60,30 +61,45 @@ DECODER = """Ты — опытный мастер-приёмщик автосе�
 - «под вопросом», «по факту», «если надо» — certainty=maybe и note, что проверить при осмотре;
 - ось (front/rear) и сколько штук на машину (парные детали обычно 2: левая и правая);
 - не деталь (вопрос о цене, сроке, оплате, доставке, приветствие, «спасибо») — в not_parts;
-- неясно, какая именно деталь («диски» — тормозные или колёсные?) — вопрос в questions, а не позиция.
+- неясно, какая именно деталь («диски» — тормозные или колёсные?) — вопрос в questions, а не позиция;
+- клиент просит именно отдельно, не в сборе («сайлентблоки отдельно», «только шаровую, без рычага») — separate=true;
+- в разговоре выше ты уже задавал вопрос, а клиент на него отвечает («диски тормозные») — это уточнение к прошлой
+  просьбе: верни позиции с учётом ответа, вопрос не повторяй.
 Машина уже определена по VIN — VIN, кузов и марку не спрашивай.
 Ответь вызовом decoded."""
 
-SELECTOR = """Ты подбираешь одну деталь в каталоге машины {car}. Нужно: {need} (ось: {axis}; клиент писал: «{words}»).
-Найди группу search_catalog (можно несколько формулировок: жаргон → каталожное название), открой show_parts и выбери
-детали, которые и есть нужная (с нужной осью; левую и правую — обе). Названия и позиции бери только из show_parts.
-Бывает, что производитель отдельно деталь не продаёт (сайлентблок, пыльник, втулка, шаровая — только в сборе с рычагом,
-цапфой, стойкой), а у неоригинальных фирм она есть. Тогда открой сборку show_parts и вызови assembly_parts(id, сборка,
-что нужно); если предложения есть — pick с via=assembly (в parts — сама сборка, в want — что нужно).
-Нет детали ни в каталоге, ни у поставщиков — found=false. Потом вызови pick (не больше 6 вызовов инструментов до pick)."""
+SELECTOR = """Ты подбираешь одну деталь в каталоге машины {car}. Нужно: {need} (ось: {axis}; клиент писал: «{words}»).{separate}
+Ниже уже есть кандидаты из каталога и детали первой группы — если нужная деталь там есть, сразу вызывай pick.
+Иначе ищи search_catalog (другие формулировки: жаргон → каталожное название), открывай show_parts. Выбирай детали,
+которые и есть нужная (с нужной осью; левую и правую — обе). Названия и позиции бери только из инструментов.
+Мелкие детали (сайлентблок, пыльник, втулка, шаровая, отбойник, подшипник опоры) производитель часто отдельно не продаёт —
+только в сборе с рычагом, цапфой, стойкой; у неоригинальных фирм они есть. Если в группе нашлась только сборка — открой её
+и вызови assembly_parts(id, сборка, что нужно); если предложения есть — pick с via=assembly (в parts — сама сборка,
+в want — что нужно).
+Нет детали ни в каталоге, ни у поставщиков — found=false, в reason напиши, в какой сборке она есть («только в сборе
+с рычагом …»). Не больше 6 вызовов инструментов до pick."""
+SEPARATE = ("\nКлиент просит ИМЕННО ОТДЕЛЬНО, не в сборе: сборку вместо детали не предлагай — только саму деталь из "
+            "каталога или через assembly_parts; нет нигде — found=false и в reason, что отдельно не продаётся.")
 
 SELLER = """Ты — Кирилл, консультант магазина автозапчастей Автодруг92 (Севастополь), пишешь клиенту в чат. Машина: {car}.
 Потребность клиента: {need}.
-Ниже — данные подбора: по каждой детали номер каталога и предложения поставщиков: бренд, цена, срок в днях, метки,
-гарантия бренда и quality — OE (поставщик этой детали на конвейер, по сути оригинал без логотипа), good (проверенный
-aftermarket), eco (эконом); why — почему бренд такого уровня.
+Ниже — данные подбора: по каждой детали номер каталога и предложения поставщиков: бренд, цена, срок в днях, метки
+и quality — OE (поставщик этой детали на конвейер, по сути оригинал без логотипа), good (проверенный aftermarket),
+eco (эконом); why — почему бренд такого уровня. via=assembly — производитель отдельно не продаёт (note), аналоги есть.
 Напиши ответ клиенту:
 {variants}
 - детали certainty=maybe — отдельным блоком «Проверьте при осмотре» с объяснением зачем;
-- found=false — честно: «передам менеджеру»;
+- found=false — честно, с reason («отдельно не продаётся, только в сборе с …» или «передам менеджеру»);
 - оставшиеся вопросы — коротко в конце; в самом конце — «Напишите, какие варианты оформить».
+{greet}
 Цены, сроки, бренды, номера и уровни — ТОЛЬКО из данных, ничего не придумывай. Номер — только у оригинала.
-Пиши по-русски, просто, без воды; выделение — **жирным**, без таблиц."""
+Про гарантии не пиши. Пиши по-русски, просто, без воды.
+Оформление строго так (Telegram, без таблиц и без «###»):
+🔧 **Название детали** · 2 шт.
+• Оригинал Toyota — 8 080 ₽ · 5 дн.
+• ✅ Качество: CTR — 1 470 ₽ · 1 дн. Поставщик Toyota на конвейер.
+• Альтернатива: Masuma — 960 ₽ · 1 дн.
+(пустая строка между деталями; разделы — «🔍 Проверьте при осмотре», «❓ Вопросы»; цены с пробелом в тысячах)"""
 
 VARIANTS = {
     "quality": "- клиенту важно КАЧЕСТВО («делаем надолго»): по каждой детали «Оригинал», «Качество» — лучший OE-поставщик "
@@ -123,7 +139,8 @@ T_DECODED = {"type": "function", "function": {
             "need": {"type": "string", "description": "название детали, как в каталоге"},
             "axis": {"type": "string", "enum": ["front", "rear", ""]},
             "qty": {"type": "integer"}, "certainty": {"type": "string", "enum": ["sure", "maybe"]},
-            "words": {"type": "string", "description": "слова клиента"}, "note": {"type": "string"}},
+            "words": {"type": "string", "description": "слова клиента"}, "note": {"type": "string"},
+            "separate": {"type": "boolean", "description": "клиент хочет именно отдельно, не в сборе"}},
             "required": ["need", "axis", "certainty", "words"]}},
         "questions": {"type": "array", "items": {"type": "string"}},
         "not_parts": {"type": "array", "items": {"type": "string"}}}, "required": ["items"]}}}
@@ -190,7 +207,8 @@ class Assistant:
         self.cat = engine.catalog
         self.sessions = Sessions(folder / "sessions" if folder else None)
         self.warranty = warranty or {}
-        self.pace = asyncio.Semaphore(4)   # параллельных подборщиков: Laximo 600/мин на весь сервис
+        self.pace = asyncio.Semaphore(6)   # параллельных подборщиков: Laximo 600/мин на весь сервис
+        self.locks: dict[str, asyncio.Lock] = {}   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
 
     # ---------- инструменты подборщика ----------
 
@@ -261,9 +279,16 @@ class Assistant:
 
     async def select(self, v, tree, item: dict, used: dict) -> dict:
         async with self.pace:
-            msgs = [{"role": "system", "content": SELECTOR.format(car=v.summary(), need=item["need"],
-                                                                  axis=item.get("axis") or "любая", words=item.get("words", ""))},
-                    {"role": "user", "content": "Подбери."}]
+            # Кандидаты и детали лучшей группы — сразу в первом сообщении (26.10: подборщик ходил по каталогу по 5–7 шагов,
+            # подбор большого запроса шёл минуту): для частых деталей хватает одного вызова модели
+            first = await self.search(tree, item["need"])
+            top = await self._safe(self.parts(v, tree, first[0]["id"]), []) if first else []
+            msgs = [{"role": "system", "content": SELECTOR.format(
+                        car=v.summary(), need=item["need"], axis=item.get("axis") or "любая", words=item.get("words", ""),
+                        separate=SEPARATE if item.get("separate") else "")},
+                    {"role": "user", "content": "Кандидаты из каталога: " + json.dumps(first, ensure_ascii=False)
+                     + (f"\nДетали группы {first[0]['id']}: " + json.dumps(top, ensure_ascii=False) if first else "")
+                     + "\nПодбери."}]
             for _ in range(SELECT_STEPS):
                 m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_PARTS, T_ASSEMBLY, T_PICK])
                 _add(used, u)
@@ -312,8 +337,7 @@ class Assistant:
         t, why = ("OE", "оригинал") if role == "оригинал" else Q.tier(o["brand"])
         return {"brand": o["brand"], "price": o["price"], "days": o["days"], "tags": o.get("tags", []),
                 "description": o.get("description", ""), "role": role or o.get("role", ""), "offers": o.get("offers", 1),
-                "quality": t, "why": why,
-                "warranty": (self.warranty.get(str(o["brand"]).upper()) or self.warranty.get(str(o["brand"])) or {}).get("warranty", "")}
+                "quality": t, "why": why}
 
     def quality(self, rows: list[dict], car_brand: str, name: str, have: set[str]) -> list[dict]:
         """Лучшие по качеству фирмы из ВСЕХ предложений по номеру (curate оставляет пять ходовых — быстрых и дешёвых,
@@ -351,10 +375,10 @@ class Assistant:
             rows = await self.assembly_rows(v, gid, host, want)
             if not rows:
                 return []
-            cur = curate(rows, "", v.brand, self.eng.warranty, name=want)
+            cur = curate(rows, "", v.brand, set(), name=want)
             offers = [self._offer(o) for o in cur.get("analogs", [])[:6]]
             offers += self.quality(rows, v.brand, "", {Q.key(o["brand"]) for o in offers})
-            return [{"part": f"{want} (к сборке «{host}»)", "oem": "", "pos": "",
+            return [{"part": f"{want} (к сборке «{host}»)", "oem": "", "pos": "", "via": "assembly",
                      "note": f"{nice_brand(oem_brand_for(v.brand))} отдельно не продаёт — только {host}",
                      "offers": offers, "dropped": []}]
         ds = await self.cat.details(v, int(gid[1:]), False)
@@ -365,7 +389,7 @@ class Assistant:
             if not d or any(o["oem"] == d.oem for o in out):
                 continue
             _, rows = await self.eng.offers(d.oem, v.brand)
-            cur = curate(rows or [], d.oem, v.brand, self.eng.warranty, name=d.name)
+            cur = curate(rows or [], d.oem, v.brand, set(), name=d.name)
             offers = ([self._offer(cur["original"], "оригинал")] if cur.get("original") else []) + \
                 [self._offer(o) for o in cur.get("analogs", [])]
             kept, dropped = check(d.name, offers[:7], v.brand)
@@ -377,13 +401,16 @@ class Assistant:
                         "dropped": dropped + more})
         return out
 
-    async def sell(self, car: str, data: dict, used: dict, prefs: dict | None = None) -> str:
+    async def sell(self, car: str, data: dict, used: dict, prefs: dict | None = None, greet: bool = False) -> str:
         prefs = prefs or {}
         goal = prefs.get("goal") if prefs.get("goal") in VARIANTS else "optimal"
         need = GOALS[goal] + ("; срочно — в первую очередь то, что привезём за 1–2 дня" if prefs.get("when") == "urgent"
                               else "; можно подождать ради цены и качества" if prefs.get("when") == "wait" else "")
+        hello = ("Это первый ответ клиенту — коротко поздоровайся (одной фразой)." if greet
+                 else "Разговор уже идёт — не здоровайся, сразу к делу.")
         m, u = await self.gw.chat(self.model, [{"role": "system", "content": SELLER.format(car=car, need=need,
-                                                                                          variants=VARIANTS[goal])},
+                                                                                          variants=VARIANTS[goal],
+                                                                                          greet=hello)},
                                                {"role": "user", "content": json.dumps(data, ensure_ascii=False)}],
                                   max_out=20000)
         _add(used, u)
@@ -393,7 +420,13 @@ class Assistant:
 
     async def reply(self, sid: str, text: str, action: str = "") -> dict:
         """Ответ собеседнику sid («tg-123»): {"text", "status", "buttons", "used", "data", "seconds"}.
-        action — нажатая кнопка: «goal:quality», «when:urgent», «go» (подобрать с тем, что уже ответил)."""
+        action — нажатая кнопка: «goal:quality», «when:urgent», «go» (подобрать с тем, что уже ответил).
+        Реплики одного собеседника — по очереди (26.10: двойное «Подобрать» подбирало дважды)."""
+        lock = self.locks.setdefault(sid, asyncio.Lock())
+        async with lock:
+            return await self._reply(sid, text, action)
+
+    async def _reply(self, sid: str, text: str, action: str) -> dict:
         t0 = time.time()
         s = self.sessions.load(sid)
         if action:
@@ -453,12 +486,22 @@ class Assistant:
             used = {"in": 0, "out": 0, "calls": 0}
             dec = await self.decode(v.summary(), s.get("history", []), mask(text), used)
             items = (dec.get("items") or [])[:MAX_ITEMS]
+            recent = time.time() - float(s.get("last_ok") or 0) < CONVERSATION
+            if ask and items and recent:
+                # Тот же разговор (26.10: «Диски тормозные передние» в ответ на наш вопрос снова получили «надолго или
+                # подешевле?»): потребность уже выяснили — не переспрашиваем, только уточнения по делу, если они есть
+                prefs = dict(s.get("last_prefs") or {})
+                ask = bool([q for q in dec.get("questions") or [] if q.strip()])
             if ask and items:
                 # До подбора — выявить потребность: «надолго или подешевле», «срочно или нет» и уточнения расшифровщика
-                qs = [q for q in dec.get("questions") or [] if q.strip()][:MAX_QUESTIONS - 2]
-                s["asking"] = {"text": text, "questions": qs, "prefs": {}}
-                return self._done(sid, s, shown or text, _questions(items, qs), "ask", t0, used, buttons=BUTTONS)
-            answer, data = await self._pipeline(v, tree, dec, items, mask(text), prefs, used)
+                qs = [q for q in dec.get("questions") or [] if q.strip()][:MAX_QUESTIONS - (0 if recent else 2)]
+                s["asking"] = {"text": text, "questions": qs, "prefs": prefs if recent else {}}
+                return self._done(sid, s, shown or text, _questions(items, qs, need_prefs=not recent), "ask", t0, used,
+                                  buttons=BUTTONS if not recent else BUTTONS[-1:])
+            answer, data = await self._pipeline(v, tree, dec, items, mask(text), prefs, used,
+                                                greet=not s.get("last_ok"))
+            if answer:
+                s["last_ok"], s["last_prefs"] = time.time(), prefs
         except OverBudget:
             return self._done(sid, s, shown or text, FAILED, "over_budget", t0)
         except Exception as e:  # noqa: BLE001 — модель/каталог сбоят: менеджеру, а не тишина
@@ -467,21 +510,22 @@ class Assistant:
         return self._done(sid, s, shown or text, answer or FAILED, "ok" if answer else "error", t0, used, data)
 
     async def _pipeline(self, v, tree, dec: dict, items: list[dict], text: str, prefs: dict,
-                        used: dict) -> tuple[str, dict]:
+                        used: dict, greet: bool = False) -> tuple[str, dict]:
         car = v.summary()
         if not items:
             # Не про детали: короткий ответ продавца на вопросы и болтовню, без подбора
             data = {"items": [], "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", []),
                     "client": text}
-            return await self.sell(car, data, used, prefs), data
+            return await self.sell(car, data, used, prefs, greet), data
         picks = await asyncio.gather(*(self._safe(self.select(v, tree, it, used), {"found": False}) for it in items))
         priced = await asyncio.gather(*(self._safe(self.priced(v, it, p), []) for it, p in zip(items, picks)))
         data = {"items": [{"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
                            "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
-                           "found": bool(p.get("found")) and bool(pr), "catalog": pr}
+                           "found": bool(p.get("found")) and bool(pr), "catalog": pr,
+                           "separate": bool(it.get("separate")), "reason": "" if pr else p.get("reason", "")}
                           for it, p, pr in zip(items, picks, priced)],
                 "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", [])}
-        return await self.sell(car, data, used, prefs), data
+        return await self.sell(car, data, used, prefs, greet), data
 
     def _done(self, sid: str, s: dict, text: str, answer: str, status: str, t0: float,
               used: dict | None = None, data: dict | None = None, buttons: list | None = None) -> dict:
@@ -502,14 +546,14 @@ class Assistant:
         return res
 
 
-def _questions(items: list[dict], qs: list[str]) -> str:
-    """Перед подбором: что поняли и не больше трёх вопросов — два о потребности и одно-два уточнения по делу."""
-    need = "\n".join(f"• {it['need']}" + (" (под вопросом)" if it.get("certainty") == "maybe" else "")
+def _questions(items: list[dict], qs: list[str], need_prefs: bool = True) -> str:
+    """Перед подбором: что поняли и не больше трёх вопросов — два о потребности (в начале разговора) и уточнения по делу."""
+    need = "\n".join(f"• {it['need']}" + (" — под вопросом" if it.get("certainty") == "maybe" else "")
                      for it in items[:MAX_ITEMS])
-    lines = [f"Понял, нужно:\n{need}", "", "Чтобы подобрать точно под вас, пара вопросов:",
-             "1. Ставим надолго или нужно подешевле?", "2. Когда нужно — срочно или можно подождать?"]
-    lines += [f"{n}. {q}" for n, q in enumerate(qs, 3)]
-    lines += ["", "Ответьте кнопками или напишите текстом — и я подберу."]
+    asks = (["Ставим надолго или нужно подешевле?", "Когда нужно — срочно или можно подождать?"] if need_prefs else []) + qs
+    lines = [f"📝 **Понял, нужно:**\n{need}", "", "❓ **Уточню, чтобы подобрать точно под вас:**"]
+    lines += [f"{n}. {q}" for n, q in enumerate(asks, 1)]
+    lines += ["", "Ответьте кнопками или текстом — и я подберу." if need_prefs else "Ответьте текстом или нажмите «Подобрать»."]
     return "\n".join(lines)
 
 

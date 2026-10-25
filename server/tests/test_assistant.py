@@ -98,11 +98,18 @@ def test_conversation_vin_questions_buttons_then_podbor(tmp_path):
     r = asyncio.run(a.reply("tg-1", "диски не надо, нужно срочно"))
     assert r["status"] == "ok" and "Колодки" in r["text"]
     assert gw.calls[-1].startswith("sell:Качество; срочно")
-    # Следующая просьба — вопросы снова (предпочтения не запоминаем, решение пользователя 26.10)
+    # Тот же разговор: «надолго / срочно» не переспрашиваем (26.10, Audi: «Диски тормозные передние» снова получили
+    # вопросы), только уточнение по делу — и одна кнопка «Подобрать»; предпочтения — с прошлого подбора
     r = asyncio.run(a.reply("tg-1", "а задние колодки?"))
-    assert r["status"] == "ask"
+    assert r["status"] == "ask" and "надолго" not in r["text"] and r["buttons"] == [[("✅ Подобрать", "go")]]
     assert asyncio.run(a.reply("tg-1", "", action="go"))["status"] == "ok"
+    assert gw.calls[-1].startswith("sell:Качество; срочно")
     assert asyncio.run(a.reply("tg-1", "", action="go"))["status"] == "stale"   # кнопка от старого вопроса
+    # Новый разговор (больше получаса) — снова выясняем потребность
+    s = a.sessions.load("tg-1")
+    s["last_ok"] = 0
+    a.sessions.save("tg-1", s)
+    assert "надолго" in asyncio.run(a.reply("tg-1", "колодки задние"))["text"]
 
 
 def test_prefs_from_text():
@@ -148,3 +155,55 @@ def test_one_broken_group_does_not_break_answer(tmp_path):
     asyncio.run(a.reply("tg-2", VIN + " колодки передние"))
     r = asyncio.run(a.reply("tg-2", "", action="go"))
     assert r["status"] == "ok" and "Колодки" in r["text"]
+
+
+def test_double_go_runs_podbor_once(tmp_path):
+    """26.10: «Подобрать», нажатое дважды подряд, подбирало два раза (и тратило вдвое)."""
+    gw = ScriptGW()
+    a = C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path)
+    asyncio.run(a.reply("tg-3", VIN + " колодки передние"))
+
+    async def both():
+        return await asyncio.gather(a.reply("tg-3", "", action="go"), a.reply("tg-3", "", action="go"))
+    statuses = sorted(r["status"] for r in asyncio.run(both()))
+    assert statuses == ["ok", "stale"] and gw.calls.count("select") == 1
+
+
+def test_voice_oga_sent_as_ogg(tmp_path):
+    """26.10: голосовые Telegram — «file_0.oga», распознавание отвергало формат oga."""
+    got = {}
+
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/getFile"):
+            return httpx.Response(200, json={"ok": True, "result": {"file_path": "voice/file_0.oga"}})
+        return httpx.Response(200, content=b"OggS")
+
+    class GW(ScriptGW):
+        async def transcribe(self, audio, filename="voice.ogg"):
+            got["name"] = filename
+            return "колодки"
+    bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T", None, GW())
+    assert asyncio.run(bot._voice("f")) == "колодки" and got["name"] == "file_0.ogg"
+
+
+def test_separate_goes_to_selector_prompt(tmp_path):
+    """«Сайлентблоки отдельно» — подборщику: сборку вместо детали не предлагать."""
+    seen = []
+
+    class GW(ScriptGW):
+        async def chat(self, model, messages, tools=None, max_out=8000):
+            names = {t["function"]["name"] for t in tools or []}
+            if "decoded" in names:
+                args = {"items": [{"need": "Сайлентблок переднего рычага", "axis": "front", "certainty": "sure",
+                                   "words": "сайлентблоки отдельно", "separate": True}]}
+                return {"tool_calls": [{"id": "1", "function": {"name": "decoded", "arguments": json.dumps(args)}}]}, {}
+            if "pick" in names:
+                seen.append(messages[0]["content"])
+                return {"tool_calls": [{"id": "2", "function": {"name": "pick", "arguments":
+                        '{"found": false, "reason": "отдельно не продаётся, только в сборе с рычагом"}'}}]}, {}
+            seen.append(messages[1]["content"])
+            return {"content": "ok"}, {}
+    a = C.Assistant(Engine(Fake(), None, set()), GW(), "m", tmp_path)
+    asyncio.run(a.reply("tg-4", VIN + " сайлентблоки отдельно"))
+    asyncio.run(a.reply("tg-4", "", action="go"))
+    assert "ИМЕННО ОТДЕЛЬНО" in seen[0] and "только в сборе с рычагом" in seen[1]

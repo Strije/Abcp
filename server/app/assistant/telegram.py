@@ -33,6 +33,7 @@ def to_html(md: str) -> str:
     t = html.escape(md)
     t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
     t = re.sub(r"(?<![*\w])\*(?!\s)(.+?)(?<!\s)\*(?![*\w])", r"<i>\1</i>", t)
+    t = re.sub(r"^\s*[-*]\s+", "• ", t, flags=re.M)   # «- пункт» → «• пункт»: в Telegram читается легче
     return re.sub(r"^#{1,4}\s*(.+)$", r"<b>\1</b>", t, flags=re.M)
 
 
@@ -126,7 +127,10 @@ class KirillBot:
         if not path:
             return ""
         audio = await self.http.get(f"{TG}/file/bot{self.token}/{path}")
-        return await self.gw.transcribe(audio.content, path.rsplit("/", 1)[-1])
+        # Telegram отдаёт голосовые как «file_0.oga», распознавание принимает тот же OGG/Opus только как «.ogg»
+        # (26.10: «Unsupported file format oga»)
+        name = re.sub(r"\.oga$", ".ogg", path.rsplit("/", 1)[-1])
+        return await self.gw.transcribe(audio.content, name)
 
     async def handle(self, update: dict):
         if update.get("callback_query"):
