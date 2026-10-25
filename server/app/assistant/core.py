@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ..podbor import emb as EM
+from ..podbor import article as A
 from ..podbor import text as T
 from ..podbor.catalog import image_url
 from ..podbor.engine import nice_brand
@@ -45,6 +46,9 @@ ASK_VIN = ("Пришлите, пожалуйста, VIN (17 знаков), но�
 NO_CAR = ("По этому номеру машина в каталоге не нашлась. Проверьте VIN (17 знаков, есть в СТС и ПТС) или пришлите "
           "госномер — либо напишите марку, модель, год и объём двигателя, передам менеджеру.")
 FAILED = "Сейчас не получается подобрать автоматически — передал ваш вопрос менеджеру, он ответит здесь же."
+NO_QUICK = ("По этой машине каталог не даёт подбор по названиям деталей — передам менеджеру, он подберёт по схемам "
+            "вручную и напишет здесь же.")
+CONTACT_ASK = "Чтобы менеджер связался и подтвердил заказ, нажмите «📱 Поделиться номером» внизу экрана."
 MAX_QUESTIONS = 3       # вопросов до подбора — не больше трёх
 CONVERSATION = 30 * 60  # тот же разговор: «надолго или подешевле» не переспрашиваем (дольше — спросим снова)
 
@@ -67,6 +71,16 @@ DECODER = """Ты — опытный мастер-приёмщик автосе�
 - клиент просит именно отдельно, не в сборе («сайлентблоки отдельно», «только шаровую, без рычага») — separate=true;
 - в разговоре выше ты уже задавал вопрос, а клиент на него отвечает («диски тормозные») — это уточнение к прошлой
   просьбе: верни позиции с учётом ответа, вопрос не повторяй.
+Сначала определи intent — чего клиент хочет ЭТИМ сообщением:
+- parts — подобрать детали (новые или уточнение к прошлым);
+- order — оформить выбранное из прошлого ответа («оформляй», «беру», «да, всё верно», «оригинал по масляному»,
+  «что советуешь — то и оформляй»): items не заполняй, в order — его слова;
+- more — показать другие варианты по уже подобранному («а какие есть?», «а получше?», «подешевле есть?», конкретная
+  фирма — «зепро», «есть Bosch?»): items не заполняй, фирму — в brand, деталь — в more_of;
+- number — клиент прислал номер детали и спрашивает, подойдёт ли («а этот номер 104000HQ?»): номера — в numbers;
+- scheme — просит схему, «где стоит», картинку;
+- question — вопрос не о подборе (оплата, доставка, срок, магазин) или болтовня.
+note пиши клиенту на «вы», не о нём в третьем лице.
 Машина уже определена по VIN — VIN, кузов и марку не спрашивай.
 Ответь вызовом decoded."""
 
@@ -162,7 +176,26 @@ T_DECODED = {"type": "function", "function": {
             "separate": {"type": "boolean", "description": "клиент хочет именно отдельно, не в сборе"}},
             "required": ["need", "axis", "certainty", "words"]}},
         "questions": {"type": "array", "items": {"type": "string"}},
-        "not_parts": {"type": "array", "items": {"type": "string"}}}, "required": ["items"]}}}
+        "not_parts": {"type": "array", "items": {"type": "string"}},
+        "intent": {"type": "string", "enum": ["parts", "order", "more", "number", "scheme", "question"]},
+        "order": {"type": "string"}, "brand": {"type": "string"}, "more_of": {"type": "string"},
+        "numbers": {"type": "array", "items": {"type": "string"}}}, "required": ["items", "intent"]}}}
+
+T_ORDER = {"type": "function", "function": {
+    "name": "order", "description": "Что клиент оформляет — только из предложений прошлого подбора",
+    "parameters": {"type": "object", "properties": {
+        "picks": {"type": "array", "items": {"type": "object", "properties": {
+            "item": {"type": "integer", "description": "номер детали в данных (i)"},
+            "brand": {"type": "string"}, "price": {"type": "number"}, "qty": {"type": "integer"}},
+            "required": ["item", "brand", "price"]}},
+        "unclear": {"type": "string", "description": "что переспросить, если выбор неясен"}}, "required": ["picks"]}}}
+
+ORDER = """Клиент оформляет заказ по прошлому подбору. Машина: {car}. Ниже — подобранные детали (i — номер) с
+предложениями (бренд, цена, срок, quality). Определи, что именно он берёт, по его словам: «оригинал по масляному»,
+«качество везде», «что советуешь» (на твоё усмотрение — по каждой детали «Качество» (OE), если нет — «Альтернатива»
+(good), если нет — оригинал). Детали «под вопросом» (certainty=maybe) не бери, если клиент их явно не назвал.
+qty — сколько штук (по умолчанию qty детали). Только бренды и цены из данных. Неясно — picks пусто, в unclear — вопрос.
+Ответь вызовом order."""
 
 # Главные слова, которые поставщики пишут по-разному об одной детали: «Стойка газомасляная задняя» — амортизатор
 _SAME_HEAD = [{T.stem(w) for w in g} for g in (("амортизатор", "стойка"), ("сайлентблок", "втулка", "с/блок"),
@@ -228,7 +261,8 @@ class Assistant:
         self.images = folder.parent / "podbor" / "schemes" if folder else None   # тот же кэш, что у страницы подбора
         self.warranty = warranty or {}
         self.pace = asyncio.Semaphore(6)   # параллельных подборщиков: Laximo 600/мин на весь сервис
-        self.locks: dict[str, asyncio.Lock] = {}   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
+        self.locks: dict[str, asyncio.Lock] = {}
+        self.notify = None   # async (текст) — карточка в группу менеджеров; ставит Telegram-бот   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
 
     # ---------- инструменты подборщика ----------
 
@@ -418,6 +452,7 @@ class Assistant:
             if dropped or more:
                 log.info("проверяющий убрал: %s", dropped + more)
             out.append({"part": d.name, "oem": d.oem, "pos": d.code_on_image, "offers": kept + extra,
+                        "numbers": (cur.get("numbers") or [])[:60],   # кроссы: «а этот номер подойдёт?»
                         "dropped": dropped + more,
                         "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
                                    "image": image_url(d.image), "code": d.code_on_image, "unit": d.unit} if d.image else None})
@@ -603,10 +638,30 @@ class Assistant:
                       shown: str | None = None) -> dict:
         try:
             v = (await self.cat.vehicles(s.get("ident", ""), s.get("plate", "")))[0]
-            tree = await self.cat.tree(v)
+            try:
+                tree = await self.cat.tree(v)
+            except Exception as e:  # noqa: BLE001 — SsangYong Kyron (26.10): «E_NOTSUPPORTED:ListQuickGroups»
+                log.info("tree: %s", str(e)[:100])
+                tree = None
             used = {"in": 0, "out": 0, "calls": 0}
             dec = await self.decode(v.summary(), s.get("history", []), mask(text), used)
+            # Сначала — чего клиент хочет (26.10, испытание: «оформляй», «а какие есть», «зепро», «схему дай» каждый
+            # раз запускали новый подбор)
+            intent = dec.get("intent") or "parts"
+            if intent == "order" and s.get("last"):
+                return await self._order(sid, s, v, text, used, t0, shown)
+            if intent == "more" and s.get("last"):
+                return await self._more(sid, s, v, dec, text, used, t0, shown)
+            if intent == "number" and dec.get("numbers"):
+                return await self._numbers(sid, s, v, dec["numbers"], used, t0, shown or text)
+            if intent == "scheme":
+                sch = s.get("schemes") or []
+                return self._done(sid, s, shown or text, "Какую схему показать?" if sch else
+                                  "Схему пришлю, когда подберу деталь — напишите, какая нужна.", "scheme", t0, used,
+                                  buttons=_scheme_buttons(sch))
             items = (dec.get("items") or [])[:MAX_ITEMS]
+            if items and tree is None:
+                return self._done(sid, s, shown or text, NO_QUICK, "no_quick_groups", t0, used)
             recent = time.time() - float(s.get("last_ok") or 0) < CONVERSATION
             if ask and items and recent:
                 # Тот же разговор (26.10: «Диски тормозные передние» в ответ на наш вопрос снова получили «надолго или
@@ -624,6 +679,7 @@ class Assistant:
             if answer:
                 s["last_ok"], s["last_prefs"] = time.time(), prefs
                 s["schemes"] = _schemes(data)
+                s["last"] = _last(data)
         except OverBudget:
             return self._done(sid, s, shown or text, FAILED, "over_budget", t0)
         except Exception as e:  # noqa: BLE001 — модель/каталог сбоят: менеджеру, а не тишина
@@ -635,6 +691,138 @@ class Assistant:
             res["photos"] = list(range(len(s["schemes"])))   # 1–2 детали — схемы сразу, без кнопок
             res["buttons"] = []
         return res
+
+    # ---------- после подбора: заказ, ещё варианты, номер клиента ----------
+
+    async def _order(self, sid: str, s: dict, v, text: str, used: dict, t0: float, shown: str | None) -> dict:
+        """«Оформляй», «беру оригинал по масляному», «что советуешь» — заказ из прошлого подбора, без нового подбора."""
+        last = s["last"]
+        m, u = await self.gw.chat(self.model, [{"role": "system", "content": ORDER.format(car=v.summary())},
+                                               {"role": "user", "content": json.dumps(
+                                                   {"items": last["items"], "client": mask(text)}, ensure_ascii=False)}],
+                                  [T_ORDER])
+        _add(used, u)
+        args: dict = {}
+        c = (m.get("tool_calls") or [None])[0]
+        if c:
+            try:
+                args = json.loads(c["function"].get("arguments") or "{}")
+            except ValueError:
+                args = {}
+        picks = []
+        for p in args.get("picks") or []:
+            i = p.get("item")
+            if not isinstance(i, int) or not 0 <= i < len(last["items"]):
+                continue
+            it = last["items"][i]
+            # Только то, что было в подборе: бренд из данных (модель номера и цены не придумывает)
+            o = next((o for c in it["catalog"] for o in c["offers"] if Q.key(o["brand"]).startswith(Q.key(p.get("brand"))[:6])
+                      and Q.key(p.get("brand"))), None)
+            if o:
+                qty = int(p.get("qty") or it.get("qty") or 1)
+                picks.append({"need": it["need"], "brand": o["brand"], "price": o["price"], "days": o["days"], "qty": qty})
+        if not picks:
+            ask = args.get("unclear") or "Что оформить? Напишите деталь и фирму — например «наконечники CTR»."
+            return self._done(sid, s, shown or text, ask, "order_unclear", t0, used)
+        total = sum(p["price"] * p["qty"] for p in picks)
+        lines = ["📦 **Оформляю:**"] + [f"• {p['need']} — {p['brand']} — {_rub(p['price'])} × {p['qty']} = "
+                                        f"{_rub(p['price'] * p['qty'])} · {p['days']} дн." for p in picks]
+        lines += [f"**Итого: {_rub(total)}**", ""]
+        s["order"] = {"picks": picks, "total": total, "t": time.time()}
+        phone = s.get("phone")
+        lines.append(f"Передал менеджеру — он свяжется по номеру {phone} и подтвердит заказ." if phone else CONTACT_ASK)
+        res = self._done(sid, s, shown or text, "\n".join(lines), "order", t0, used)
+        res["contact"] = not phone
+        await self._notify(sid, s, "🛒 Заказ от Кирилла")
+        return res
+
+    async def _more(self, sid: str, s: dict, v, dec: dict, text: str, used: dict, t0: float, shown: str | None) -> dict:
+        """«А какие есть?», «а подешевле?», «зепро» — другие предложения по уже подобранному, без нового подбора."""
+        last = s["last"]
+        want = T.stems(dec.get("more_of") or text)
+        idx = [i for i, it in enumerate(last["items"]) if any(T.same(w, x) for w in want for x in T.stems(it["need"]))]
+        idx = idx or list(range(len(last["items"])))
+        brand = Q.key(dec.get("brand") or "")
+        out = []
+        for i in idx[:6]:
+            it = last["items"][i]
+            for c in it["catalog"]:
+                rows: list = []
+                if c.get("oem"):
+                    try:
+                        _, rows = await self.eng.offers(c["oem"], v.brand)
+                    except Exception:  # noqa: BLE001
+                        rows = []
+                offers = [self._offer(_offer(r)) for r in rows] or c["offers"]
+                if brand:
+                    offers = [o for o in offers if Q.key(o["brand"]).startswith(brand[:6])]
+                best: dict = {}
+                for o in sorted(offers, key=lambda o: (o["price"], o["days"])):
+                    best.setdefault(Q.key(o["brand"]), o)
+                lines = [f"🔧 **{c['part']}**"]
+                if not best:
+                    lines.append(f"• {dec.get('brand')} — сейчас нет в продаже по этому номеру")
+                for o in list(best.values())[:8]:
+                    tag = " ✅ поставщик автозаводов" if o.get("quality") == "OE" else ""
+                    lines.append(f"• {o['brand']} — {_rub(o['price'])} · {o['days']} дн.{tag}")
+                out.append("\n".join(lines))
+        answer = ("\n\n".join(out) or "Других вариантов сейчас нет.") + "\n\nНапишите, какие варианты оформить."
+        return self._done(sid, s, shown or text, answer, "more", t0, used)
+
+    async def _numbers(self, sid: str, s: dict, v, numbers: list[str], used: dict, t0: float, text: str) -> dict:
+        """«А этот номер 104000HQ?» — что это за деталь, подходит ли машине по каталогу и есть ли среди аналогов."""
+        last = (s.get("last") or {}).get("items") or []
+        out = []
+        for n in numbers[:3]:
+            n = re.sub(r"\s+", "", str(n))
+            try:
+                rows = await self.eng.src.brands(n)
+            except Exception:  # noqa: BLE001
+                rows = []
+            brand, desc = A.what(rows)
+            try:
+                app = await self.cat.applicability(v, n)
+            except Exception:  # noqa: BLE001
+                app = None
+            mine = next((it["need"] for it in last for c in it["catalog"]
+                         if A.norm(n) in {A.norm(x) for x in c.get("numbers") or []}), "")
+            what = f"{brand} {n}" + (f" — {desc}" if desc else "")
+            if app and app.get("status") == "FULLY":
+                out.append(f"✅ {what}: по каталогу подходит вашей машине.")
+            elif mine:
+                out.append(f"✅ {what}: это аналог к «{mine}», подходит.")
+            elif app and app.get("status") == "PARTIAL":
+                out.append(f"⚠️ {what}: по каталогу подходит частично — зависит от комплектации, уточню у менеджера.")
+            else:
+                out.append(f"❓ {what or n}: в каталоге вашей машины и среди аналогов подобранных деталей не нашёл — "
+                           "передам менеджеру проверить.")
+        return self._done(sid, s, text, "\n".join(out), "number", t0, used)
+
+    async def _notify(self, sid: str, s: dict, title: str):
+        """Карточка менеджерам (закрытый бета-тест): кто, машина, что берёт, телефон — если клиент поделился."""
+        if self.notify is None:
+            return
+        o = s.get("order") or {}
+        lines = [title, f"Клиент: {s.get('name') or sid}" + (f", {s['phone']}" if s.get("phone") else " (номер не оставил)"),
+                 f"Машина: {s.get('car', '')}" + (f", VIN {s['ident']}" if s.get("ident") else "")]
+        lines += [f"• {p['need']} — {p['brand']} — {_rub(p['price'])} × {p['qty']}" for p in o.get("picks") or []]
+        if o.get("total"):
+            lines.append(f"Итого: {_rub(o['total'])}")
+        try:
+            await self.notify("\n".join(lines))
+        except Exception as e:  # noqa: BLE001 — уведомление не должно ронять ответ клиенту
+            log.info("notify: %s", type(e).__name__)
+
+    async def contact(self, sid: str, phone: str, name: str = "") -> str:
+        """Клиент поделился номером: запомнить и, если есть заказ, отправить менеджерам."""
+        async with self.locks.setdefault(sid, asyncio.Lock()):
+            s = self.sessions.load(sid)
+            s["phone"], s["name"] = phone, name or s.get("name", "")
+            self.sessions.save(sid, s)
+        if s.get("order"):
+            await self._notify(sid, s, "📱 Клиент оставил номер по заказу")
+            return f"Спасибо! Передал заказ менеджеру — он свяжется по номеру {phone}."
+        return "Спасибо, номер сохранил — менеджер сможет связаться, когда будете оформлять."
 
     async def _pipeline(self, v, tree, dec: dict, items: list[dict], text: str, prefs: dict,
                         used: dict, greet: bool = False) -> tuple[str, dict]:
@@ -652,6 +840,7 @@ class Assistant:
         data = {"items": [{"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
                            "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
                            "found": bool(p.get("found")) and bool(pr), "catalog": pr,
+                           "group": _group_name(tree, p.get("id")),
                            "separate": bool(it.get("separate")), "reason": "" if pr else p.get("reason", "")}
                           for it, p, pr in zip(items, picks, priced)],
                 "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", [])}
@@ -682,9 +871,33 @@ class Assistant:
 SCHEME_ASK = re.compile(r"схем|где\s+(?:она\s+|он\s+|они\s+)?(?:стоит|стоят|находит|расположен)|покажи|картинк|фото\s+детал", re.I)
 
 
+def _group_name(tree, gid) -> str:
+    """Группа каталога, которую выбрал подборщик, — для журнала и стенда."""
+    g = str(gid or "")
+    return tree.groups[int(g[1:])].name if tree is not None and g[1:].isdigit() and int(g[1:]) in tree.groups else ""
+
+
+def _rub(x: float) -> str:
+    return f"{x:,.0f}".replace(",", " ") + " ₽"
+
+
+def _last(data: dict) -> dict:
+    """Прошлый подбор кратко — для «оформляй», «а какие есть», проверки номера: детали, номера и предложения."""
+    items = []
+    for it in data.get("items") or []:
+        if not it.get("found"):
+            continue
+        items.append({"need": it["need"], "qty": it.get("qty") or 1, "certainty": it.get("certainty"),
+                      "catalog": [{"part": c["part"], "oem": c.get("oem", ""), "numbers": c.get("numbers") or [],
+                                   "offers": [{k: o.get(k) for k in ("brand", "price", "days", "quality", "role")}
+                                              for o in c.get("offers") or []]}
+                                  for c in it.get("catalog") or []]})
+    return {"items": items[:MAX_ITEMS]}
+
+
 def _no_schemes(item: dict) -> dict:
-    """Продавцу схема не нужна — лишние токены."""
-    return dict(item, catalog=[{k: v for k, v in c.items() if k != "scheme"} for c in item.get("catalog") or []])
+    """Продавцу схема и кроссы не нужны — лишние токены."""
+    return dict(item, catalog=[{k: v for k, v in c.items() if k not in ("scheme", "numbers")} for c in item.get("catalog") or []])
 
 
 def _schemes(data: dict) -> list[dict]:
