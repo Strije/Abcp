@@ -3310,3 +3310,21 @@ def test_client_reasoning_is_not_a_position():
     assert not T.is_comment("кажется ролик")   # короткое — не трогаем
     e = Engine(Fake(), None, set())
     assert e.split(["Кажется ролик тут будет это натяжитель в сборе"], _index()) == []
+
+
+def test_confirm_yes_orders_no_cancels():
+    """На «Правильно понял — оформляем? Всё верно?» «да» — заказ, «нет» — не оформляем и спрашиваем, что поправить,
+    а не прощаемся «Если понадобится что-то ещё…» (как на «нет, спасибо» после заказа)."""
+    pick = {"query": "Сайлентблоки", "name": "Сайлентблок", "who": "", "offer": {"brand": "Lemforder", "number": "3394401",
+            "price": 1300.0, "days": 7, "cheaper": None}, "qty": 2, "kind": "part", "axis": "", "lr": "", "amount": ""}
+    e = Engine(Fake(), None, set())
+    first = run("X9FKXXEEBKCB57566 масляный фильтр", e)
+    mem = dict(first["memory"], confirm=[pick])
+    yes = run("да", e, memory=mem)
+    assert yes["status"] == "order" and yes["text"].startswith("Оформляем:") and "confirm" not in yes["memory"]
+    for no in ("нет", "Нет, спасибо", "не надо", "отмена"):
+        out = run(no, e, memory=mem)
+        assert out["status"] == "answer" and "не оформляю" in out["text"], no
+        assert "confirm" not in out["memory"]
+    after = run("нет, спасибо", e, memory=first["memory"])   # без ожидания подтверждения — как раньше
+    assert "не оформляю" not in after["text"]

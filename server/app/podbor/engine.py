@@ -423,6 +423,10 @@ class Engine:
         if waiting and (D.YES.fullmatch(text.strip()) or D.ACCEPT.search(text)) and not D.NO_THANKS.search(text):
             res["reply"] = {"kind": "order", "answers": [], "picks": waiting, "unclear": [], "clarify": ""}
             return self._done(res, "order", t0, mem)
+        if waiting and (_CLOSING.fullmatch(text.strip()) or D.NO_THANKS.fullmatch(text.strip(" .,!)"))):
+            # «Нет» на «Правильно понял — оформляем? Всё верно?» — это «не то», а не «больше ничего не нужно»
+            res["reply"] = {"kind": "answer", "answers": [], "picks": [], "unclear": [], "clarify": CONFIRM_NO}
+            return self._done(res, "answer", t0, mem)
         offered = D.asked_part(mem.get("asked", "")) if D.YES.fullmatch(text.strip()) else ""
         if offered and self._partish(offered, tree):
             # «Да» на «Топливный фильтр нужен?» — робот сам предложил деталь, её и ищем (с моделью и без)
@@ -3335,6 +3339,7 @@ UNIT_VARIANTS = 14   # сколько деталей узла проверяем
 UNIT_SCORE = 0.55   # название узла полного каталога совпало с запросом настолько, чтобы показывать найденное
 GATE_MARGIN = 0.3   # запас «не-детали» над «деталью», с которого замок отменяет выбор группы (эталон: исправлено 12, испорчено 2)
 CONFIRM_ASK = "Всё верно? Напишите «да» — оформим, или поправьте, что не так."
+CONFIRM_NO = "Хорошо, не оформляю. Напишите, что поправить: номер варианта, фирму или количество."
 _CLOSING = re.compile(r"(?:(?:нет|не\s+надо|не\s+нужно|ничего|больше\s+ничего|всё|все|только\s+это|пока\s+всё|пока\s+все|"
                       r"спасибо|благодарю|спс)[,.!)\s]*)+", re.I)
 GATE_PRE_MARGIN = 0.5   # запас замка, с которого слабый ответ правил снимается без вызова модели (эталон 18.10: см. _arbitrate_emb)
