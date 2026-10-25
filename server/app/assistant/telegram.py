@@ -55,8 +55,9 @@ def chunks(text: str, size: int = MAX_LEN) -> list[str]:
 
 class KirillBot:
     def __init__(self, http: httpx.AsyncClient, token: str, assistant, gateway, managers_chat: str = "",
-                 folder=None):
+                 folder=None, photos: bool = False):
         self.http, self.token, self.assistant, self.gw = http, token, assistant, gateway
+        self.photos_on = photos   # ASSISTANT_PHOTOS=1 — читать фото (на СТС персональные данные владельца)
         self.managers_chat = managers_chat
         self.folder = folder
         if assistant is not None and managers_chat:
@@ -255,6 +256,21 @@ class KirillBot:
                 return
             await self.send(chat, f"🎤 «{heard}»", md=False)
             text = heard
+        elif m.get("photo") and self.photos_on:
+            # СТС, табличка VIN, деталь — читает модель; фото не храним
+            try:
+                big = max(m["photo"], key=lambda p: p.get("file_size") or p.get("width", 0))
+                r = await self.http.get(self._url("getFile"), params={"file_id": big["file_id"]})
+                path = (r.json().get("result") or {}).get("file_path")
+                img = (await self.http.get(f"{TG}/file/bot{self.token}/{path}")).content if path else b""
+                said, note = await self._with_typing(chat, sid, lambda: self.assistant.photo_text(img, text))
+            except (ModelError, OverBudget, httpx.HTTPError, KeyError, ValueError) as e:
+                log.info("photo failed: %s", e)
+                said, note = "", "📷 Не получилось прочитать фото — напишите, пожалуйста, текстом."
+            await self.send(chat, note, md=False)
+            if not said:
+                return
+            text = said
         elif m.get("photo") and not text:
             await self.send(chat, PHOTO, md=False)
             return

@@ -182,6 +182,21 @@ T_DECODED = {"type": "function", "function": {
         "order": {"type": "string"}, "brand": {"type": "string"}, "more_of": {"type": "string"},
         "numbers": {"type": "array", "items": {"type": "string"}}}, "required": ["items", "intent"]}}}
 
+T_PHOTO = {"type": "function", "function": {
+    "name": "photo", "description": "Что видно на фото клиента",
+    "parameters": {"type": "object", "properties": {
+        "kind": {"type": "string", "enum": ["sts", "pts", "vin_plate", "car", "part", "other"]},
+        "vin": {"type": "string", "description": "VIN, 17 знаков, как напечатан"},
+        "plate": {"type": "string", "description": "госномер"},
+        "frame": {"type": "string", "description": "номер кузова японских машин (например GX110-1234567)"},
+        "numbers": {"type": "array", "items": {"type": "string"}, "description": "номера, выбитые на детали"},
+        "part": {"type": "string", "description": "что за деталь, если на фото деталь"}}, "required": ["kind"]}}}
+
+PHOTO_READ = """Клиент магазина автозапчастей прислал фото. Прочитай только то, что нужно для подбора: VIN, госномер или
+номер кузова (СТС, ПТС, табличка в проёме двери, под лобовым стеклом), а если это деталь — выбитые на ней номера и что
+это за деталь. ФИО, адреса и прочие личные данные не переписывай. Не уверен в знаке — оставь поле пустым.
+Ответь вызовом photo."""
+
 T_ORDER = {"type": "function", "function": {
     "name": "order", "description": "Что клиент оформляет — только из предложений прошлого подбора",
     "parameters": {"type": "object", "properties": {
@@ -815,6 +830,33 @@ class Assistant:
             await self.notify("\n".join(lines))
         except Exception as e:  # noqa: BLE001 — уведомление не должно ронять ответ клиенту
             log.info("notify: %s", type(e).__name__)
+
+    async def photo_text(self, image: bytes, caption: str = "") -> tuple[str, str]:
+        """Фото → (текст для подбора, что сказать клиенту). VIN проверяем так же, как набранный (T.find_ident):
+        не прошёл — не выдумываем, просим прислать текстом. Само фото не храним."""
+        import base64
+        url = "data:image/jpeg;base64," + base64.b64encode(image).decode()
+        m, _ = await self.gw.chat(self.model, [{"role": "user", "content": [
+            {"type": "text", "text": PHOTO_READ}, {"type": "image_url", "image_url": {"url": url}}]}], [T_PHOTO])
+        c = (m.get("tool_calls") or [None])[0]
+        try:
+            d = json.loads(c["function"].get("arguments") or "{}") if c else {}
+        except ValueError:
+            d = {}
+        ident = T.find_ident(" ".join(str(d.get(k) or "") for k in ("vin", "frame")))
+        plate = T.find_plate(str(d.get("plate") or "")) if not ident else ""
+        if ident or plate:
+            return f"{ident or plate} {caption}".strip(), f"📷 Прочитал с фото: {ident or plate}"
+        nums = [n for n in d.get("numbers") or [] if A.find(str(n))][:3]
+        if nums:
+            return (f"{caption} номер {' '.join(nums)}".strip(),
+                    f"📷 На детали номер {', '.join(nums)}" + (f" — похоже, {d['part']}" if d.get("part") else ""))
+        if d.get("part"):
+            return (f"{caption} {d['part']}".strip(),
+                    f"📷 Похоже, на фото {d['part']}. Номер на детали не читается — подберу по каталогу вашей машины.")
+        if d.get("kind") in ("sts", "pts", "vin_plate"):
+            return "", "📷 Не смог уверенно прочитать VIN — пришлите его, пожалуйста, текстом (17 знаков)."
+        return "", "📷 Не понял, что на фото. Напишите, пожалуйста, VIN или что нужно текстом."
 
     def has_phone(self, sid: str) -> bool:
         return bool(self.sessions.load(sid).get("phone"))

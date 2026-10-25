@@ -55,6 +55,8 @@ class Settings:
     assistant_tg_token: str = ""
     assistant_day_rub: float = 300.0
     assistant_managers_chat: str = ""   # группа менеджеров в Telegram: заказы Кирилла (id группы, «-100…»)
+    # Фото (СТС, табличка VIN, деталь) — модели целиком: на СТС ФИО и адрес владельца. Включает владелец магазина
+    assistant_photos: bool = False
 
 
 def load() -> Settings:
@@ -88,6 +90,7 @@ def load() -> Settings:
         assistant_tg_token=os.environ.get("ASSISTANT_TG_TOKEN", "").strip(),
         assistant_day_rub=float(os.environ.get("ASSISTANT_DAY_RUB", "") or 300),
         assistant_managers_chat=os.environ.get("ASSISTANT_MANAGERS_CHAT", "").strip(),
+        assistant_photos=os.environ.get("ASSISTANT_PHOTOS", "").strip() == "1",
         bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
         bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
         bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),

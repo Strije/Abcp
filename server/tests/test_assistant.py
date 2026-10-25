@@ -370,3 +370,42 @@ def test_foreign_contact_rejected(tmp_path):
     msg = {"chat": {"id": 9, "type": "private"}, "from": {"id": 9}}
     asyncio.run(bot.handle({"message": dict(msg, contact={"phone_number": "79781111111", "user_id": 10})}))
     assert "собственный номер" in sent[-1]["text"] and not bot.assistant.has_phone("tg-9")
+
+
+class PhotoGW(ScriptGW):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+
+    async def chat(self, model, messages, tools=None, max_out=8000):
+        if tools and tools[0]["function"]["name"] == "photo":
+            assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+            return {"tool_calls": [{"id": "p", "function": {"name": "photo", "arguments": json.dumps(self.args)}}]}, {}
+        return await super().chat(model, messages, tools, max_out)
+
+
+def test_photo_reads_vin_plate_and_part_numbers(tmp_path):
+    """26.10 (пользователь): «вин по фото не читает?» — VIN с СТС проверяем как набранный; кривой не выдумываем."""
+    def a(args):
+        return C.Assistant(Engine(Fake(), None, set()), PhotoGW(args), "m", tmp_path)
+    said, note = asyncio.run(a({"kind": "sts", "vin": VIN}).photo_text(b"jpg", "колодки"))
+    assert said == VIN + " колодки" and VIN in note
+    said, note = asyncio.run(a({"kind": "sts", "vin": "XW8ZZZ61ZEG01234"}).photo_text(b"jpg"))   # 16 знаков
+    assert said == "" and "текстом" in note
+    said, note = asyncio.run(a({"kind": "part", "numbers": ["8K0399151BD"], "part": "опора КПП"}).photo_text(b"jpg"))
+    assert "номер 8K0399151BD" in said and "опора КПП" in note
+
+
+def test_photos_off_by_default(tmp_path):
+    sent = []
+
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/sendMessage"):
+            sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "result": []})
+    gw = PhotoGW({"kind": "sts", "vin": VIN})
+    bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T",
+                    C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path), gw)
+    bot.assistant.sessions.save("tg-6", {"phone": "+7"})
+    asyncio.run(bot.handle({"message": {"chat": {"id": 6, "type": "private"}, "photo": [{"file_id": "f", "file_size": 9}]}}))
+    assert "Фото пока не читаю" in sent[-1]["text"]
