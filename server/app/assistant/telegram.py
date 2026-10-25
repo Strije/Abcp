@@ -74,8 +74,19 @@ class KirillBot:
                 body["text"] = part
                 await self.http.post(self._url("sendMessage"), json=body)
 
+    async def photos(self, chat, sid: str, idx: list[int]):
+        """Схемы узлов с отмеченной деталью — картинками (рисует ассистент, отправляем как фото)."""
+        for i in idx[:4]:
+            got = await self.assistant.scheme(sid, i)
+            if not got:
+                await self.send(chat, "Схему сейчас не получить — каталог не отдал картинку.", md=False)
+                continue
+            jpg, cap = got
+            await self.http.post(self._url("sendPhoto"), data={"chat_id": str(chat), "caption": cap},
+                                 files={"photo": ("scheme.jpg", jpg, "image/jpeg")})
+
     async def press(self, cb: dict):
-        """Кнопка под вопросами до подбора: предпочтение запомнить на этот подбор или подобрать («go»)."""
+        """Кнопки: предпочтение на этот подбор, «Подобрать» (go) или «📐 деталь» — схема (sch:N)."""
         msg = cb.get("message") or {}
         chat = (msg.get("chat") or {}).get("id")
         if not chat:
@@ -87,6 +98,7 @@ class KirillBot:
         await self.http.post(self._url("answerCallbackQuery"), json={"callback_query_id": cb.get("id"), "text": note[:190]})
         if res.get("text"):
             await self.send(chat, res["text"], buttons=res.get("buttons"))
+        await self.photos(chat, sid, res.get("photos") or [])
 
     async def _with_typing(self, chat, sid: str, work):
         stop = asyncio.Event()
@@ -171,6 +183,7 @@ class KirillBot:
             return
         res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, text))
         await self.send(chat, res["text"], buttons=res.get("buttons"))
+        await self.photos(chat, sid, res.get("photos") or [])
 
     async def poll_once(self, timeout: int = 25):
         r = await self.http.get(self._url("getUpdates"), params={

@@ -17,6 +17,7 @@
 телефонов и VIN (understand.mask). Лаборатория и замеры — /srv/podbor-lab/runs/2026-10-26-agent (26.10.2026).
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -26,6 +27,7 @@ from typing import Any
 
 from ..podbor import emb as EM
 from ..podbor import text as T
+from ..podbor.catalog import image_url
 from ..podbor.engine import nice_brand
 from ..podbor.offers import _desc_head, _offer, curate, days, not_the_part, oem_brand_for, original_keys
 from ..podbor.understand import mask
@@ -223,6 +225,7 @@ class Assistant:
         self.eng, self.gw, self.model, self.journal = engine, gateway, model, journal
         self.cat = engine.catalog
         self.sessions = Sessions(folder / "sessions" if folder else None)
+        self.images = folder.parent / "podbor" / "schemes" if folder else None   # тот же кэш, что у страницы подбора
         self.warranty = warranty or {}
         self.pace = asyncio.Semaphore(6)   # параллельных подборщиков: Laximo 600/мин на весь сервис
         self.locks: dict[str, asyncio.Lock] = {}   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
@@ -415,13 +418,15 @@ class Assistant:
             if dropped or more:
                 log.info("проверяющий убрал: %s", dropped + more)
             out.append({"part": d.name, "oem": d.oem, "pos": d.code_on_image, "offers": kept + extra,
-                        "dropped": dropped + more})
+                        "dropped": dropped + more,
+                        "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
+                                   "image": image_url(d.image), "code": d.code_on_image, "unit": d.unit} if d.image else None})
         return out
 
     async def sell_item(self, car: str, item: dict, used: dict, need: str, goal: str) -> str:
         m, u = await self.gw.chat(self.model, [
             {"role": "system", "content": SELLER_ITEM.format(car=car, need=need, variants=VARIANTS[goal])},
-            {"role": "user", "content": json.dumps(item, ensure_ascii=False)}], max_out=4000)
+            {"role": "user", "content": json.dumps(_no_schemes(item), ensure_ascii=False)}], max_out=4000)
         _add(used, u)
         return (m.get("content") or "").strip()
 
@@ -470,6 +475,55 @@ class Assistant:
         _add(used, u)
         return (m.get("content") or "").strip()
 
+    # ---------- схемы ----------
+
+    async def scheme(self, sid: str, i: int) -> tuple[bytes, str] | None:
+        """Схема узла i-й найденной детали прошлого подбора с отмеченной позицией: (JPEG, подпись) или None."""
+        sch = (self.sessions.load(sid).get("schemes") or [])
+        if not 0 <= i < len(sch):
+            return None
+        x = sch[i]
+        img = await self._image(x["image"])
+        if not img:
+            return None
+        boxes: list = []
+        try:
+            m = await self.eng.src.laximo("listImageMapByUnit", {"catalog": x["catalog"], "ssd": x["ssd"],
+                                                                "unitId": x["unit_id"]})
+            boxes = [b for b in (m if isinstance(m, list) else []) if str(b.get("code")) == str(x["code"])]
+        except Exception as e:  # noqa: BLE001 — без координат схема тоже полезна: номер позиции в подписи
+            log.info("image map: %s", type(e).__name__)
+        from .scheme_img import render
+        try:
+            jpg = await asyncio.to_thread(render, img, boxes)
+        except Exception as e:  # noqa: BLE001 — картинка не та или битая
+            log.info("render: %s", type(e).__name__)
+            return None
+        cap = f"{x['label']} — позиция {x['code']}" + (" (отмечена)" if boxes else "") + \
+            (f"\nУзел: {x['unit']}" if x.get("unit") else "")
+        return jpg, cap[:1000]
+
+    async def _image(self, url: str) -> bytes | None:
+        """Картинка схемы Laximo — с диска (общий кэш с /v1/podbor/scheme) или из каталога."""
+        f = self.images / (hashlib.sha1(url.encode()).hexdigest() + ".img") if self.images else None
+        if f and f.exists():
+            return f.read_bytes()
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as h:
+                r = await h.get(url)
+        except Exception:  # noqa: BLE001
+            return None
+        if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+            return None
+        if f:
+            try:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(r.content)
+            except OSError:
+                pass
+        return r.content
+
     # ---------- разговор ----------
 
     async def reply(self, sid: str, text: str, action: str = "") -> dict:
@@ -506,6 +560,15 @@ class Assistant:
         if not s.get("ident") and not s.get("plate"):
             s["pending"] = (s.get("pending", "") + "\n" + text).strip()[-1500:]
             return self._done(sid, s, text, ASK_VIN, "no_vin", t0)
+        if s.get("schemes") and SCHEME_ASK.search(text) and len(T.words(text)) <= 8:
+            # «Покажи, где стоит», «скинь схему» — схема прошлого подбора, а не новый подбор
+            sch = s["schemes"]
+            hit = [i for i, x in enumerate(sch) if any(T.same(w, y) for w in T.stems(text) for y in T.stems(x["label"]))]
+            if len(hit) == 1 or len(sch) == 1:
+                res = self._done(sid, s, text, "Вот схема — деталь отмечена красным.", "scheme", t0)
+                res["photos"] = hit[:1] or [0]
+                return res
+            return self._done(sid, s, text, "Какую схему показать?", "scheme", t0, buttons=_scheme_buttons(sch))
         asking = s.pop("asking", None)
         if asking:
             # Ответ текстом на наши вопросы — подбираем по просьбе вместе с ответами
@@ -516,6 +579,10 @@ class Assistant:
         return await self._podbor(sid, s, text, {}, t0, ask=True)
 
     async def _action(self, sid: str, s: dict, action: str, t0: float) -> dict:
+        if action.startswith("sch:") and action[4:].isdigit():
+            ok = int(action[4:]) < len(s.get("schemes") or [])
+            return {"text": "", "status": "scheme" if ok else "stale", "photos": [int(action[4:])] if ok else [],
+                    "ack": "Схема…" if ok else "", "buttons": [], "used": {}, "data": {}, "seconds": 0.0}
         asking = s.get("asking")
         if not asking:
             return {"text": "", "status": "stale", "buttons": [], "used": {}, "data": {}, "seconds": 0.0}
@@ -556,12 +623,18 @@ class Assistant:
                                                 greet=not s.get("last_ok"))
             if answer:
                 s["last_ok"], s["last_prefs"] = time.time(), prefs
+                s["schemes"] = _schemes(data)
         except OverBudget:
             return self._done(sid, s, shown or text, FAILED, "over_budget", t0)
         except Exception as e:  # noqa: BLE001 — модель/каталог сбоят: менеджеру, а не тишина
             log.warning("assistant failed: %s: %s", type(e).__name__, str(e)[:200])
             return self._done(sid, s, shown or text, FAILED, "error", t0)
-        return self._done(sid, s, shown or text, answer or FAILED, "ok" if answer else "error", t0, used, data)
+        res = self._done(sid, s, shown or text, answer or FAILED, "ok" if answer else "error", t0, used, data,
+                         buttons=_scheme_buttons(s.get("schemes") or []) if answer else None)
+        if answer and 0 < len(s.get("schemes") or []) <= 2:
+            res["photos"] = list(range(len(s["schemes"])))   # 1–2 детали — схемы сразу, без кнопок
+            res["buttons"] = []
+        return res
 
     async def _pipeline(self, v, tree, dec: dict, items: list[dict], text: str, prefs: dict,
                         used: dict, greet: bool = False) -> tuple[str, dict]:
@@ -604,6 +677,32 @@ class Assistant:
                 "positions": [{"query": i["need"], "status": "found" if i["found"] else "not_found"}
                               for i in (data or {}).get("items", [])]})
         return res
+
+
+SCHEME_ASK = re.compile(r"схем|где\s+(?:она\s+|он\s+|они\s+)?(?:стоит|стоят|находит|расположен)|покажи|картинк|фото\s+детал", re.I)
+
+
+def _no_schemes(item: dict) -> dict:
+    """Продавцу схема не нужна — лишние токены."""
+    return dict(item, catalog=[{k: v for k, v in c.items() if k != "scheme"} for c in item.get("catalog") or []])
+
+
+def _schemes(data: dict) -> list[dict]:
+    """Схемы найденных деталей прошлого подбора: одна на узел и позицию, не больше 8 — на кнопки."""
+    out, seen = [], set()
+    for it in data.get("items") or []:
+        for c in it.get("catalog") or []:
+            sc = c.get("scheme")
+            if sc and (sc["unit_id"], sc["code"]) not in seen:
+                seen.add((sc["unit_id"], sc["code"]))
+                out.append(dict(sc, label=re.sub(r"\s*\(.*?\)", "", c["part"]).strip()[:40]))
+    return out[:8]
+
+
+def _scheme_buttons(sch: list[dict]) -> list:
+    """«📐 Название» — по две в ряд."""
+    btn = [(f"📐 {x['label'][:28]}", f"sch:{i}") for i, x in enumerate(sch)]
+    return [btn[i:i + 2] for i in range(0, len(btn), 2)]
 
 
 def _questions(items: list[dict], qs: list[str], need_prefs: bool = True) -> str:

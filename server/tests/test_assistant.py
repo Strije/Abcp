@@ -208,3 +208,45 @@ def test_separate_goes_to_selector_prompt(tmp_path):
     asyncio.run(a.reply("tg-4", VIN + " сайлентблоки отдельно"))
     r = asyncio.run(a.reply("tg-4", "", action="go"))
     assert "ИМЕННО ОТДЕЛЬНО" in seen[0] and "отдельно не продаётся, только в сборе с рычагом" in r["text"]
+
+
+def test_scheme_render_marks_position():
+    import io
+    from PIL import Image
+    from app.assistant.scheme_img import render
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(buf, "PNG")
+    jpg = render(buf.getvalue(), [{"code": "5", "x1": 100, "y1": 100, "x2": 130, "y2": 120}, {"code": "5", "x1": "bad"}])
+    im = Image.open(io.BytesIO(jpg)).convert("RGB")
+    assert im.size == (400, 300) and im.getpixel((115, 110))[2] < 200   # выноска залита жёлтым
+
+
+def test_schemes_buttons_and_show(tmp_path):
+    """Схемы прошлого подбора: кнопка «📐 …» → картинка; «покажи, где стоит» — тоже картинка, а не новый подбор."""
+    import io
+    from PIL import Image
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path / "assistant")
+    url = "https://img.laximo.ru/x.png"
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 200), "white").save(buf, "PNG")
+    f = tmp_path / "podbor" / "schemes"
+    f.mkdir(parents=True)
+    import hashlib
+    (f / (hashlib.sha1(url.encode()).hexdigest() + ".img")).write_bytes(buf.getvalue())
+    data = {"items": [{"catalog": [{"part": "Тяга рулевая (левая)", "scheme": {"catalog": "TOY", "unit_id": "1", "ssd": "s",
+                                                                          "image": url, "code": "7", "unit": "Рулевое"}}]}]}
+    sch = C._schemes(data)
+    assert sch[0]["label"] == "Тяга рулевая" and C._scheme_buttons(sch) == [[("📐 Тяга рулевая", "sch:0")]]
+    a.sessions.save("tg-9", {"ident": VIN, "schemes": sch})
+
+    async def imagemap(method, params):
+        assert method == "listImageMapByUnit"
+        return [{"code": "7", "x1": 10, "y1": 10, "x2": 40, "y2": 30}, {"code": "8", "x1": 0, "y1": 0, "x2": 5, "y2": 5}]
+    a.eng.src.laximo = imagemap
+    r = asyncio.run(a.reply("tg-9", "", action="sch:0"))
+    assert r["status"] == "scheme" and r["photos"] == [0]
+    jpg, cap = asyncio.run(a.scheme("tg-9", 0))
+    assert jpg[:2] == b"\xff\xd8" and "позиция 7 (отмечена)" in cap
+    r = asyncio.run(a.reply("tg-9", "покажи где стоит тяга"))
+    assert r["status"] == "scheme" and r["photos"] == [0]
+    assert asyncio.run(a.reply("tg-9", "", action="sch:5"))["status"] == "stale"
