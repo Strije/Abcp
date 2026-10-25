@@ -52,6 +52,9 @@ class Settings:
     aigw_url: str = ""
     aigw_key: str = ""
     assistant_model: str = "anthropic/claude-haiku-5-5"
+    # Расшифровщик — шаг, где нужно знание устройства машины («плавающие» — цапфа, у Audi A7 3.0 нет щупа): можно
+    # модель посильнее (Sonnet ~20× дороже Haiku, но шаг короткий — +0,5–2 ₽ к запросу). Пусто — как assistant_model
+    assistant_decoder_model: str = ""
     assistant_tg_token: str = ""
     assistant_day_rub: float = 300.0
     assistant_managers_chat: str = ""   # группа менеджеров в Telegram: заказы Кирилла (id группы, «-100…»)
@@ -87,6 +90,7 @@ def load() -> Settings:
         aigw_url=os.environ.get("AIGW_BASE_URL", "").strip().rstrip("/"),
         aigw_key=os.environ.get("AIGW_API_KEY", "").strip(),
         assistant_model=os.environ.get("ASSISTANT_MODEL", "").strip() or "anthropic/claude-haiku-5-5",
+        assistant_decoder_model=os.environ.get("ASSISTANT_DECODER_MODEL", "").strip(),
         assistant_tg_token=os.environ.get("ASSISTANT_TG_TOKEN", "").strip(),
         assistant_day_rub=float(os.environ.get("ASSISTANT_DAY_RUB", "") or 300),
         assistant_managers_chat=os.environ.get("ASSISTANT_MANAGERS_CHAT", "").strip(),

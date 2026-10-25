@@ -432,3 +432,35 @@ def test_full_catalog_units_for_car_without_quick_groups(tmp_path):
     assert asyncio.run(a.parts(object(), None, "u3")) == [{"info": "в группе нет деталей"}] and calls == [-3]
     assert "error" in asyncio.run(a.parts(object(), None, "u99"))[0]
     assert C._group_name(None, "u3") == "узел u3"
+
+
+def test_assembly_parts_keep_only_qualified_bushings(tmp_path):
+    """26.10, руководитель: «Кирюша впихивает обычные сайлентблоки вместо плавающих» — к сборке поставщики дают
+    сайлентблоки поперечной тяги и продольного рычага; нужен «сайлентблок цапфы» — уточнение обязательно в описании."""
+    from app.podbor.catalog import Detail
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path)
+    knuckle = Detail(oem="4230448030", name="Задний кулак (цапфа), правый", note="", amount="", match=None, unit="",
+                     unit_note="", unit_id="1", unit_ssd="", image="", code_on_image="42304", category="")
+
+    async def details(v, gid, full):
+        return [knuckle] if full else []   # цапфа — не в составе группы, а в её узле
+
+    async def offers(oem, brand):
+        return "TOYOTA", [{"brand": "Stellox", "number": "7700333SX", "price": "220", "description": "сайлентблок задней цапфы"},
+                          {"brand": "Zekkert", "number": "gm5977", "price": "200", "description": "С/блок внешний задн. продольного рычага"},
+                          {"brand": "Narichin", "number": "N1", "price": "290", "description": "Сайлентблок задней поперечной тяги"}]
+
+    async def tree(v):
+        return None
+    a.cat.details, a.eng.offers = details, offers
+    a._tree = tree
+
+    async def det(v, t, gid, full=False):
+        return await details(v, 1, full)
+    a._details = det
+    from types import SimpleNamespace
+    car = SimpleNamespace(brand="LEXUS")
+    rows = asyncio.run(a.assembly_rows(car, "g469", "Задний кулак (цапфа), правый", "Сайлентблок задний плавающий (цапфы)"))
+    assert [r["brand"] for r in rows] == ["Stellox"]
+    rows = asyncio.run(a.assembly_rows(car, "g469", "Задний кулак (цапфа), правый", "сайлентблок"))
+    assert len(rows) == 3   # без уточнения — все сайлентблоки сборки

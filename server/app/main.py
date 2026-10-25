@@ -198,7 +198,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["journal"] = podbor.journal.Journal(folder / "podbor" / "journal")
         state["gw"] = assistant.Gateway(s.aigw_url, s.aigw_key, s.state_dir, s.assistant_day_rub)
         state["assistant"] = assistant.Assistant(state["podbor"], state["gw"], s.assistant_model, folder / "assistant",
-                                                 state["journal"], warranty_info()) if state["gw"].enabled else None
+                                                 state["journal"], warranty_info(), s.assistant_decoder_model) if state["gw"].enabled else None
         app.state.bx = state["bx"]
         tasks = []
         if state["assistant"] is not None and s.assistant_tg_token:

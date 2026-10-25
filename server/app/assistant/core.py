@@ -60,7 +60,8 @@ BUTTONS = [[(v, f"goal:{k}") for k, v in GOALS.items()], [(v, f"when:{k}") for k
 DECODER = """Ты — опытный мастер-приёмщик автосервиса и продавец запчастей. Машина клиента: {car}.
 Клиент пишет сумбурно, жаргоном, с сокращениями. Переведи его ПОСЛЕДНЕЕ сообщение (с учётом разговора выше) в точный
 список запчастей, как их назвал бы каталог, используя знание устройства автомобиля:
-- жаргон → нормальное название («плавающие» — плавающие сайлентблоки задних рычагов/цапфы, «шаров» — шаровая опора,
+- жаргон → нормальное название («плавающие» — плавающие сайлентблоки задней цапфы (кулака), НЕ рычагов; «шаров» —
+  шаровая опора,
   «майл» — сайлентблоки рычага, «стаб» — стабилизатор, «аморт» — амортизатор, «телевизор» — рамка радиатора);
 - «компл», «комплект», «+ всё что нужно» — раскрой, что обычно меняют вместе (опора стойки → подшипник опоры,
   пыльник, отбойник; ГРМ → ремень, ролики, помпа). Такие детали помечай certainty=maybe;
@@ -90,6 +91,8 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 нет — ищи search_units (узлы полного каталога; названия бывают английские — ищи и по-английски: «front brake»,
 «rear suspension») и открывай узел «u…» show_parts. Выбирай детали,
 которые и есть нужная (с нужной осью; левую и правую — обе). Названия и позиции бери только из инструментов.
+Сайлентблоки цапфы и «плавающие» — у сборки «кулак (цапфа)»: у Toyota/Lexus она не в группе рычагов, а в узле
+амортизатора/задней подвески — открывай show_parts(id, all=true) у групп задней подвески и амортизатора.
 Мелкие детали (сайлентблок, пыльник, втулка, шаровая, отбойник, подшипник опоры) производитель часто отдельно не продаёт —
 только в сборе с рычагом, цапфой, стойкой; у неоригинальных фирм они есть. Если в группе нашлась только сборка — открой её
 и вызови assembly_parts(id, сборка, что нужно); если предложения есть — pick с via=assembly (в parts — сама сборка,
@@ -156,8 +159,10 @@ T_UNITS = {"type": "function", "function": {
     "SUSPENSION») — ничего не нашлось по-русски, ищи по-английски. Возвращает узлы с id «u…»; открывай их show_parts.",
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 T_PARTS = {"type": "function", "function": {
-    "name": "show_parts", "description": "Детали группы каталога этой машины: название, позиция на схеме, примечание.",
-    "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}}}
+    "name": "show_parts", "description": "Детали группы каталога этой машины: название, позиция на схеме, примечание. "
+    "all=true — все детали узлов этой группы, и соседние (цапфа, кулак, кронштейны), которых нет в составе группы.",
+    "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "all": {"type": "boolean"}},
+                   "required": ["id"]}}}
 T_ASSEMBLY = {"type": "function", "function": {
     "name": "assembly_parts",
     "description": "Предложения поставщиков детали, которую производитель отдельно не продаёт, к сборке из каталога",
@@ -277,8 +282,10 @@ class Sessions:
 
 
 class Assistant:
-    def __init__(self, engine, gateway: Gateway, model: str, folder: Path | None, journal=None, warranty: dict | None = None):
+    def __init__(self, engine, gateway: Gateway, model: str, folder: Path | None, journal=None, warranty: dict | None = None,
+                 decoder_model: str = ""):
         self.eng, self.gw, self.model, self.journal = engine, gateway, model, journal
+        self.decoder_model = decoder_model or model   # расшифровка — знание устройства машины, можно модель сильнее
         self.cat = engine.catalog
         self.sessions = Sessions(folder / "sessions" if folder else None)
         self.images = folder.parent / "podbor" / "schemes" if folder else None   # тот же кэш, что у страницы подбора
@@ -318,18 +325,18 @@ class Assistant:
         return [{"id": f"u{-g.id}", "name": g.name, "path": g.path[-80:]} for g, _ in ut.rank(st, T.Side())[:10]] \
             or [{"info": "в узлах по этим словам ничего нет — попробуй другое название"}]
 
-    async def _details(self, v, tree, gid: str) -> list | None:
-        """Детали группы («g123») или узла полного каталога («u45»); None — такого id нет."""
+    async def _details(self, v, tree, gid: str, full: bool = False) -> list | None:
+        """Детали группы («g123»; full — все детали её узлов) или узла полного каталога («u45»); None — такого id нет."""
         if gid[1:].isdigit() and gid[:1] == "g" and tree is not None and int(gid[1:]) in tree.groups:
-            return await self.cat.details(v, int(gid[1:]), False)
+            return await self.cat.details(v, int(gid[1:]), full)
         if gid[1:].isdigit() and gid[:1] == "u":
             ut = await self.cat.unit_tree(v)
             if ut is not None and -int(gid[1:]) in ut.groups:
                 return await self.cat.details(v, -int(gid[1:]), False)
         return None
 
-    async def parts(self, v, tree, gid: str) -> list[dict]:
-        ds = await self._details(v, tree, gid)
+    async def parts(self, v, tree, gid: str, full: bool = False) -> list[dict]:
+        ds = await self._details(v, tree, gid, full)
         if ds is None:
             return [{"error": "нет такой группы, возьми id из search_catalog или search_units"}]
         seen, out = set(), []
@@ -339,23 +346,36 @@ class Assistant:
             seen.add((d.name, d.code_on_image))
             out.append({"name": d.name[:70], "pos": d.code_on_image, "note": (d.note or d.specs or "")[:60],
                         "unit": d.unit[:50]})
-        return out[:30] or [{"info": "в группе нет деталей"}]
+        return out[:40 if full else 30] or [{"info": "в группе нет деталей"}]
 
     async def assembly_rows(self, v, gid: str, assembly: str, want: str, tree=None) -> list[dict]:
         """Как робот (_bushings_by_host): кроссы номера сборки у поставщиков — только строки нужной детали."""
-        ds = await self._details(v, tree if tree is not None else await self._tree(v), gid) or []
-        hosts = [d for d in ds if d.name[:70] == assembly] or [d for d in ds if assembly[:20].lower() in d.name.lower()]
+        tree = tree if tree is not None else await self._tree(v)
+        hosts: list = []
+        for full in (False, True):   # цапфа у Toyota — не в составе группы, а в её узле
+            ds = await self._details(v, tree, gid, full) or []
+            hosts = [d for d in ds if d.name[:70] == assembly] or [d for d in ds if assembly[:20].lower() in d.name.lower()]
+            if hosts:
+                break
         wst = T.stems(T.expand(want))
         if not hosts or not wst:
             return []
+        head = _desc_head(want) or (T.head(wst) or "")
+        # Уточнение («цапфы», «плавающий», «переднего рычага») — в описании поставщика обязательно (26.10, Lexus: к рычагу
+        # задней подвески поставщики дают сайлентблоки поперечной тяги, а клиент просил плавающие — они в цапфе)
+        quals = [w for w in wst if not T.same(w, head) and not any(T.same(w, g) for g in _GENERIC)]
         out, seen = [], set()
         for d in hosts[:2]:
             _, rows = await self.eng.offers(d.oem, v.brand)
             for r in rows or []:
-                h = _desc_head(str(r.get("description") or ""))
-                if h and any(T.same(h, w) for w in wst) and (r.get("brand"), r.get("number")) not in seen:
-                    seen.add((r.get("brand"), r.get("number")))
-                    out.append(r)
+                desc = str(r.get("description") or "")
+                h = _desc_head(desc)
+                if not h or not any(T.same(h, w) for w in wst) or (r.get("brand"), r.get("number")) in seen:
+                    continue
+                if quals and not any(T.same(q, x) for q in quals for x in T.stems(T.expand(desc))):
+                    continue
+                seen.add((r.get("brand"), r.get("number")))
+                out.append(r)
         return out
 
     async def _tree(self, v):
@@ -369,7 +389,7 @@ class Assistant:
     async def decode(self, car: str, history: list[dict], text: str, used: dict) -> dict:
         msgs = [{"role": "system", "content": DECODER.format(car=car)}] + history + [{"role": "user", "content": text}]
         for _ in range(2):   # tool_choice у Claude через шлюз не поддерживается — просим словами
-            m, u = await self.gw.chat(self.model, msgs, [T_DECODED])
+            m, u = await self.gw.chat(self.decoder_model, msgs, [T_DECODED])
             _add(used, u)
             c = (m.get("tool_calls") or [None])[0]
             if c:
@@ -427,7 +447,7 @@ class Assistant:
                                             str(args.get("want", "")))
             return [{"brand": r.get("brand"), "description": str(r.get("description") or "")[:70],
                      "price": r.get("price")} for r in rows[:8]] or [{"info": "у поставщиков такой детали нет"}]
-        return await self.parts(v, tree, str(args.get("id", "")))
+        return await self.parts(v, tree, str(args.get("id", "")), bool(args.get("all")))
 
     async def _safe(self, coro, fallback):
         """Сбой одной детали (каталог, поставщики, модель) не роняет весь ответ: по ней — «передам менеджеру»."""
@@ -489,6 +509,9 @@ class Assistant:
                      "note": f"{nice_brand(oem_brand_for(v.brand))} отдельно не продаёт — только {host}",
                      "offers": offers, "dropped": []}]
         ds = await self._details(v, tree, gid) or []
+        names = {x.get("name") for x in pick.get("parts") or []}
+        if names and not any(d.name[:70] in names for d in ds):
+            ds = await self._details(v, tree, gid, True) or []   # выбрано из всех деталей узла (show_parts all=true)
         out: list[dict] = []
         for p in pick.get("parts") or []:
             d = next((d for d in ds if d.name[:70] == p.get("name") and (not p.get("pos") or d.code_on_image == p["pos"])), None) \
@@ -969,6 +992,11 @@ class Assistant:
 
 
 SCHEME_ASK = re.compile(r"схем|где\s+(?:она\s+|он\s+|они\s+)?(?:стоит|стоят|находит|расположен)|покажи|картинк|фото\s+детал", re.I)
+
+
+# Слова, которые не уточняют, ЧЕЙ это сайлентблок: сторона, ось, верх/низ, «комплект»
+_GENERIC = [T.stem(w) for w in ("задний", "передний", "левый", "правый", "нижний", "верхний", "внутренний", "наружный",
+                                "комплект", "подвески", "оригинал", "аналог", "отдельно", "штука")]
 
 
 def _why_for(o: dict, part: str) -> dict:
