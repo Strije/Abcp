@@ -130,9 +130,10 @@ SELLER_ITEM = """Ты — Кирилл, консультант магазина 
 {variants}
 Если certainty=maybe — одна строка «Зачем проверить: …» сразу после названия. via=assembly или note — одна строка,
 что производитель отдельно не продаёт. found=false — одна строка с reason или «передам менеджеру».
-Цены, сроки, бренды, номера — ТОЛЬКО из данных. О брендах — только why дословно, ничего от себя (никаких «лучше
-оригинала», «надёжнее», стран производства). Про гарантии не пиши. Цены с пробелом в тысячах. Без приветствий,
-без вступлений и выводов — только блок."""
+Цены, сроки, бренды, номера — ТОЛЬКО из данных. После срока — только why дословно; why пустой — после срока
+ничего. Своих оценок не добавляй (никаких «лучшее соотношение», «надёжнее», «гарантия посадки», стран производства).
+Про гарантии не пиши. К клиенту — на «вы», никогда не «клиент …» в третьем лице. Цены с пробелом в тысячах.
+Без приветствий, вступлений и выводов — только блок."""
 
 VARIANTS = {
     "quality": "- клиенту важно КАЧЕСТВО («делаем надолго»): по каждой детали «Оригинал», «Качество» — лучший OE-поставщик "
@@ -446,9 +447,11 @@ class Assistant:
             cur = curate(rows or [], d.oem, v.brand, set(), name=d.name)
             offers = ([self._offer(cur["original"], "оригинал")] if cur.get("original") else []) + \
                 [self._offer(o) for o in cur.get("analogs", [])]
+            offers = [_why_for(o, d.name) for o in offers]
             kept, dropped = check(d.name, offers[:7], v.brand)
             kept = kept[:6]
-            extra, more = check(d.name, self.quality(rows, v.brand, d.name, {Q.key(o["brand"]) for o in kept}), v.brand)
+            extra, more = check(d.name, [_why_for(o, d.name) for o in
+                                         self.quality(rows, v.brand, d.name, {Q.key(o["brand"]) for o in kept})], v.brand)
             if dropped or more:
                 log.info("проверяющий убрал: %s", dropped + more)
             out.append({"part": d.name, "oem": d.oem, "pos": d.code_on_image, "offers": kept + extra,
@@ -869,6 +872,18 @@ class Assistant:
 
 
 SCHEME_ASK = re.compile(r"схем|где\s+(?:она\s+|он\s+|они\s+)?(?:стоит|стоят|находит|расположен)|покажи|картинк|фото\s+детал", re.I)
+
+
+def _why_for(o: dict, part: str) -> dict:
+    """Подпись бренда — только если она про эту деталь (26.10, Lexus: «Качество: GMB» к рулевой тяге с подписью
+    «подшипники ступиц и помпы»); иначе — только уровень."""
+    why = o.get("why") or ""
+    if not why or o.get("role") == "оригинал":
+        return o
+    if any(T.same(a, b) for a in T.stems(why) for b in T.stems(part)):
+        return o
+    generic = {"OE": "Поставщик автозаводов", "good": "Производитель аналогов"}.get(o.get("quality"), "")
+    return dict(o, why=generic)
 
 
 def _group_name(tree, gid) -> str:

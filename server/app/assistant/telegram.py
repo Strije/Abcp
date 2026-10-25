@@ -5,6 +5,7 @@ Long polling getUpdates (вебхук не нужен), как access.ButtonList
 """
 import asyncio
 import html
+import json
 import logging
 import re
 import time
@@ -49,8 +50,13 @@ def chunks(text: str, size: int = MAX_LEN) -> list[str]:
 
 
 class KirillBot:
-    def __init__(self, http: httpx.AsyncClient, token: str, assistant, gateway):
+    def __init__(self, http: httpx.AsyncClient, token: str, assistant, gateway, managers_chat: str = "",
+                 folder=None):
         self.http, self.token, self.assistant, self.gw = http, token, assistant, gateway
+        self.managers_chat = managers_chat
+        self.folder = folder
+        if assistant is not None and managers_chat:
+            assistant.notify = self.notify   # заказы и номера клиентов — в группу менеджеров
         self.offset = 0
         self.seen: dict[str, deque] = defaultdict(deque)
         self.busy: set[str] = set()
@@ -59,7 +65,8 @@ class KirillBot:
     def _url(self, method: str) -> str:
         return f"{TG}/bot{self.token}/{method}"
 
-    async def send(self, chat: int | str, text: str, md: bool = True, buttons: list | None = None):
+    async def send(self, chat: int | str, text: str, md: bool = True, buttons: list | None = None,
+                   contact: bool = False):
         parts = chunks(text)
         for n, part in enumerate(parts):
             body = {"chat_id": chat, "text": to_html(part) if md else part, "disable_web_page_preview": True}
@@ -68,6 +75,9 @@ class KirillBot:
             if buttons and n == len(parts) - 1:   # кнопки — под последней частью
                 body["reply_markup"] = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row]
                                                             for row in buttons]}
+            elif contact and n == len(parts) - 1:   # заказ: номер одной кнопкой, Telegram передаёт его сам
+                body["reply_markup"] = {"keyboard": [[{"text": "📱 Поделиться номером", "request_contact": True}]],
+                                        "resize_keyboard": True, "one_time_keyboard": True}
             r = await self.http.post(self._url("sendMessage"), json=body)
             if md and r.status_code == 400:   # разметка не прошла — отправим как есть, но отправим
                 body.pop("parse_mode")
@@ -84,6 +94,28 @@ class KirillBot:
             jpg, cap = got
             await self.http.post(self._url("sendPhoto"), data={"chat_id": str(chat), "caption": cap},
                                  files={"photo": ("scheme.jpg", jpg, "image/jpeg")})
+
+    async def notify(self, text: str):
+        await self.http.post(self._url("sendMessage"), json={"chat_id": self.managers_chat, "text": text,
+                                                             "disable_web_page_preview": True})
+
+    def _group(self, upd: dict):
+        """Кирилла добавили в группу — запомнить id и кто добавил. Сами группе не доверяем: заказы с данными клиентов
+        уходят только в ASSISTANT_MANAGERS_CHAT, который ставим вручную (иначе любой, добавивший бота к себе,
+        получал бы чужие заказы)."""
+        chat, who = upd.get("chat") or {}, upd.get("from") or {}
+        status = (upd.get("new_chat_member") or {}).get("status")
+        rec = {"id": chat.get("id"), "title": chat.get("title"), "status": status, "by": who.get("id"),
+               "by_name": who.get("username") or who.get("first_name"), "t": time.time()}
+        log.warning("kirill: группа %s «%s» — %s (добавил %s)", rec["id"], rec["title"], status, rec["by"])
+        if self.folder is not None:
+            try:
+                f = self.folder / "groups.jsonl"
+                f.parent.mkdir(parents=True, exist_ok=True)
+                with open(f, "a", encoding="utf-8") as out:
+                    out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
 
     async def press(self, cb: dict):
         """Кнопки: предпочтение на этот подбор, «Подобрать» (go) или «📐 деталь» — схема (sch:N)."""
@@ -147,6 +179,10 @@ class KirillBot:
         return await self.gw.transcribe(audio.content, name)
 
     async def handle(self, update: dict):
+        if update.get("my_chat_member"):
+            if ((update["my_chat_member"].get("chat") or {}).get("type")) in ("group", "supergroup"):
+                self._group(update["my_chat_member"])
+            return
         if update.get("callback_query"):
             cb = update["callback_query"]
             if ((cb.get("message") or {}).get("chat") or {}).get("type") == "private":
@@ -158,6 +194,18 @@ class KirillBot:
             return   # только личные чаты: в группах бот молчит
         sid = f"tg-{chat}"
         text = str(m.get("text") or m.get("caption") or "").strip()
+        contact = m.get("contact") or {}
+        if contact.get("phone_number"):
+            if contact.get("user_id") != (m.get("from") or {}).get("id"):
+                await self.send(chat, "Нужен ваш собственный номер — нажмите «📱 Поделиться номером».", md=False)
+                return
+            name = " ".join(x for x in (contact.get("first_name"), contact.get("last_name")) if x)
+            u = (m.get("from") or {}).get("username")
+            reply = await self.assistant.contact(sid, "+" + contact["phone_number"].lstrip("+"),
+                                                 name + (f" (@{u})" if u else ""))
+            await self.http.post(self._url("sendMessage"), json={"chat_id": chat, "text": reply,
+                                                                 "reply_markup": {"remove_keyboard": True}})
+            return
         if text.startswith("/start"):
             await self.send(chat, HELLO, md=False)
             return
@@ -192,12 +240,12 @@ class KirillBot:
             await self.send(chat, "Я пока понимаю текст и голосовые 🙂 Напишите или запишите, что нужно.", md=False)
             return
         res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, text))
-        await self.send(chat, res["text"], buttons=res.get("buttons"))
+        await self.send(chat, res["text"], buttons=res.get("buttons"), contact=bool(res.get("contact")))
         await self.photos(chat, sid, res.get("photos") or [])
 
     async def poll_once(self, timeout: int = 25):
         r = await self.http.get(self._url("getUpdates"), params={
-            "offset": self.offset, "timeout": timeout, "allowed_updates": '["message","callback_query"]'}, timeout=timeout + 10)
+            "offset": self.offset, "timeout": timeout, "allowed_updates": '["message","callback_query","my_chat_member"]'}, timeout=timeout + 10)
         updates = r.json().get("result", [])
         for u in updates:
             self.offset = u["update_id"] + 1

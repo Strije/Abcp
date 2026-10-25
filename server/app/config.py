@@ -54,6 +54,7 @@ class Settings:
     assistant_model: str = "anthropic/claude-haiku-5-5"
     assistant_tg_token: str = ""
     assistant_day_rub: float = 300.0
+    assistant_managers_chat: str = ""   # группа менеджеров в Telegram: заказы Кирилла (id группы, «-100…»)
 
 
 def load() -> Settings:
@@ -86,6 +87,7 @@ def load() -> Settings:
         assistant_model=os.environ.get("ASSISTANT_MODEL", "").strip() or "anthropic/claude-haiku-5-5",
         assistant_tg_token=os.environ.get("ASSISTANT_TG_TOKEN", "").strip(),
         assistant_day_rub=float(os.environ.get("ASSISTANT_DAY_RUB", "") or 300),
+        assistant_managers_chat=os.environ.get("ASSISTANT_MANAGERS_CHAT", "").strip(),
         bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
         bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
         bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),

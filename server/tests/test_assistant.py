@@ -275,3 +275,78 @@ def test_video_note_and_unknown_messages_are_not_silent(tmp_path):
     assert got["name"] == "file_3.mp4" and any("🎤 «колодки»" in s["text"] for s in sent)
     asyncio.run(bot.handle({"message": dict(chat, sticker={"file_id": "s"})}))
     assert "понимаю текст и голосовые" in sent[-1]["text"]
+
+
+def test_brand_note_only_if_about_this_part():
+    """26.10, Lexus: «Качество: GMB» к рулевой тяге с подписью «подшипники ступиц и помпы»."""
+    o = {"brand": "GMB", "quality": "OE", "why": "подшипники ступиц и помпы, поставщик японских автозаводов"}
+    assert C._why_for(o, "Тяга рулевая")["why"] == "Поставщик автозаводов"
+    o2 = {"brand": "CTR", "quality": "OE", "why": "рулевое и подвеска, поставщик автозаводов Hyundai и Kia"}
+    assert C._why_for(o2, "Тяга рулевая") is o2
+
+
+class OrderGW(ScriptGW):
+    """Расшифровщик: «оформляй» — order; «а Bosch есть?» — more; заказ — оригинал детали 0."""
+
+    def __init__(self, intent):
+        super().__init__()
+        self.intent = intent
+
+    async def chat(self, model, messages, tools=None, max_out=8000):
+        names = {t["function"]["name"] for t in tools or []}
+        if "decoded" in names:
+            args = {"items": [], "intent": self.intent, "brand": "Bosch" if self.intent == "more" else ""}
+            return {"tool_calls": [{"id": "1", "function": {"name": "decoded", "arguments": json.dumps(args)}}]}, {}
+        if "order" in names:
+            args = {"picks": [{"item": 0, "brand": "Toyota", "price": 1, "qty": 2}, {"item": 9, "brand": "X", "price": 1}]}
+            return {"tool_calls": [{"id": "2", "function": {"name": "order", "arguments": json.dumps(args)}}]}, {}
+        return {"content": "ok"}, {}
+
+
+def test_order_from_last_podbor_and_contact(tmp_path):
+    """26.10, испытание: «оформляй, что советуешь» каждый раз запускало новый подбор. Теперь — заказ из прошлого
+    подбора (бренд и цена только из данных), карточка менеджерам, номер — кнопкой."""
+    cards = []
+    a = C.Assistant(Engine(Fake(), None, set()), OrderGW("order"), "m", tmp_path)
+
+    async def notify(text):
+        cards.append(text)
+    a.notify = notify
+    last = {"items": [{"need": "Наконечник рулевой тяги", "qty": 2, "catalog": [{"part": "Наконечник", "oem": "",
+            "numbers": ["CTR123"], "offers": [{"brand": "Toyota (оригинал)", "price": 7260.0, "days": 5, "quality": "OE",
+                                               "role": "оригинал"}]}]}]}
+    a.sessions.save("tg-11", {"ident": VIN, "car": "TOYOTA", "last": last, "last_ok": 0})
+    r = asyncio.run(a.reply("tg-11", "оформляй оригинал"))
+    assert r["status"] == "order" and "Toyota (оригинал) — 7 260 ₽ × 2 = 14 520 ₽" in r["text"] and r["contact"]
+    assert cards and "Наконечник рулевой тяги" in cards[0] and "номер не оставил" in cards[0]
+    reply = asyncio.run(a.contact("tg-11", "+79780000000", "Иван"))
+    assert "+79780000000" in reply and "+79780000000" in cards[-1]
+
+
+def test_more_with_brand_and_number_check(tmp_path):
+    a = C.Assistant(Engine(Fake(), None, set()), OrderGW("more"), "m", tmp_path)
+    last = {"items": [{"need": "Фильтр масляный", "qty": 1, "catalog": [{"part": "Фильтр масляный", "oem": "",
+            "numbers": ["OC90"], "offers": [{"brand": "Mann", "price": 500.0, "days": 1, "quality": "OE", "role": ""}]}]}]}
+    a.sessions.save("tg-12", {"ident": VIN, "car": "FORD", "last": last})
+    r = asyncio.run(a.reply("tg-12", "а Bosch есть?"))
+    assert r["status"] == "more" and "Bosch — сейчас нет в продаже" in r["text"]
+    a.gw = OrderGW("number")
+
+    async def dec(car, history, text, used):
+        return {"items": [], "intent": "number", "numbers": ["OC90"]}
+    a.decode = dec
+    r = asyncio.run(a.reply("tg-12", "а OC90 подойдёт?"))
+    assert r["status"] == "number" and "аналог к «Фильтр масляный»" in r["text"]
+
+
+def test_bot_remembers_group_but_does_not_trust_it(tmp_path):
+    sent = []
+
+    def handler(request: httpx.Request):
+        sent.append(request.url.path)
+        return httpx.Response(200, json={"ok": True, "result": []})
+    bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T", None, None, "", tmp_path)
+    asyncio.run(bot.handle({"my_chat_member": {"chat": {"id": -100123, "type": "supergroup", "title": "Менеджеры"},
+                                               "from": {"id": 7}, "new_chat_member": {"status": "member"}}}))
+    rec = json.loads((tmp_path / "groups.jsonl").read_text(encoding="utf-8"))
+    assert rec["id"] == -100123 and rec["by"] == 7 and not sent and bot.managers_chat == ""

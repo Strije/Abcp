@@ -202,7 +202,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         app.state.bx = state["bx"]
         tasks = []
         if state["assistant"] is not None and s.assistant_tg_token:
-            app.state.kirill = assistant.KirillBot(state["abcp"].http, s.assistant_tg_token, state["assistant"], state["gw"])
+            app.state.kirill = assistant.KirillBot(state["abcp"].http, s.assistant_tg_token, state["assistant"], state["gw"],
+                                                   s.assistant_managers_chat, folder / "assistant")
             tasks.append(asyncio.create_task(app.state.kirill.run()))
         if state["pusher"].enabled and s.order_watch_interval > 0:
             tasks.append(asyncio.create_task(state["watcher"].run()))
