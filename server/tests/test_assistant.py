@@ -250,3 +250,28 @@ def test_schemes_buttons_and_show(tmp_path):
     r = asyncio.run(a.reply("tg-9", "покажи где стоит тяга"))
     assert r["status"] == "scheme" and r["photos"] == [0]
     assert asyncio.run(a.reply("tg-9", "", action="sch:5"))["status"] == "stale"
+
+
+def test_video_note_and_unknown_messages_are_not_silent(tmp_path):
+    """26.10: голосовое пользователя прошло молча — «кружок»/аудиофайл бот не узнавал и ничего не отвечал."""
+    sent, got = [], {}
+
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/sendMessage"):
+            sent.append(json.loads(request.content))
+        if request.url.path.endswith("/getFile"):
+            return httpx.Response(200, json={"ok": True, "result": {"file_path": "video_notes/file_3"}})
+        return httpx.Response(200, json={"ok": True, "result": []})
+
+    class GW(ScriptGW):
+        async def transcribe(self, audio, filename="voice.ogg"):
+            got["name"] = filename
+            return "колодки"
+    gw = GW()
+    bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T",
+                    C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path), gw)
+    chat = {"chat": {"id": 5, "type": "private"}}
+    asyncio.run(bot.handle({"message": dict(chat, video_note={"file_id": "v"})}))
+    assert got["name"] == "file_3.mp4" and any("🎤 «колодки»" in s["text"] for s in sent)
+    asyncio.run(bot.handle({"message": dict(chat, sticker={"file_id": "s"})}))
+    assert "понимаю текст и голосовые" in sent[-1]["text"]

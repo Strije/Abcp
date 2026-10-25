@@ -5,6 +5,7 @@
 Ключ — только на сервере (AIGW_API_KEY).
 """
 import json
+import mimetypes
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -95,7 +96,7 @@ class Gateway:
             raise OverBudget(f"дневной лимит {self.day_rub:.0f} ₽ исчерпан")
         try:
             r = await self.http.post("audio/transcriptions", data={"model": TRANSCRIBE_MODEL, "language": "ru"},
-                                     files={"file": (filename, audio, "audio/ogg")})
+                                     files={"file": (filename, audio, mimetypes.guess_type(filename)[0] or "audio/ogg")})
             d = r.json()
         except (httpx.HTTPError, ValueError) as e:
             raise ModelError(f"распознавание: {type(e).__name__}") from e

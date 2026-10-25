@@ -142,6 +142,8 @@ class KirillBot:
         # Telegram отдаёт голосовые как «file_0.oga», распознавание принимает тот же OGG/Opus только как «.ogg»
         # (26.10: «Unsupported file format oga»)
         name = re.sub(r"\.oga$", ".ogg", path.rsplit("/", 1)[-1])
+        if "." not in name:   # «кружок» и файлы без расширения — Telegram отдаёт MP4
+            name += ".mp4"
         return await self.gw.transcribe(audio.content, name)
 
     async def handle(self, update: dict):
@@ -164,11 +166,17 @@ class KirillBot:
             return
         if sid in self.busy:
             await self.send(chat, "Ещё подбираю по прошлому сообщению — секунду, отвечу и на это.", md=False)
-        voice = m.get("voice") or m.get("audio")
+        # Голос — и голосовое, и «кружок», и аудиофайл (26.10: голосовое пользователя прошло молча — тип не узнали)
+        doc = m.get("document") or {}
+        voice = m.get("voice") or m.get("audio") or m.get("video_note") or \
+            (doc if str(doc.get("mime_type") or "").startswith(("audio/", "video/")) else None)
+        kind = "voice" if voice else "photo" if m.get("photo") else "text" if text else \
+            next((k for k in ("sticker", "video", "document", "location", "contact") if m.get(k)), "other")
+        log.info("kirill: %s %s", sid, kind)   # без содержимого — только что пришло
         if voice:
             try:
-                heard = await self._voice(voice["file_id"])
-            except (ModelError, OverBudget, httpx.HTTPError) as e:
+                heard = await self._with_typing(chat, sid, lambda: self._voice(voice["file_id"]))
+            except (ModelError, OverBudget, httpx.HTTPError, KeyError, ValueError) as e:
                 log.info("voice failed: %s", e)
                 heard = ""
             if not heard:
@@ -180,6 +188,8 @@ class KirillBot:
             await self.send(chat, PHOTO, md=False)
             return
         if not text:
+            # Стикер, видео, геометка… — не молчим: клиент не поймёт, дошло ли
+            await self.send(chat, "Я пока понимаю текст и голосовые 🙂 Напишите или запишите, что нужно.", md=False)
             return
         res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, text))
         await self.send(chat, res["text"], buttons=res.get("buttons"))
