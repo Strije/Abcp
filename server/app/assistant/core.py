@@ -509,13 +509,15 @@ class Assistant:
                      "note": f"{nice_brand(oem_brand_for(v.brand))} отдельно не продаёт — только {host}",
                      "offers": offers, "dropped": []}]
         ds = await self._details(v, tree, gid) or []
-        names = {x.get("name") for x in pick.get("parts") or []}
-        if names and not any(d.name[:70] in names for d in ds):
+        wanted = pick.get("parts") or []
+        if wanted and not any(_match(d, w) for d in ds for w in wanted):
             ds = await self._details(v, tree, gid, True) or []   # выбрано из всех деталей узла (show_parts all=true)
         out: list[dict] = []
-        for p in pick.get("parts") or []:
-            d = next((d for d in ds if d.name[:70] == p.get("name") and (not p.get("pos") or d.code_on_image == p["pos"])), None) \
-                or next((d for d in ds if d.name[:70] == p.get("name")), None)
+        for p in wanted:
+            # Не по точному названию (26.10, стенд: модель чуть меняет название — «торм.», обрезка — и выбранные колодки
+            # Ford теряли цены): позиция на схеме + название по смыслу
+            cands = [d for d in ds if _match(d, p)]
+            d = max(cands, key=lambda d: _name_score(d.name, p.get("name", "")), default=None)
             if not d or any(o["oem"] == d.oem for o in out):
                 continue
             _, rows = await self.eng.offers(d.oem, v.brand)
@@ -997,6 +999,28 @@ SCHEME_ASK = re.compile(r"схем|где\s+(?:она\s+|он\s+|они\s+)?(?:�
 # Слова, которые не уточняют, ЧЕЙ это сайлентблок: сторона, ось, верх/низ, «комплект»
 _GENERIC = [T.stem(w) for w in ("задний", "передний", "левый", "правый", "нижний", "верхний", "внутренний", "наружный",
                                 "комплект", "подвески", "оригинал", "аналог", "отдельно", "штука")]
+
+
+def _name_score(a: str, b: str) -> float:
+    """Похожесть названий по основам слов (0…1): «Комплект торм. колодок суппорта» ≈ «Комплект тормозных колодок…»."""
+    x, y = set(T.stems(T.expand(a))), set(T.stems(T.expand(b)))
+    if not x or not y:
+        return 0.0
+    return sum(1 for w in y if any(T.same(w, z) for z in x)) / len(y)
+
+
+def _match(d, p: dict) -> bool:
+    """Та ли это деталь, что выбрал подборщик: та же позиция на схеме и похожее название, или очень похожее название."""
+    name, pos = str(p.get("name") or ""), str(p.get("pos") or "").strip()
+    if d.name[:70] == name[:70]:
+        return True
+    ha, hb = _desc_head(d.name), _desc_head(name)
+    if ha and hb and not T.same(ha, hb) and not any(T.same(ha, x) for x in T.stems(T.expand(name))):
+        # Главное слово детали должно быть в выбранном названии: «Диск тормозной» — не «Комплект колодок», хоть позиция
+        # и совпала; «Комплект торм. колодок» — те же колодки (сокращение сбивает только «главное слово» выбора)
+        return False
+    score = _name_score(d.name, name)
+    return (bool(pos) and str(d.code_on_image) == pos and score >= 0.3) or score >= 0.8
 
 
 def _why_for(o: dict, part: str) -> dict:

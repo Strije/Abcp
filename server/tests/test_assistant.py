@@ -464,3 +464,13 @@ def test_assembly_parts_keep_only_qualified_bushings(tmp_path):
     assert [r["brand"] for r in rows] == ["Stellox"]
     rows = asyncio.run(a.assembly_rows(car, "g469", "Задний кулак (цапфа), правый", "сайлентблок"))
     assert len(rows) == 3   # без уточнения — все сайлентблоки сборки
+
+
+def test_pick_matches_by_position_and_meaning():
+    """26.10, стенд: подборщик выбрал колодки Ford, но название чуть отличалось — цены терялись («молчит» 25 из 97)."""
+    from types import SimpleNamespace as N
+    d = N(name="Комплект тормозных колодок суппорта (передние дисковые тормоза)", code_on_image="2001")
+    assert C._match(d, {"name": "Комплект торм. колодок суппорта (передние дисковые тормоза)", "pos": "2001"})
+    assert C._match(d, {"name": "Комплект тормозных колодок суппорта передние"})
+    assert not C._match(d, {"name": "Диск тормозной передний", "pos": "2001"})
+    assert not C._match(N(name="Кольцо упорное подшипника", code_on_image="4"), {"name": "Подшипник ступицы", "pos": "2X"})
