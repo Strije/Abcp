@@ -152,7 +152,9 @@ class Engine:
             # Просили описать машину (VIN каталог не знает): ответ «Шкода Рапид 2019, 1.6, автомат» — к прежней просьбе и тому же VIN
             text = pending + "\n" + text + "\n" + unknown
             req, memory = T.parse(text), None
-        if memory and (memory.get("ident") or memory.get("plate")) and not req.ident and not req.plate:
+        if memory and (memory.get("ident") or memory.get("plate")) and not req.ident and not req.plate and not req.bad_vin:
+            # Новый VIN с ошибкой (23.10: Mazda в памяти, клиент прислал «VIN: …» от Audi с опечаткой) — не подбираем
+            # молча для прежней машины, а просим проверить VIN
             return await self._follow(text, req, memory, analogs, t0, llm is not False)
         res: dict[str, Any] = {"request": {"ident": req.ident, "plate": req.plate, "model": req.model,
                                            "chunks": req.chunks, "vehicle": vehicle},
@@ -160,6 +162,7 @@ class Engine:
         if not req.ident and not req.plate:
             # Повтор без VIN (20–23.10, журнал): тот же вопрос подряд — клиент не знает, что дать; тогда называем другие пути
             res["repeat"] = bool((memory or {}).get("asked_vin"))
+            res["bad_vin"] = req.bad_vin
             out = self._done(res, "no_vin", t0)
             out["memory"]["asked_vin"] = True
             if req.chunks:   # запомнить, что просил клиент: когда пришлёт VIN, ответим на это
@@ -2910,6 +2913,10 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
     «• Фирма — наименование — цена, срок», оригинал первым, дальше аналоги — что привезём быстрее."""
     st = res["status"]
     if st == "no_vin":
+        if res.get("bad_vin"):
+            return ("Похоже, в VIN ошибка — по нему машину не определить. Проверьте, пожалуйста: в VIN 17 знаков, "
+                    "в конце обычно цифры; он есть в СТС и ПТС. Можно прислать фото СТС, госномер или номер кузова "
+                    "японских машин (например GX110-1234567).")
         if res.get("repeat"):
             return ("Пока не получилось определить машину. Напишите, пожалуйста, любое из: VIN (17 знаков), номер кузова, "
                     "госномер или марку, модель и год выпуска — подберём по нему.")

@@ -50,6 +50,7 @@ class Request:
     plate: str = ""          # госномер, если VIN нет
     model: str = ""          # «Модель авто» как написал клиент
     chunks: list[str] = field(default_factory=list)  # позиции до разбиения по запятым
+    bad_vin: bool = False    # клиент прислал VIN, но с ошибкой (23.10: «VIN: WF0…» почти без цифр) — сказать, а не молча мимо
 
 
 _TRANSLIT = {**{str(i): i for i in range(10)}, **dict(zip("ABCDEFGH", range(1, 9))), **dict(zip("JKLMN", range(1, 6))),
@@ -98,6 +99,15 @@ def find_ident(text: str) -> str:
     return f"{m.group(1)}-{m.group(2)}" if m else ""
 
 
+def bad_vin(text: str) -> bool:
+    """Похоже на VIN, но не VIN: строка «VIN: …» с непонятным номером или 17 латинских знаков с цифрами, которые не прошли
+    проверку. Склеенные русские слова с фото СТС сюда не попадают — в них кириллица."""
+    m = _IDENT_LINE.search(text)
+    if m and re.fullmatch(r"[0-9A-Za-zА-Яа-я]{11,20}", m.group(1).strip(".,;")):
+        return True
+    return any(re.search(r"\d.*\d", t) for t in re.findall(r"(?<![0-9A-Za-zА-Яа-я])[0-9A-Za-z]{17}(?![0-9A-Za-zА-Яа-я])", text))
+
+
 def find_plate(text: str) -> str:
     m = _PLATE.search(text.upper().translate(_TO_CYR))
     return re.sub(r"\s", "", m.group(0)) if m else ""
@@ -107,6 +117,7 @@ def parse(text: str) -> Request:
     r = Request(ident=find_ident(text))
     if not r.ident:
         r.plate = find_plate(text)
+        r.bad_vin = not r.plate and bad_vin(text)
     m = _MODEL.search(text)
     if m:
         r.model = m.group(1).strip()

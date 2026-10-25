@@ -3328,3 +3328,18 @@ def test_confirm_yes_orders_no_cancels():
         assert "confirm" not in out["memory"]
     after = run("нет, спасибо", e, memory=first["memory"])   # без ожидания подтверждения — как раньше
     assert "не оформляю" not in after["text"]
+
+
+def test_bad_vin_is_reported_not_ignored():
+    """23.10, журнал: «VIN: …» с ошибкой (почти без цифр) — робот трижды просил VIN, а в другом разговоре молча подобрал
+    детали для прежней машины из памяти (Mazda вместо Audi). VIN с ошибкой — так и говорим."""
+    assert T.parse("VIN: WF0UXXGAJUABCDE1F\nкрепление заднего бампера").bad_vin
+    assert T.parse("WF0UXXGAJUABCDE1F крепление бампера").bad_vin
+    for ok in ("колодки передние 8K0407151E", "ПОДШИПНИКСТУПИЦЫ передний", "X9FKXXEEBKCB57566 фильтр", "фильтр салона",
+               "GX110-1234567 колодки", "VIN: X9FKXXEEBKCB57566"):
+        assert not T.parse(ok).bad_vin, ok
+    e = Engine(Fake(), None, set())
+    first = run("X9FKXXEEBKCB57566 масляный фильтр", e)
+    out = run("VIN: WF0UXXGAJUABCDE1F\nКомплект передних рычагов", e, memory=first["memory"])
+    assert out["status"] == "no_vin" and "в VIN ошибка" in out["text"] and not out["positions"]
+    assert "в VIN ошибка" in run("WF0UXXGAJUABCDE1F крепление бампера", e)["text"]
