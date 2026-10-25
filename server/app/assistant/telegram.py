@@ -61,6 +61,7 @@ class KirillBot:
         self.seen: dict[str, deque] = defaultdict(deque)
         self.busy: set[str] = set()
         self.tasks: set[asyncio.Task] = set()   # ссылки на задачи сообщений, пока не отработали
+        self.groups_seen: set = set()
 
     def _url(self, method: str) -> str:
         return f"{TG}/bot{self.token}/{method}"
@@ -191,6 +192,10 @@ class KirillBot:
         m = update.get("message") or {}
         chat = (m.get("chat") or {}).get("id")
         if not chat or (m.get("chat") or {}).get("type") != "private":
+            if (m.get("chat") or {}).get("type") in ("group", "supergroup") and chat not in self.groups_seen:
+                # Бота добавили раньше, чем он научился это замечать: номер группы — по первому сообщению в ней
+                self.groups_seen.add(chat)
+                self._group({"chat": m["chat"], "from": m.get("from") or {}, "new_chat_member": {"status": "message"}})
             return   # только личные чаты: в группах бот молчит
         sid = f"tg-{chat}"
         text = str(m.get("text") or m.get("caption") or "").strip()
