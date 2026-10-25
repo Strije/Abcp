@@ -135,3 +135,16 @@ def test_telegram_start_and_buttons(tmp_path):
     assert kb[0][0] == {"text": "Качество", "callback_data": "goal:quality"} and sent[-1]["parse_mode"] == "HTML"
     asyncio.run(bot.handle({"message": {"chat": {"id": 8, "type": "group"}, "text": "колодки"}}))   # в группах молчит
     assert not any(s["chat_id"] == 8 for s in sent)
+
+
+def test_one_broken_group_does_not_break_answer(tmp_path):
+    """26.10, Lexus: Laximo «E_GROUP_IS_NOT_SEARCHABLE» на одной группе ронял весь подбор в «передал менеджеру»."""
+    gw = ScriptGW()
+    a = C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path)
+
+    async def broken(*args, **kw):
+        raise RuntimeError("E_GROUP_IS_NOT_SEARCHABLE")
+    a.select = broken
+    asyncio.run(a.reply("tg-2", VIN + " колодки передние"))
+    r = asyncio.run(a.reply("tg-2", "", action="go"))
+    assert r["status"] == "ok" and "Колодки" in r["text"]

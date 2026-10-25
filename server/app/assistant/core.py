@@ -280,17 +280,33 @@ class Assistant:
                     fn = c["function"]["name"]
                     if fn == "pick":
                         return args
-                    if fn == "search_catalog":
-                        res: Any = await self.search(tree, str(args.get("query", "")))
-                    elif fn == "assembly_parts":
-                        rows = await self.assembly_rows(v, str(args.get("id", "")), str(args.get("assembly", "")),
-                                                        str(args.get("want", "")))
-                        res = [{"brand": r.get("brand"), "description": str(r.get("description") or "")[:70],
-                                "price": r.get("price")} for r in rows[:8]] or [{"info": "у поставщиков такой детали нет"}]
-                    else:
-                        res = await self.parts(v, tree, str(args.get("id", "")))
+                    try:
+                        res = await self._tool(v, tree, fn, args)
+                    except Exception as e:  # noqa: BLE001 — Laximo «группа недоступна для поиска» (26.10, Lexus)
+                        log.info("инструмент %s: %s", fn, type(e).__name__)
+                        res = [{"error": "эта группа сейчас недоступна, возьми другую из search_catalog"}]
                     msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res, ensure_ascii=False)})
             return {"found": False, "reason": "шаги кончились"}
+
+    async def _tool(self, v, tree, fn: str, args: dict) -> Any:
+        if fn == "search_catalog":
+            return await self.search(tree, str(args.get("query", "")))
+        if fn == "assembly_parts":
+            rows = await self.assembly_rows(v, str(args.get("id", "")), str(args.get("assembly", "")),
+                                            str(args.get("want", "")))
+            return [{"brand": r.get("brand"), "description": str(r.get("description") or "")[:70],
+                     "price": r.get("price")} for r in rows[:8]] or [{"info": "у поставщиков такой детали нет"}]
+        return await self.parts(v, tree, str(args.get("id", "")))
+
+    async def _safe(self, coro, fallback):
+        """Сбой одной детали (каталог, поставщики, модель) не роняет весь ответ: по ней — «передам менеджеру»."""
+        try:
+            return await coro
+        except OverBudget:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("деталь не подобрана: %s: %s", type(e).__name__, str(e)[:150])
+            return fallback
 
     def _offer(self, o: dict, role: str = "") -> dict:
         t, why = ("OE", "оригинал") if role == "оригинал" else Q.tier(o["brand"])
@@ -458,8 +474,8 @@ class Assistant:
             data = {"items": [], "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", []),
                     "client": text}
             return await self.sell(car, data, used, prefs), data
-        picks = await asyncio.gather(*(self.select(v, tree, it, used) for it in items))
-        priced = await asyncio.gather(*(self.priced(v, it, p) for it, p in zip(items, picks)))
+        picks = await asyncio.gather(*(self._safe(self.select(v, tree, it, used), {"found": False}) for it in items))
+        priced = await asyncio.gather(*(self._safe(self.priced(v, it, p), []) for it, p in zip(items, picks)))
         data = {"items": [{"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
                            "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
                            "found": bool(p.get("found")) and bool(pr), "catalog": pr}
