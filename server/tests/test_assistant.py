@@ -135,10 +135,14 @@ def test_telegram_start_and_buttons(tmp_path):
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     gw = ScriptGW()
     bot = KirillBot(http, "TOKEN", C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path), gw)
-    msg = {"chat": {"id": 7, "type": "private"}}
+    msg = {"chat": {"id": 7, "type": "private"}, "from": {"id": 7}}
     asyncio.run(bot.handle({"message": dict(msg, text="/start")}))
-    assert "Кирилл" in sent[-1]["text"]
+    assert "Кирилл" in sent[-2]["text"] and sent[-1]["reply_markup"]["keyboard"][0][0]["request_contact"]
+    # Номер — первым шагом (пользователь 26.10): без него не подбираем, но просьбу помним и отвечаем после номера
     asyncio.run(bot.handle({"message": dict(msg, text=VIN + " колодки передние")}))
+    assert "Поделиться номером" in sent[-1]["text"]
+    asyncio.run(bot.handle({"message": dict(msg, contact={"phone_number": "79780000000", "user_id": 7})}))
+    assert sent[-2]["reply_markup"] == {"remove_keyboard": True}
     kb = sent[-1]["reply_markup"]["inline_keyboard"]
     assert kb[0][0] == {"text": "Качество", "callback_data": "goal:quality"} and sent[-1]["parse_mode"] == "HTML"
     asyncio.run(bot.handle({"message": {"chat": {"id": 8, "type": "group"}, "text": "колодки"}}))   # в группах молчит
@@ -271,6 +275,7 @@ def test_video_note_and_unknown_messages_are_not_silent(tmp_path):
     bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T",
                     C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path), gw)
     chat = {"chat": {"id": 5, "type": "private"}}
+    bot.assistant.sessions.save("tg-5", {"phone": "+79780000000"})
     asyncio.run(bot.handle({"message": dict(chat, video_note={"file_id": "v"})}))
     assert got["name"] == "file_3.mp4" and any("🎤 «колодки»" in s["text"] for s in sent)
     asyncio.run(bot.handle({"message": dict(chat, sticker={"file_id": "s"})}))
@@ -319,7 +324,7 @@ def test_order_from_last_podbor_and_contact(tmp_path):
     r = asyncio.run(a.reply("tg-11", "оформляй оригинал"))
     assert r["status"] == "order" and "Toyota (оригинал) — 7 260 ₽ × 2 = 14 520 ₽" in r["text"] and r["contact"]
     assert cards and "Наконечник рулевой тяги" in cards[0] and "номер не оставил" in cards[0]
-    reply = asyncio.run(a.contact("tg-11", "+79780000000", "Иван"))
+    reply, _ = asyncio.run(a.contact("tg-11", "+79780000000", "Иван"))
     assert "+79780000000" in reply and "+79780000000" in cards[-1]
 
 
@@ -350,3 +355,18 @@ def test_bot_remembers_group_but_does_not_trust_it(tmp_path):
                                                "from": {"id": 7}, "new_chat_member": {"status": "member"}}}))
     rec = json.loads((tmp_path / "groups.jsonl").read_text(encoding="utf-8"))
     assert rec["id"] == -100123 and rec["by"] == 7 and not sent and bot.managers_chat == ""
+
+
+def test_foreign_contact_rejected(tmp_path):
+    sent = []
+
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/sendMessage"):
+            sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "result": []})
+    gw = ScriptGW()
+    bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T",
+                    C.Assistant(Engine(Fake(), None, set()), gw, "m", tmp_path), gw)
+    msg = {"chat": {"id": 9, "type": "private"}, "from": {"id": 9}}
+    asyncio.run(bot.handle({"message": dict(msg, contact={"phone_number": "79781111111", "user_id": 10})}))
+    assert "собственный номер" in sent[-1]["text"] and not bot.assistant.has_phone("tg-9")

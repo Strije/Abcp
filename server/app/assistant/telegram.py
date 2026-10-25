@@ -22,6 +22,10 @@ HELLO = ("Здравствуйте! Я Кирилл, помощник магаз
          "Пришлите VIN вашей машины (или госномер) и напишите, что нужно — как привыкли, хоть списком, хоть "
          "голосовым. Подберу детали по каталогу именно вашей машины: оригинал и аналоги с ценами и сроками.\n\n"
          "Например: «XW8ZZZ8K7AG200538 передние колодки и диски».")
+PHONE_FIRST = ("Чтобы начать, нажмите «📱 Поделиться номером» внизу экрана — так менеджер сможет связаться с вами "
+               "по заказу. Номер видят только сотрудники магазина.")
+PHONE_KEYBOARD = {"keyboard": [[{"text": "📱 Поделиться номером", "request_contact": True}]],
+                  "resize_keyboard": True, "one_time_keyboard": True}
 PHOTO = "Фото пока не читаю 🙈 Напишите, пожалуйста, VIN или что нужно текстом — или запишите голосовое."
 SLOW = "Подбираю по каталогу вашей машины, это займёт до минуты…"
 TOO_MANY = "Слишком много сообщений подряд — подождите минуту, пожалуйста."
@@ -206,13 +210,27 @@ class KirillBot:
                 return
             name = " ".join(x for x in (contact.get("first_name"), contact.get("last_name")) if x)
             u = (m.get("from") or {}).get("username")
-            reply = await self.assistant.contact(sid, "+" + contact["phone_number"].lstrip("+"),
-                                                 name + (f" (@{u})" if u else ""))
+            reply, pending = await self.assistant.contact(sid, "+" + contact["phone_number"].lstrip("+"),
+                                                          name + (f" (@{u})" if u else ""))
             await self.http.post(self._url("sendMessage"), json={"chat_id": chat, "text": reply,
                                                                  "reply_markup": {"remove_keyboard": True}})
+            for t in pending:   # что клиент написал до номера — отвечаем теперь
+                res = await self._with_typing(chat, sid, lambda t=t: self.assistant.reply(sid, t))
+                await self.send(chat, res["text"], buttons=res.get("buttons"))
+                await self.photos(chat, sid, res.get("photos") or [])
             return
         if text.startswith("/start"):
             await self.send(chat, HELLO, md=False)
+            if not self.assistant.has_phone(sid):
+                await self.http.post(self._url("sendMessage"), json={"chat_id": chat, "text": PHONE_FIRST,
+                                                                     "reply_markup": PHONE_KEYBOARD})
+            return
+        if not self.assistant.has_phone(sid):
+            # Номер — первым шагом (пользователь 26.10: «без него не нужно начинать»); просьбу не теряем
+            if text:
+                self.assistant.keep(sid, text)
+            await self.http.post(self._url("sendMessage"), json={"chat_id": chat, "text": PHONE_FIRST,
+                                                                 "reply_markup": PHONE_KEYBOARD})
             return
         if not self._allowed(sid):
             await self.send(chat, TOO_MANY, md=False)

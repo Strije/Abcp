@@ -816,16 +816,33 @@ class Assistant:
         except Exception as e:  # noqa: BLE001 — уведомление не должно ронять ответ клиенту
             log.info("notify: %s", type(e).__name__)
 
-    async def contact(self, sid: str, phone: str, name: str = "") -> str:
-        """Клиент поделился номером: запомнить и, если есть заказ, отправить менеджерам."""
+    def has_phone(self, sid: str) -> bool:
+        return bool(self.sessions.load(sid).get("phone"))
+
+    def keep(self, sid: str, text: str):
+        """Что клиент написал до номера — ответим, как только поделится (не больше трёх сообщений)."""
+        s = self.sessions.load(sid)
+        s["before_phone"] = (s.get("before_phone") or [])[-2:] + [text[:2000]]
+        self.sessions.save(sid, s)
+
+    async def contact(self, sid: str, phone: str, name: str = "") -> tuple[str, list[str]]:
+        """Клиент поделился номером: запомнить; новый клиент и заказ — в группу менеджеров.
+        (ответ клиенту, его сообщения до номера — на них отвечаем теперь)."""
         async with self.locks.setdefault(sid, asyncio.Lock()):
             s = self.sessions.load(sid)
+            new = not s.get("phone")
             s["phone"], s["name"] = phone, name or s.get("name", "")
+            pending = s.pop("before_phone", None) or []
             self.sessions.save(sid, s)
         if s.get("order"):
             await self._notify(sid, s, "📱 Клиент оставил номер по заказу")
-            return f"Спасибо! Передал заказ менеджеру — он свяжется по номеру {phone}."
-        return "Спасибо, номер сохранил — менеджер сможет связаться, когда будете оформлять."
+            return f"Спасибо! Передал заказ менеджеру — он свяжется по номеру {phone}.", pending
+        if new:
+            await self._notify(sid, s, "🆕 Новый клиент у Кирилла")
+        if pending:
+            return "Спасибо! Сейчас отвечу на ваше сообщение.", pending
+        return ("Спасибо! Пришлите VIN вашей машины (или госномер) и напишите, что нужно — "
+                "можно списком или голосовым."), pending
 
     async def _pipeline(self, v, tree, dec: dict, items: list[dict], text: str, prefs: dict,
                         used: dict, greet: bool = False) -> tuple[str, dict]:
