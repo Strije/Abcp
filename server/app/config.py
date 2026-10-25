@@ -47,6 +47,13 @@ class Settings:
     # Номера и цены — только из Laximo и ABCP. Пусто — разбор правилами
     llm_url: str = ""
     llm_key: str = ""
+    # Ассистент «Кирилл» (app/assistant): модели через шлюз Timeweb (AIGW, OpenAI-совместимый), Telegram-бот.
+    # Пусто — ассистента нет. Расход в рублях за сутки ограничен assistant_day_rub
+    aigw_url: str = ""
+    aigw_key: str = ""
+    assistant_model: str = "anthropic/claude-haiku-5-5"
+    assistant_tg_token: str = ""
+    assistant_day_rub: float = 300.0
 
 
 def load() -> Settings:
@@ -74,6 +81,11 @@ def load() -> Settings:
         podbor_open=os.environ.get("PODBOR_OPEN", "").strip() == "1",
         llm_url=os.environ.get("LLM_URL", "").strip().rstrip("/"),
         llm_key=os.environ.get("LLM_API_KEY", "").strip(),
+        aigw_url=os.environ.get("AIGW_BASE_URL", "").strip().rstrip("/"),
+        aigw_key=os.environ.get("AIGW_API_KEY", "").strip(),
+        assistant_model=os.environ.get("ASSISTANT_MODEL", "").strip() or "anthropic/claude-haiku-5-5",
+        assistant_tg_token=os.environ.get("ASSISTANT_TG_TOKEN", "").strip(),
+        assistant_day_rub=float(os.environ.get("ASSISTANT_DAY_RUB", "") or 300),
         bitrix_client_id=os.environ.get("BITRIX_CLIENT_ID", "").strip(),
         bitrix_client_secret=os.environ.get("BITRIX_CLIENT_SECRET", "").strip(),
         bitrix_domain=os.environ.get("BITRIX_DOMAIN", "bitrix.freno.ru").strip(),

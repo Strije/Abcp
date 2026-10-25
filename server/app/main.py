@@ -11,6 +11,7 @@ POST /v1/podbor/text         ответ клиенту из готового п�
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
 GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
 GET  /v1/podbor/laximo-usage сколько запросов ушло в Laximo и в языковую модель (пароль подбора)
+POST /v1/assistant/message    ассистент «Кирилл»: реплика собеседника → ответ (пароль подбора; Telegram — @AvtoDrugAi_bot)
 GET  /podbor/login           вход на страницы подбора формой (пароль PODBOR_PASSWORD → пропуск в cookie на 30 дней)
 GET  /podbor/journal         разговоры с роботом: реплики, ответы, оценки, находки судьи (пароль подбора)
 GET  /v1/podbor/journal?days= те же разговоры данными для страницы (до 90 дней)
@@ -52,7 +53,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from . import access, bitrix, podbor, push, releases, tokens
+from . import access, assistant, bitrix, podbor, push, releases, tokens
 from .abcp import Abcp, AbcpError, guest_brands, guest_offers
 from .config import Settings, load
 from .laximo import METHODS as LAXIMO_METHODS, PARAMS as LAXIMO_PARAMS, Laximo
@@ -104,6 +105,12 @@ class PushTestIn(BaseModel):
 
 class AccessIn(BaseModel):
     missing: list[str] = Field(default_factory=list, max_length=10)
+
+
+class AssistantIn(BaseModel):
+    session: str = Field(min_length=1, max_length=60, pattern=r"^[A-Za-z0-9_-]+$")   # собеседник: память машины и разговора
+    text: str = Field(default="", max_length=4000)
+    action: str = Field(default="", max_length=30)   # нажатая кнопка: goal:quality, when:urgent, go
 
 
 class PodborIn(BaseModel):
@@ -189,8 +196,14 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         state["podbor"] = podbor.Engine(podbor.Direct(state["laximo"], state["abcp"], s.guest_profile_id),
                                         folder / "podbor", warranty_brands(), llm=state["llm"])
         state["journal"] = podbor.journal.Journal(folder / "podbor" / "journal")
+        state["gw"] = assistant.Gateway(s.aigw_url, s.aigw_key, s.state_dir, s.assistant_day_rub)
+        state["assistant"] = assistant.Assistant(state["podbor"], state["gw"], s.assistant_model, folder / "assistant",
+                                                 state["journal"], warranty_info()) if state["gw"].enabled else None
         app.state.bx = state["bx"]
         tasks = []
+        if state["assistant"] is not None and s.assistant_tg_token:
+            app.state.kirill = assistant.KirillBot(state["abcp"].http, s.assistant_tg_token, state["assistant"], state["gw"])
+            tasks.append(asyncio.create_task(app.state.kirill.run()))
         if state["pusher"].enabled and s.order_watch_interval > 0:
             tasks.append(asyncio.create_task(state["watcher"].run()))
         if s.telegram_bot_token and s.telegram_chat_id:
@@ -204,6 +217,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
         await state["abcp"].close()
         await state["laximo"].close()
         await state["llm"].close()
+        await state["gw"].http.aclose()
 
     app = FastAPI(title="Avtodrug API", lifespan=lifespan, docs_url=None, redoc_url=None)
 
@@ -244,6 +258,13 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
             return set(json.loads(warranty_file.read_text(encoding="utf-8")).get("brands", {}))
         except (FileNotFoundError, ValueError):
             return set()
+
+    def warranty_info() -> dict:
+        """Гарантии брендов целиком — продавцу ассистента для обоснования «Оптимально»."""
+        try:
+            return json.loads(warranty_file.read_text(encoding="utf-8")).get("brands", {})
+        except (FileNotFoundError, ValueError):
+            return {}
 
     @app.get("/v1/brands/warranty")
     async def brand_warranty():
@@ -576,7 +597,8 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     @app.get("/v1/podbor/laximo-usage", dependencies=[Depends(podbor_auth)])
     async def laximo_usage():
         """Сколько запросов ушло в Laximo: сегодня, за месяц, по методам и дням; и в языковую модель."""
-        return state["laximo"].usage.report() | {"llm": state["llm"].report(), "memory": memory_report()}
+        return state["laximo"].usage.report() | {"llm": state["llm"].report(), "memory": memory_report(),
+                                                 "assistant": state["gw"].report()}
 
     def memory_report() -> dict:
         """Память службы (RSS, МБ) и кэши подбора: служба живёт под MemoryMax=300M, рост виден здесь раньше, чем убьёт ядро."""
@@ -615,6 +637,18 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():
         return FileResponse(podbor_page, media_type="text/html; charset=utf-8")
+
+    @app.post("/v1/assistant/message", dependencies=[Depends(podbor_auth)])
+    async def assistant_message(body: AssistantIn):
+        """Тот же ассистент, что в Telegram, — для страницы подбора, виджета и проверок. Собеседник — body.session."""
+        if state.get("assistant") is None:
+            raise HTTPException(503, "Ассистент не настроен")
+        if not podbor_limit.allow("assistant:" + body.session):
+            raise HTTPException(429, "Слишком много сообщений, подождите минуту")
+        if not body.text.strip() and not body.action:
+            raise HTTPException(422, "Нужен текст или кнопка")
+        res = await state["assistant"].reply("api-" + body.session, body.text, action=body.action)
+        return {k: res.get(k) for k in ("text", "status", "buttons", "ack", "seconds", "used")}
 
     @app.get("/podbor/journal", dependencies=[Depends(podbor_auth)])
     async def podbor_journal_html():
