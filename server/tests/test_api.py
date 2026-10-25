@@ -767,3 +767,35 @@ def test_llm_switches_to_max_completion_tokens_and_drops_temperature():
     assert asyncio.run(llm.chat("s", "u")) == "да"
     assert asyncio.run(llm.chat("s", "u")) == "да"
     assert bodies[-1] == ["max_completion_tokens"] and len(bodies) == 4   # 3 попытки в первый раз, 1 — во второй
+
+
+def test_podbor_journal_page_and_data(tmp_path):
+    """Страница «Разговоры с роботом»: только по паролю подбора; реплики с ответом, оценкой и находкой судьи."""
+    import base64
+    import json as js
+    from dataclasses import replace
+    from datetime import date
+    s = replace(S, state_dir=str(tmp_path), podbor_password="pw")
+    folder = tmp_path / "podbor" / "journal"
+    (folder / "review").mkdir(parents=True)
+    day = date.today().isoformat()
+    t = day + "T10:00:00"
+    rows = [{"t": t, "type": "turn", "dialog": "d1", "turn": 1, "text": "колодки передние", "status": "ok",
+             "seconds": 3.2, "llm": False, "car": "Toyota Camry", "positions": [{"query": "колодки", "status": "found"}],
+             "answer": "1) Колодки…", "handoff": []},
+            {"t": day + "T10:01:00", "type": "turn", "dialog": "d1", "turn": 2, "text": "а сам щуп есть?", "status": "chat",
+             "answer": ""},
+            {"t": day + "T10:02:00", "type": "feedback", "dialog": "d1", "turn": 2, "good": False, "comment": "щупа нет"}]
+    (folder / f"{day}.jsonl").write_text("\n".join(js.dumps(r, ensure_ascii=False) for r in rows) + "\n{оборвано", "utf-8")
+    (folder / "review" / f"{day}.jsonl").write_text(js.dumps({"dialog": "d1", "turn": 1, "t": t, "verdict": "suspect",
+                                                              "problems": [{"kind": "wrong_part", "what": "не те"}]}), "utf-8")
+    app = create_app(s, Abcp(s, transport=httpx.MockTransport(fake_abcp)))
+    with TestClient(app) as c:
+        assert c.get("/v1/podbor/journal").status_code == 401
+        assert c.get("/podbor/journal").status_code == 401
+        h = {"Authorization": "Basic " + base64.b64encode(b"x:pw").decode()}
+        assert "Разговоры с роботом" in c.get("/podbor/journal", headers=h).text
+        d = c.get("/v1/podbor/journal?days=3", headers=h).json()["dialogs"]
+        assert len(d) == 1 and d[0]["car"] == "Toyota Camry" and d[0]["bad"] == 1 and d[0]["empty"] == 1
+        assert d[0]["suspect"] == 1 and d[0]["turns"][0]["judge"]["problems"][0]["what"] == "не те"
+        assert d[0]["turns"][1]["feedback"] == [{"good": False, "comment": "щупа нет"}]

@@ -11,6 +11,8 @@ POST /v1/podbor/text         ответ клиенту из готового п�
 POST /v1/podbor              заявка «VIN + что нужно» → машина, оригинал, сторона, аналоги с ценами (черновик ответа)
 GET  /podbor                 страница подбора для менеджера (вход по паролю PODBOR_PASSWORD)
 GET  /v1/podbor/laximo-usage сколько запросов ушло в Laximo и в языковую модель (пароль подбора)
+GET  /podbor/journal         разговоры с роботом: реплики, ответы, оценки, находки судьи (пароль подбора)
+GET  /v1/podbor/journal?days= те же разговоры данными для страницы (до 90 дней)
 POST /v1/podbor/understand   только разбор текста моделью, без каталога — для сравнения с правилами
 POST /v1/access-request       заявка на включение прав API (менеджерам в Telegram)
 GET  /v1/access-request       отправлена ли заявка
@@ -430,6 +432,7 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     podbor_bad: dict[str, dict[str, float]] = defaultdict(dict)
     PODBOR_BAD_LIMIT, PODBOR_BAD_WINDOW = 10, 600
     podbor_page = Path(__file__).parent / "static" / "podbor.html"
+    journal_page = Path(__file__).parent / "static" / "podbor_journal.html"
 
     def podbor_auth(request: Request) -> None:
         """Страница и подбор — только для своих: вход браузера (Basic), имя любое, пароль PODBOR_PASSWORD.
@@ -547,6 +550,19 @@ def create_app(settings: Settings | None = None, abcp: Abcp | None = None, laxim
     @app.get("/podbor", dependencies=[Depends(podbor_auth)])
     async def podbor_html():
         return FileResponse(podbor_page, media_type="text/html; charset=utf-8")
+
+    @app.get("/podbor/journal", dependencies=[Depends(podbor_auth)])
+    async def podbor_journal_html():
+        return FileResponse(journal_page, media_type="text/html; charset=utf-8")
+
+    @app.get("/v1/podbor/journal", dependencies=[Depends(podbor_auth)])
+    async def podbor_journal(days: int = 7):
+        """Разговоры с роботом за дни — для страницы журнала. Контакты клиентов вычищены ещё при записи (journal.clean)."""
+        j = state.get("journal")
+        if not j or not j.folder or not j.folder.exists():
+            return {"days": days, "dialogs": []}
+        days = max(1, min(days, 90))
+        return {"days": days, "dialogs": await asyncio.to_thread(podbor.journal.dialogs, j.folder, days)}
 
     @app.post("/v1/push/token")
     async def push_token(body: PushTokenIn, uid: str = Depends(current_uid)):

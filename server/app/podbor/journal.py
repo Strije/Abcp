@@ -84,6 +84,58 @@ class Journal:
                      "turn": turn, "how": how})
 
 
+def _read(folder: Path, edge: str) -> list[dict]:
+    rows = []
+    for f in sorted(folder.glob("*.jsonl")):
+        if f.stem >= edge:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass   # строка, оборванная при записи, — не повод не показать остальное
+    return rows
+
+
+def dialogs(folder: Path, days: int = 7) -> list[dict]:
+    """Разговоры за дни для страницы журнала (/podbor/journal): реплики с ответами, оценки людей, находки судьи,
+    вставки ответа менеджером. Свежие первыми."""
+    edge = (date.today() - timedelta(days=days - 1)).isoformat()
+    rows = _read(folder, edge)
+    judged = {(r.get("dialog"), r.get("turn"), r.get("t")): r for r in _read(folder / "review", edge)}
+    out: dict[str, dict] = {}
+    for r in rows:
+        d = out.setdefault(r.get("dialog") or "", {"dialog": r.get("dialog") or "", "start": r.get("t", ""), "end": "",
+                                                    "car": "", "turns": [], "good": 0, "bad": 0, "suspect": 0,
+                                                    "used": 0, "empty": 0})
+        d["end"] = max(d["end"], r.get("t", ""))
+        kind = r.get("type")
+        if kind == "turn":
+            j = judged.get((r.get("dialog"), r.get("turn"), r.get("t"))) or {}
+            d["car"] = d["car"] or r.get("car", "")
+            empty = not (r.get("answer") or "").strip()
+            d["empty"] += empty
+            d["suspect"] += j.get("verdict") == "suspect"
+            d["turns"].append({"turn": r.get("turn"), "t": r.get("t", ""), "text": r.get("text", ""),
+                               "answer": r.get("answer", ""), "status": r.get("status", ""),
+                               "seconds": r.get("seconds"), "llm": bool(r.get("llm")), "handoff": r.get("handoff") or [],
+                               "positions": [{"query": p.get("query"), "status": p.get("status")}
+                                             for p in r.get("positions") or []],
+                               "judge": {"verdict": j["verdict"], "problems": j.get("problems") or []} if j.get("verdict") else None,
+                               "feedback": [], "used": ""})
+        elif kind in ("feedback", "used"):
+            t = next((x for x in reversed(d["turns"]) if x["turn"] == r.get("turn")), None)
+            if kind == "used":
+                d["used"] += 1
+                if t is not None:
+                    t["used"] = r.get("how", "")
+            else:
+                d["good"] += r.get("good") is True
+                d["bad"] += r.get("good") is False
+                if t is not None:
+                    t["feedback"].append({"good": r.get("good"), "comment": r.get("comment", "")})
+    return sorted((d for d in out.values() if d["turns"]), key=lambda d: d["end"], reverse=True)
+
+
 def show(folder: str, days: int = 1):
     """Разговоры за последние дни: реплика → ответ, с оценками."""
     edge = (date.today() - timedelta(days=days - 1)).isoformat()
