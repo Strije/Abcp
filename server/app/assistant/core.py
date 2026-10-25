@@ -87,7 +87,8 @@ note пиши клиенту на «вы», не о нём в третьем л�
 SELECTOR = """Ты подбираешь одну деталь в каталоге машины {car}. Нужно: {need} (ось: {axis}; клиент писал: «{words}»).{separate}
 Ниже уже есть кандидаты из каталога и детали первой группы — если нужная деталь там есть, сразу вызывай pick.
 Иначе ищи search_catalog (другие формулировки: жаргон → каталожное название), открывай show_parts; в быстрых группах
-нет — ищи search_units (узлы полного каталога) и открывай узел «u…» show_parts. Выбирай детали,
+нет — ищи search_units (узлы полного каталога; названия бывают английские — ищи и по-английски: «front brake»,
+«rear suspension») и открывай узел «u…» show_parts. Выбирай детали,
 которые и есть нужная (с нужной осью; левую и правую — обе). Названия и позиции бери только из инструментов.
 Мелкие детали (сайлентблок, пыльник, втулка, шаровая, отбойник, подшипник опоры) производитель часто отдельно не продаёт —
 только в сборе с рычагом, цапфой, стойкой; у неоригинальных фирм они есть. Если в группе нашлась только сборка — открой её
@@ -151,7 +152,8 @@ T_SEARCH = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 T_UNITS = {"type": "function", "function": {
     "name": "search_units", "description": "Поиск по узлам ПОЛНОГО каталога машины (медленнее): когда в быстрых группах "
-    "search_catalog нужной детали нет. Возвращает узлы с id «u…»; открывай их show_parts.",
+    "search_catalog нужной детали нет. Узлы бывают названы по-английски (SsangYong, Kia: «FRONT BRAKE», «REAR "
+    "SUSPENSION») — ничего не нашлось по-русски, ищи по-английски. Возвращает узлы с id «u…»; открывай их show_parts.",
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 T_PARTS = {"type": "function", "function": {
     "name": "show_parts", "description": "Детали группы каталога этой машины: название, позиция на схеме, примечание.",
@@ -383,7 +385,7 @@ class Assistant:
         async with self.pace:
             # Кандидаты и детали лучшей группы — сразу в первом сообщении (26.10: подборщик ходил по каталогу по 5–7 шагов,
             # подбор большого запроса шёл минуту): для частых деталей хватает одного вызова модели
-            first = await self.search(tree, item["need"], v)
+            first = [c for c in await self.search(tree, item["need"], v) if c.get("id")]
             top = await self._safe(self.parts(v, tree, first[0]["id"]), []) if first else []
             msgs = [{"role": "system", "content": SELECTOR.format(
                         car=v.summary(), need=item["need"], axis=item.get("axis") or "любая", words=item.get("words", ""),
