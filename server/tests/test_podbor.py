@@ -3343,3 +3343,14 @@ def test_bad_vin_is_reported_not_ignored():
     out = run("VIN: WF0UXXGAJUABCDE1F\nКомплект передних рычагов", e, memory=first["memory"])
     assert out["status"] == "no_vin" and "в VIN ошибка" in out["text"] and not out["positions"]
     assert "в VIN ошибка" in run("WF0UXXGAJUABCDE1F крепление бампера", e)["text"]
+
+
+def test_client_reasoning_after_offer_is_not_ignored():
+    """25.10, живой прогон ветки: рассуждения клиента перестали быть позициями, но ответ стал пустым. Теперь — менеджеру."""
+    e = Engine(Fake(), None, set())
+    first = run("X9FKXXEEBKCB57566 масляный фильтр", e)
+    for text in ("Кажется это только сам насос а не полностью топливный модуль в сборе",
+                 "На машине рычаг состоит из двух сайлентблоков и одной шаровой"):
+        out = run(text, e, memory=first["memory"], llm=False)
+        assert out["text"].strip() and "менеджеру" in out["text"], text
+        assert not out["positions"]

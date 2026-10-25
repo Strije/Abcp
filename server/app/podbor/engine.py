@@ -489,7 +489,8 @@ class Engine:
         if plan["kind"] == "new":
             jobs = self.split(req.chunks, tree)
         if not jobs:
-            ack = self._ack(text, res) if "?" in text else None   # вопрос без ответа — не молчим
+            # вопрос или рассуждение клиента без ответа — не молчим
+            ack = self._ack(text, res) if "?" in text or T.is_comment(text) else None
             if ack:
                 res["reply"] = await self._reply(ack, positions, v)
             return self._done(res, "chat", t0, mem)
@@ -765,6 +766,12 @@ class Engine:
             res["handoff"] = [h for h in res.get("handoff") or [] if not _CLOSING.fullmatch(h.strip())]
             return {"kind": "answer", "answers": [], "picks": [], "unclear": [],
                     "clarify": "Хорошо! Если понадобится что-то ещё по этой машине — пишите."}
+        if T.is_comment(t) and not res.get("handoff"):
+            # «Кажется, это только сам насос, а не модуль в сборе» (25.10, живой прогон): не деталь и не вопрос —
+            # уточнение к показанному, его проверяет менеджер
+            res["handoff"] = [t[:300]]
+            return {"kind": "answer", "answers": [], "picks": [], "unclear": [],
+                    "clarify": "Понял, передал менеджеру — он проверит по вашей машине и ответит здесь же."}
         if "?" in t or res.get("handoff"):
             if t and not res.get("handoff"):
                 res["handoff"] = [t[:300]]
