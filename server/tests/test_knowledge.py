@@ -80,6 +80,9 @@ def test_master_notes_only_where_they_apply():
     dec = K.notes("decoder", "Задок плавающие, стабы и шаровые", "LEXUS")
     assert any("плавающие" in n and "цапфы" in n for n in dec) and any("шаровая опора" in n for n in dec)
     assert not any("стабилизатор" in n for n in K.notes("decoder", "стабилизатор задний", ""))   # полное слово — не жаргон
+    # 27.10, замер расшифровщика: «аморики» без подсказки ушли в вопрос; полное «амортизаторы» — не жаргон
+    assert all(any("амортизатор" in n for n in K.notes("decoder", w, "")) for w in ("аморики", "аморты по кругу", "амор"))
+    assert not K.notes("decoder", "амортизаторы по кругу", "")
     assert any("цапф" in n for n in K.notes("selector", "сайлентблоки плавающие задней цапфы", "LEXUS"))
     assert not K.notes("selector", "сайлентблоки плавающие задней цапфы", "KIA")    # не та марка — молчим
     assert not K.notes("decoder", "колодки передние", "TOYOTA")                       # нет слов — промпт не растёт
