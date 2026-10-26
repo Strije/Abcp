@@ -338,6 +338,7 @@ class Assistant:
         # Фото деталей из прайса СТМ поставщика (выжимка без цен — STATE_DIR/stm/parts.json, не в git): нет файла — без фото
         self.stm = STM.Price(folder.parent / "stm" / "parts.json" if folder else None)
         self.pace = asyncio.Semaphore(6)   # параллельных подборщиков: Laximo 600/мин на весь сервис
+        self.drawing = asyncio.Semaphore(2)   # схем, которые рисуются разом: каждая — десятки МБ (память службы)
         self.locks: dict[str, asyncio.Lock] = {}   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
         self.notify = None   # async (текст) — карточка в группу менеджеров; ставит Telegram-бот
 
@@ -607,7 +608,8 @@ class Assistant:
             img = await self._image(image_url(d.image))
             if not img:
                 continue
-            jpg = await asyncio.to_thread(render, img, [], SCHEME_SIDE)
+            async with self.drawing:
+                jpg = await asyncio.to_thread(render, img, [], SCHEME_SIDE)
             out.append((d.unit[:60], "data:image/jpeg;base64," + base64.b64encode(jpg).decode()))
             if len(out) >= 2:
                 break
@@ -812,7 +814,8 @@ class Assistant:
             log.info("image map: %s", type(e).__name__)
         from .scheme_img import render
         try:
-            jpg = await asyncio.to_thread(render, img, boxes)
+            async with self.drawing:
+                jpg = await asyncio.to_thread(render, img, boxes)
         except Exception as e:  # noqa: BLE001 — картинка не та или битая
             log.info("render: %s", type(e).__name__)
             return None
