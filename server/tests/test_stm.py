@@ -65,7 +65,8 @@ def test_photo_live_catalog_traps(tmp_path):
         {"g3": "Опоры шаровые", "name": "Опора шаровая L=R (верхний рычаг) TOYOTA LC Prado/LEXUS GX470 GANZ GIL9", "art": "GIL9",
          "fits": "", "abc": "A", "photo": "up.jpeg"}]}, ensure_ascii=False), encoding="utf-8")
     p = Price(f)
-    assert p.photo_for("амортизатор передний", "", "TOYOTA", "CAMRY/HYBRID") is None
+    r = p.photo_for("амортизатор передний", "", "TOYOTA", "CAMRY/HYBRID")   # не капота; подвески — как пример
+    assert r["url"].endswith("nx.jpeg") and not r["exact"]
     r = p.photo_for("амортизатор передний", "", "LEXUS", "LEXUS RX330/350")
     assert r and not r["exact"]                                       # NX — пример, не «эта модель»
     assert p.photo_for("шаровая опора нижнего рычага", "", "LEXUS", "LEXUS GX470") is None
