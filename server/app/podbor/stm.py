@@ -38,7 +38,7 @@ def build(xlsx: str, out: str):
             continue
         name, fits = get(r, "Наименование полное")[:200], get(r, "Применяемость")[:200]
         # Применяемость обычно повторяет хвост названия — храним, только если в ней есть что-то сверх (память службы)
-        parts.append({"g3": get(r, "Группа уровень 3"), "name": name, "art": get(r, "Артикул"),
+        parts.append({"g3": get(r, "Группа уровень 3"), "name": name, "art": get(r, "Артикул"), "brand": get(r, "Бренд"),
                       "fits": "" if fits.upper() in name.upper() else fits, "abc": get(r, "ABC Ранг"),
                       "photo": url[len(URL):]})
     Path(out).write_text(json.dumps({"_": "Выжимка прайса СТМ Авторусь без цен: python -m app.podbor.stm", "parts": parts},
@@ -137,12 +137,35 @@ class Price:
             hit = self._by_art.get(re.sub(r"[^0-9A-Z]", "", str(n).upper()))
             if hit:
                 return {"url": URL + hit["photo"], "exact": True, "label": hit["name"]}
+        typical = set(K.table("photo_typical")["groups"])
+        ranked = [x for x in self._ranked(need, part, brand, model) if x[0][0] or x[1]["g3"] in typical]
+        if not ranked:
+            return None
+        (exact, *_), p = max(ranked, key=lambda x: x[0])
+        return {"url": URL + p["photo"], "exact": exact, "label": p["name"]}
+
+    def fits_for(self, need: str, part: str, brand: str, model: str) -> list[dict]:
+        """Позиции СТМ, которые по применяемости производителя подходят к этой модели: лучшая и, если она на одну
+        сторону («L»), — пара на другую. Номер отсюда — аналог, не номер каталога машины: подтверждает менеджер."""
+        exact = sorted((x for x in self._ranked(need, part, brand, model) if x[0][0]), key=lambda x: x[0], reverse=True)
+        if not exact:
+            return []
+        best = exact[0][1]
+        out = [best]
+        lr = _side(best["name"]).lr
+        if lr and not T.side(f"{need} {part}").lr:   # клиент сторону не назвал — нужны обе
+            other = next((p for _, p in exact if _side(p["name"]).lr not in ("", lr) and p["g3"] == best["g3"]), None)
+            out += [other] if other else []
+        return [{"name": p["name"], "art": p["art"], "brand": p.get("brand", ""), "photo": URL + p["photo"],
+                 "side": _side(p["name"]).lr} for p in out]
+
+    def _ranked(self, need: str, part: str, brand: str, model: str):
+        """(ранг, позиция) для всех подходящих по виду детали: ранг = (эта модель, та же марка, сторона, похожесть, ABC)."""
+        by_head = self._load()
         want, up = T.side(f"{need} {part}"), _vert(f"{need} {part}")
         mine = T.stems(T.expand(f"{need} {part}"))
         makes = {re.sub(r"[^A-Z]", "", brand.upper())} | set(K.families().get(K.family(brand), ("", ()))[1])
         models = model_tokens(model, brand)
-        typical = set(K.table("photo_typical")["groups"])
-        best: tuple | None = None
         for name in (need, part):
             q = [s for s in T.stems(T.expand(name)) if s not in _SKIP]
             head = T.head_text(T.expand(name))
@@ -164,17 +187,9 @@ class Price:
                         continue
                     toks = _tokens(f"{p['name']} {p['fits']}")
                     make = bool(makes & toks)
-                    exact = make and _fits(models, toks)
-                    if not exact and p["g3"] not in typical:
-                        continue
                     # та же машина, та же марка (пример для Lexus — от Toyota, а не от ВАЗ), та же сторона, похожесть, ходовая
-                    rank = (exact, make, not side.conflicts(want), score, p["abc"] == "A", p["abc"] == "B")
-                    if best is None or rank > best[0]:
-                        best = (rank, p)
-        if best is None:
-            return None
-        (exact, *_), p = best
-        return {"url": URL + p["photo"], "exact": exact, "label": p["name"]}
+                    yield (make and _fits(models, toks), make, not side.conflicts(want), score,
+                           p["abc"] == "A", p["abc"] == "B"), p
 
 
 if __name__ == "__main__":

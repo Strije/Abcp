@@ -94,3 +94,33 @@ def test_bot_sends_photo_with_scheme(tmp_path):
     sent.clear()
     asyncio.run(on_part(dict(ev, scheme=None, photo={"url": "broken", "exact": True, "label": ""})))
     assert [m for m, _ in sent] == ["sendPhoto", "sendMessage"]
+
+
+def test_kirill_priced_from_stm_fits(tmp_path):
+    """Каталог детали не дал — позиция прайса СТМ на эту модель и её предложения ABCP: только самой фирмы, обе стороны,
+    с пометкой «менеджер подтвердит» (26.10: пыльник с отбойником Lexus RX330 — в каталоге нет, в прайсе есть)."""
+    from types import SimpleNamespace
+
+    from app.assistant import core as C
+    from app.podbor import Engine
+    from test_podbor import Fake
+
+    class Src(Fake):
+        async def brands(self, number):
+            return [{"brand": "Ganz"}, {"brand": "Kraft"}]
+
+        async def offers(self, number, brand):
+            row = {"number": number, "description": "Амортизатор передний", "price": 5000, "deliveryPeriod": 24, "confirmCount": 2,
+                   "distributorId": 1}
+            return [dict(row, brand="Ganz"), dict(row, brand="Kraft", price=1000)]
+
+    f = tmp_path / "stm" / "parts.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"parts": [dict(p, brand="GANZ") for p in PARTS]}, ensure_ascii=False), encoding="utf-8")
+    a = C.Assistant(Engine(Src(), None, set()), None, "m", tmp_path / "assistant")
+    v = SimpleNamespace(brand="LEXUS", name="LEXUS RX330/350", catalog="", summary=lambda: "")
+    out = asyncio.run(a.priced_stm(v, {"need": "амортизатор передний"}))
+    assert [c["art"] for c in out] == ["GIK1", "GIK2"] and {c["side"] for c in out} == {"левый", "правый"}
+    assert all(c["via"] == "stm" and "менеджер подтвердит" in c["note"] for c in out)
+    assert {o["brand"] for c in out for o in c["offers"]} == {"Ganz"}          # чужие аналоги по номеру GANZ — мимо
+    assert asyncio.run(a.priced_stm(v, {"need": "рычаг передний"})) == []        # нет в прайсе на модель — пусто
