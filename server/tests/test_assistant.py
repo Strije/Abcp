@@ -507,3 +507,36 @@ def test_client_brand_filters_offers_not_part(tmp_path):
     assert got[0]["offers"][0]["role"] == "просили" and got[0]["offers"][0]["brand"] == "Nagamochi" and got[0]["brand_found"]
     got = asyncio.run(a.priced(car, {"need": "Колодки", "brand": "Brembo"}, pick))
     assert got[0]["brand_wanted"] == "Brembo" and not got[0]["brand_found"]
+
+
+def test_quantity_and_side_from_catalog(tmp_path):
+    """26.10: «Тяга рулевая · 1 шт.», хотя их две. Один номер на левую и правую — пара, на машину 2; разные номера — по
+    стороне."""
+    from types import SimpleNamespace
+    from app.podbor.catalog import Detail
+
+    def det(name, oem, amount=""):
+        return Detail(oem=oem, name=name, note="", amount=amount, match=None, unit="", unit_note="", unit_id="1",
+                      unit_ssd="", image="", code_on_image="1", category="")
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path)
+    ds = [det("Левый рулевой наконечник", "4546029435"), det("Правый рулевой наконечник", "4546029435"),
+          det("Шаровая опора левая", "43340"), det("Шаровая опора правая", "43330"), det("Тяга рулевая", "45503", "2")]
+
+    async def details(v, t, gid, full=False):
+        return ds
+
+    async def tree(v):
+        return None
+
+    async def offers(oem, brand):
+        return "TOYOTA", [{"brand": "TOYOTA", "number": oem, "numberFix": oem, "price": "1000", "deliveryPeriod": "24"}]
+    a._details, a._tree, a.eng.offers = details, tree, offers
+    car = SimpleNamespace(brand="TOYOTA", catalog="T")
+
+    def run_pick(*names):
+        return asyncio.run(a.priced(car, {"need": "x"}, {"found": True, "id": "g1", "parts": [{"name": n} for n in names]}))
+    tip = run_pick("Левый рулевой наконечник")[0]
+    assert tip["pair"] and tip["qty"] == 2 and tip["side"] == ""
+    balls = run_pick("Шаровая опора левая", "Шаровая опора правая")
+    assert [(b["side"], b["qty"], b["pair"]) for b in balls] == [("левый", None, False), ("правый", None, False)]
+    assert run_pick("Тяга рулевая")[0]["qty"] == 2

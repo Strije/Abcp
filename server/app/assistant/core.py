@@ -134,6 +134,8 @@ SELLER_ITEM = """Ты — Кирилл, консультант магазина 
 • ✅ Качество: CTR — 1 470 ₽ · 1 дн. <why дословно, с заглавной буквы>
 • Альтернатива: Masuma — 960 ₽ · 1 дн.
 «✅ Качество» — только для quality=OE; good — «Альтернатива», eco — «Эконом». Нет OE — строки «Качество» нет.
+N шт. — из catalog[].qty (по каталогу); нет — qty детали; pair=true — после названия «(левый и правый одинаковые)».
+Несколько номеров с side «левый»/«правый» — по подзаголовку на сторону («Левый:», «Правый:»), по 1 шт. на сторону.
 {variants}
 Если certainty=maybe — одна строка «Зачем проверить: …» сразу после названия. via=assembly или note — одна строка,
 что производитель отдельно не продаёт. found=false — одна строка с reason или «передам менеджеру». reason при
@@ -545,7 +547,15 @@ class Assistant:
                                          self.quality(rows, v.brand, d.name, {Q.key(o["brand"]) for o in kept})], v.brand)
             if dropped or more:
                 log.info("проверяющий убрал: %s", dropped + more)
+            # Сколько и какая сторона — по каталогу, как у робота (26.10: «Тяга рулевая · 1 шт.», хотя их две):
+            # один номер на левую и правую — одна деталь на обе стороны, на машину две; «amount» каталога — штук на узел
+            lrs = {T.side(x.name).lr for x in ds if x.oem == d.oem} - {""}
+            pair = {"left", "right"} <= lrs
+            k = re.match(r"\d+", str(d.amount or ""))
+            amount = int(k.group(0)) if k else 0
+            side = "" if pair else {"left": "левый", "right": "правый"}.get(T.side(d.name).lr, "")
             out.append({"part": d.name, "oem": d.oem, "pos": d.code_on_image, "offers": kept + extra,
+                        "qty": (2 * (amount or 1)) if pair else (amount or None), "pair": pair, "side": side,
                         "brand_wanted": item.get("brand") or "", "brand_found": any(o.get("role") == "просили" for o in kept),
                         "numbers": (cur.get("numbers") or [])[:60],   # кроссы: «а этот номер подойдёт?»
                         "dropped": dropped + more,
@@ -1030,6 +1040,9 @@ def _match(d, p: dict) -> bool:
     name, pos = str(p.get("name") or ""), str(p.get("pos") or "").strip()
     if d.name[:70] == name[:70]:
         return True
+    sa, sb = T.side(d.name), T.side(name)
+    if (sa.lr and sb.lr and sa.lr != sb.lr) or (sa.axis and sb.axis and sa.axis != sb.axis):
+        return False   # «правая» — не «левая»: основы слов сторону не различают
     ha, hb = _desc_head(d.name), _desc_head(name)
     if ha and hb and not T.same(ha, hb) and not any(T.same(ha, x) for x in T.stems(T.expand(name))):
         # Главное слово детали должно быть в выбранном названии: «Диск тормозной» — не «Комплект колодок», хоть позиция
