@@ -2,7 +2,7 @@
 # Установка сервера приложения Автодруг на чистый VPS (Ubuntu/Debian) и переезд со старого.
 # Запускать от root на НОВОМ сервере:
 #
-#   curl -fsSLo setup.sh https://raw.githubusercontent.com/Strije/Abcp/main/server/deploy/setup.sh
+#   scp root@<этот сервер>:/opt/avtodrug-api/deploy/setup.sh .   # код — в закрытом репозитории на нашем сервере
 #   bash setup.sh install [адрес]             # 1) поставить всё, настройки со старого, HTTPS — сервис ещё спит
 #                                             #    (без адреса — технический адрес сервера из DNS)
 #   bash setup.sh move                        # 2) переезд: старый сервис стоп, данные сюда, запуск здесь,
@@ -14,7 +14,9 @@
 set -euo pipefail
 
 OLD="${OLD:-194.87.208.68}"                  # старый сервер
-REPO="${REPO:-https://github.com/Strije/Abcp.git}"
+# Код сервера — в закрытом репозитории на нашем же VPS (27.10.2026: GitHub не даёт закрыть репозиторий из Крыма,
+# а робот, Кирилл и база знаний — наше). Новый сервер — REPO=ssh://root@<старый>/srv/git/avtodrug-server.git
+REPO="${REPO:-/srv/git/avtodrug-server.git}"
 BRANCH="${BRANCH:-main}"
 DIR=/opt/avtodrug-api
 DATA=/var/lib/avtodrug-api
@@ -51,7 +53,11 @@ deploy_code() {
     src=$(mktemp -d)
     git clone -q --depth 1 -b "$BRANCH" "$REPO" "$src"
     mkdir -p "$DIR"
-    rsync -a --delete --exclude venv --exclude tests --exclude __pycache__ "$src/server/" "$DIR/"
+    # Закрытый репозиторий — код сервера в корне; старый общий (Strije/Abcp) — в server/
+    local root="$src/server"
+    [ -d "$root" ] || root="$src"
+    [ -f "$root/requirements.txt" ] || die "в $REPO нет кода сервера"
+    rsync -a --delete --exclude venv --exclude tests --exclude __pycache__ --exclude .git "$root/" "$DIR/"
     rm -rf "$src"
     [ -x "$DIR/venv/bin/python" ] || python3 -m venv "$DIR/venv"
     "$DIR/venv/bin/pip" install -q --upgrade pip
