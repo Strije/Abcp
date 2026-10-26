@@ -1116,5 +1116,25 @@
    "Сцепления",
    "Барабаны тормозные"
   ]
+ },
+ "model_noise": {
+  "_": "Слова в названии машины у Laximo, которые не модель («CAMRY/HYBRID»): по ним фото из прайса не сверяем (app/podbor/stm.py).",
+  "words": [
+   "HYBRID",
+   "DIESEL",
+   "SEDAN",
+   "WAGON",
+   "HATCHBACK",
+   "COUPE",
+   "CABRIO",
+   "VAN",
+   "AWD",
+   "4WD",
+   "2WD",
+   "4X4",
+   "RESTYLING",
+   "NEW",
+   "CLASSIC"
+  ]
  }
 }

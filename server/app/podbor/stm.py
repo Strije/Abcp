@@ -50,13 +50,41 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[A-Z0-9]+", text.upper().replace("-", "")))
 
 
-def model_tokens(name: str) -> set[str]:
-    """Модель машины словами каталога: «RX330/350» → RX330, RX350; «CAMRY» → CAMRY. Голые числа и короткое — мимо."""
+def model_tokens(name: str, brand: str = "") -> set[str]:
+    """Модель машины словами каталога: «LEXUS RX330/350» → RX330, RX350; «CAMRY/HYBRID» → CAMRY. Марка и служебные
+    слова (data/podbor_knowledge.json, model_noise) — не модель: иначе «амортизатор для LEXUS NX» сошёл бы за RX330."""
     up = name.upper().replace("-", "")
     out = {t for t in re.findall(r"[A-Z][A-Z0-9]+", up) if len(t) >= 3 or re.search(r"\d", t)}
     for pre, nums in re.findall(r"\b([A-Z]+)(\d+(?:/\d+)+)", up):
         out |= {pre + n for n in nums.split("/")}
-    return out
+    noise = set(K.table("model_noise")["words"]) | _tokens(brand)
+    noise |= {w for _, cat in K.families().values() for w in cat}
+    return out - noise
+
+
+_STOP = re.compile(r"^(?:для|с|со|на|в|под|без|и|\(.*|\d.*)$", re.I)
+
+
+def _owner(name: str) -> str:
+    """Чья это деталь — первое существительное после главного слова: «Амортизатор капота» → капот, «Втулка заднего
+    стабилизатора» → стабилизатор. До «для», «с», скобок; слова через «+» («Пыльник+отбойник») — сама деталь."""
+    words = re.findall(r"\(|[А-Яа-яЁё]+(?:\+[А-Яа-яЁё]+)*|[^\sА-Яа-яЁё()]+", re.split(r"\s+для\s+", name)[0])
+    noun = lambda w: bool(re.fullmatch(r"[А-Яа-яЁё]{3,}", w)) and not T._ADJ_END.search(w.lower()) \
+        and T.stem(w.lower()) not in T.ADJ   # «задней» — тоже прилагательное, хоть и на «-ей»
+    seen_head = False
+    for w in words:
+        if _STOP.match(w) or w == "(":
+            return ""
+        if re.fullmatch(r"[А-Яа-яЁё]+\+.+", w) or noun(w):
+            if seen_head:
+                return T.stem(w.lower())
+            seen_head = True   # первое существительное — сама деталь («Верхняя опора амортизатора» — опора)
+    return ""
+
+
+def _vert(text: str) -> str:
+    low = text.lower()
+    return "up" if re.search(r"верхн", low) else "down" if re.search(r"нижн", low) else ""
 
 
 def _fits(models: set[str], toks: set[str]) -> bool:
@@ -109,9 +137,10 @@ class Price:
             hit = self._by_art.get(re.sub(r"[^0-9A-Z]", "", str(n).upper()))
             if hit:
                 return {"url": URL + hit["photo"], "exact": True, "label": hit["name"]}
-        want = T.side(f"{need} {part}")
+        want, up = T.side(f"{need} {part}"), _vert(f"{need} {part}")
+        mine = T.stems(T.expand(f"{need} {part}"))
         makes = {re.sub(r"[^A-Z]", "", brand.upper())} | set(K.families().get(K.family(brand), ("", ()))[1])
-        models = model_tokens(model)
+        models = model_tokens(model, brand)
         typical = set(K.table("photo_typical")["groups"])
         best: tuple | None = None
         for name in (need, part):
@@ -123,12 +152,15 @@ class Price:
                 if not T.same(head, key_head):
                     continue
                 for p in group:
-                    if "_st" not in p:   # основы считаем один раз на позицию, при первом спросе
-                        p["_st"] = tuple(T.stems(T.expand(f"{p['name']} {p['g3']}")))
+                    if "_st" not in p:   # основы и хозяина считаем один раз на позицию, при первом спросе
+                        p["_st"], p["_ow"] = tuple(T.stems(T.expand(f"{p['name']} {p['g3']}"))), _owner(p["name"])
                     have = p["_st"]
                     score = sum(1 for s in q if any(T.same(s, h) for h in have)) / len(q)
                     side = _side(p["name"])
                     if score < MIN_SCORE or side.conflicts(T.Side(want.axis, "")):
+                        continue
+                    # «Амортизатор капота» — не амортизатор подвески; «(верхний рычаг)» — не нижний
+                    if p["_ow"] and not any(T.same(p["_ow"], m) for m in mine) or up and _vert(p["name"]) not in ("", up):
                         continue
                     toks = _tokens(f"{p['name']} {p['fits']}")
                     make = bool(makes & toks)

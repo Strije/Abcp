@@ -49,6 +49,28 @@ def test_photo_same_car_side_and_examples(tmp_path):
     assert Price(tmp_path / "нет.json").photo_for("амортизатор", "", "LEXUS", "RX330") is None  # нет выжимки — без фото
 
 
+def test_photo_live_catalog_traps(tmp_path):
+    """Живой каталог 26.10: Laximo называет машину «LEXUS RX330/350», «CAMRY/HYBRID» — марка и HYBRID не модель;
+    «Амортизатор капота» — не амортизатор подвески; шаровая «(верхний рычаг)» — не нижняя."""
+    from app.podbor.stm import _owner
+    assert model_tokens("LEXUS RX330/350", "LEXUS") == {"RX330", "RX350"} and model_tokens("CAMRY/HYBRID", "TOYOTA") == {"CAMRY"}
+    assert _owner("Амортизатор капота TOYOTA Camry") == "капот" and _owner("Сайлентблок задней цапфы TOYOTA") == "цапф"
+    assert _owner("Диск тормозной передний перфорированный PRO-LINE с покрытием") == ""
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps({"parts": [
+        {"g3": "Амортизаторы капота", "name": "Амортизатор капота TOYOTA Camry 2006-> GANZ GIA1", "art": "GIA1", "fits": "",
+         "abc": "A", "photo": "hood.jpeg"},
+        {"g3": "Амортизаторы и стойки", "name": "Амортизатор передний (газомасляный) L для LEXUS NX200 GANZ GIK9", "art": "GIK9",
+         "fits": "", "abc": "A", "photo": "nx.jpeg"},
+        {"g3": "Опоры шаровые", "name": "Опора шаровая L=R (верхний рычаг) TOYOTA LC Prado/LEXUS GX470 GANZ GIL9", "art": "GIL9",
+         "fits": "", "abc": "A", "photo": "up.jpeg"}]}, ensure_ascii=False), encoding="utf-8")
+    p = Price(f)
+    assert p.photo_for("амортизатор передний", "", "TOYOTA", "CAMRY/HYBRID") is None
+    r = p.photo_for("амортизатор передний", "", "LEXUS", "LEXUS RX330/350")
+    assert r and not r["exact"]                                       # NX — пример, не «эта модель»
+    assert p.photo_for("шаровая опора нижнего рычага", "", "LEXUS", "LEXUS GX470") is None
+
+
 def test_bot_sends_photo_with_scheme(tmp_path):
     sent = []
 
