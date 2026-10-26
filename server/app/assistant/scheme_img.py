@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 MAX_SIDE = 1600   # Telegram ужимает фото больше 1280–2560 px; крупнее не нужно
 
 
-def render(image: bytes, boxes: list[dict]) -> bytes:
+def render(image: bytes, boxes: list[dict], max_side: int = MAX_SIDE) -> bytes:
     """boxes — выноски позиции из listImageMapByUnit: {x1, y1, x2, y2} в пикселях исходной картинки."""
     im = Image.open(io.BytesIO(image)).convert("RGB")
     over = Image.new("RGBA", im.size, (0, 0, 0, 0))
@@ -25,8 +25,8 @@ def render(image: bytes, boxes: list[dict]) -> bytes:
         cx, cy, r = (x1 + x2) // 2, (y1 + y2) // 2, max(x2 - x1, y2 - y1) // 2 + 6 * w
         d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(232, 30, 12, 255), width=w)
     out = Image.alpha_composite(im.convert("RGBA"), over).convert("RGB")
-    if max(out.size) > MAX_SIDE:
-        out.thumbnail((MAX_SIDE, MAX_SIDE))
+    if max(out.size) > max_side:
+        out.thumbnail((max_side, max_side))
     buf = io.BytesIO()
     out.save(buf, "JPEG", quality=88)
     return buf.getvalue()

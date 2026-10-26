@@ -43,6 +43,8 @@ _ON_PART: contextvars.ContextVar = contextvars.ContextVar("kirill_on_part", defa
 
 MAX_ITEMS = 15          # позиций в одном сообщении: дальше — менеджеру
 SELECT_STEPS = 7        # шагов подборщика на одну деталь
+MAX_SCHEMES = 2         # картинок схем подборщику на одну деталь (одна — около 2 копеек у Haiku)
+SCHEME_SIDE = 1100      # сторона схемы для модели, px: номера позиций читаются, токенов немного
 HISTORY = 8             # реплик разговора в памяти
 
 ASK_VIN = ("Пришлите, пожалуйста, VIN (17 знаков), номер кузова японских машин (например GX110-1234567) или госномер — "
@@ -103,6 +105,9 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 — pick found=true с этой сборкой и reason «отдельно не продаётся — только в сборе с …»: клиенту лучше вариант, чем «нет».
 Нет детали ни в каталоге, ни у поставщиков, ни в сборе — found=false; reason — ОДНА короткая фраза для клиента, без id
 групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick.
+Узел нужный, а детали с подходящим названием в нём нет — прежде чем found=false, открой show_scheme этой группы: названия
+каталога — машинный перевод («изолятор пружины» на рисунке может оказаться гофрированным пыльником). Найди деталь по
+виду, возьми её pos и название из show_parts, в why напиши, что узнал по схеме.
 В pick всегда заполняй why — одной-двумя фразами: где искал, почему взял именно эти детали и что отбросил (похожее
 название, не та ось, не тот узел). Это для разбора ошибок, клиент его не видит.{notes}"""
 SEPARATE = ("\nКлиент просит ИМЕННО ОТДЕЛЬНО, не в сборе: сборку вместо детали не предлагай — только саму деталь из "
@@ -174,6 +179,10 @@ T_PARTS = {"type": "function", "function": {
     "all=true — все детали узлов этой группы, и соседние (цапфа, кулак, кронштейны), которых нет в составе группы.",
     "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "all": {"type": "boolean"}},
                    "required": ["id"]}}}
+T_SCHEME = {"type": "function", "function": {
+    "name": "show_scheme", "description": "Картинка схемы узла этой группы: номера на рисунке — pos деталей из show_parts. "
+    "Названия в каталоге — машинный перевод и бывают неверными; по рисунку видно, что это за деталь на самом деле.",
+    "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}}}
 T_ASSEMBLY = {"type": "function", "function": {
     "name": "assembly_parts",
     "description": "Предложения поставщиков детали, которую производитель отдельно не продаёт, к сборке из каталога",
@@ -435,14 +444,16 @@ class Assistant:
                     {"role": "user", "content": "Кандидаты из каталога: " + json.dumps(first, ensure_ascii=False)
                      + (f"\nДетали группы {first[0]['id']}: " + json.dumps(top, ensure_ascii=False) if first else "")
                      + "\nПодбери."}]
+            looked = 0
             for _ in range(SELECT_STEPS):
-                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_ASSEMBLY, T_PICK])
+                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_SCHEME, T_ASSEMBLY, T_PICK])
                 _add(used, u)
                 calls = m.get("tool_calls") or []
                 msgs.append({"role": "assistant", "content": m.get("content") or "", **({"tool_calls": calls} if calls else {})})
                 if not calls:
                     msgs.append({"role": "user", "content": "Вызови pick."})
                     continue
+                pictures: list[dict] = []
                 for c in calls:
                     try:
                         args = json.loads(c["function"].get("arguments") or "{}")
@@ -452,12 +463,46 @@ class Assistant:
                     if fn == "pick":
                         return args
                     try:
-                        res = await self._tool(v, tree, fn, args)
+                        if fn == "show_scheme":
+                            # Картинку модель видит только в реплике пользователя: в ответе инструмента — что за узлы
+                            got = await self.scheme_pictures(v, tree, str(args.get("id", ""))) if looked < MAX_SCHEMES else []
+                            looked += len(got)
+                            pictures += got
+                            res = [{"unit": unit} for unit, _ in got] or \
+                                [{"info": "схемы нет" if looked < MAX_SCHEMES else "схем на эту деталь уже хватит"}]
+                        else:
+                            res = await self._tool(v, tree, fn, args)
                     except Exception as e:  # noqa: BLE001 — Laximo «группа недоступна для поиска» (26.10, Lexus)
                         log.info("инструмент %s: %s", fn, type(e).__name__)
                         res = [{"error": "эта группа сейчас недоступна, возьми другую из search_catalog"}]
                     msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res, ensure_ascii=False)})
+                if pictures:
+                    msgs.append({"role": "user", "content": [
+                        {"type": "text", "text": "Схемы узлов (номера на рисунке — pos деталей): "
+                                                 + "; ".join(unit for unit, _ in pictures)}]
+                        + [{"type": "image_url", "image_url": {"url": url}} for _, url in pictures]})
             return {"found": False, "reason": "шаги кончились"}
+
+    async def scheme_pictures(self, v, tree, gid: str) -> list[tuple[str, str]]:
+        """Схемы узлов группы для подборщика: [(узел, data-URL JPEG)], не больше двух узлов, уменьшенные (26.10, Lexus
+        RX330: пыльник стойки в каталоге назван «изолятор пружины» — по названию Кирилл его отбросил, на рисунке он
+        очевиден)."""
+        import base64
+        from .scheme_img import render
+        ds = await self._details(v, tree, gid, True) or []
+        out, seen = [], set()
+        for d in ds:
+            if not d.image or d.unit in seen:
+                continue
+            seen.add(d.unit)
+            img = await self._image(image_url(d.image))
+            if not img:
+                continue
+            jpg = await asyncio.to_thread(render, img, [], SCHEME_SIDE)
+            out.append((d.unit[:60], "data:image/jpeg;base64," + base64.b64encode(jpg).decode()))
+            if len(out) >= 2:
+                break
+        return out
 
     async def _tool(self, v, tree, fn: str, args: dict) -> Any:
         if fn == "search_catalog":

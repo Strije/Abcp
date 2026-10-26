@@ -577,3 +577,38 @@ def test_streamed_parts_go_to_their_own_chat(tmp_path):
         evs = got[sid]
         assert evs[0] == {"start": 2} and len([e for e in evs if "block" in e]) == 2, evs
         assert r["streamed"] and "Напишите, какие варианты оформить." in r["footer"] and "Колодки" not in r["footer"]
+
+
+def test_selector_looks_at_scheme(tmp_path):
+    """Названия каталога — машинный перевод (27.10, Lexus RX330: пыльник стойки назван «изолятор пружины»): подборщик
+    может открыть схему узла, картинка приходит ему отдельной репликой, не больше MAX_SCHEMES на деталь."""
+    seen = []
+
+    class GW(ScriptGW):
+        async def chat(self, model, messages, tools=None, max_out=8000):
+            names = {t["function"]["name"] for t in tools or []}
+            if "show_scheme" not in names:
+                return await super().chat(model, messages, tools, max_out)
+            seen.append(messages[-1])
+            if len(seen) <= 2:
+                call = {"id": f"s{len(seen)}", "function": {"name": "show_scheme", "arguments": '{"id": "g1"}'}}
+                return {"tool_calls": [call]}, {"in": 10, "out": 5}
+            args = {"found": True, "id": "g1", "parts": [{"name": "Изолятор", "pos": "48157B"}], "why": "по схеме — пыльник"}
+            return {"tool_calls": [{"id": "p", "function": {"name": "pick", "arguments": json.dumps(args)}}]}, {"in": 1, "out": 1}
+
+    a = C.Assistant(Engine(Fake(), None, set()), GW(), "m", tmp_path)
+
+    async def pictures(v, tree, gid):
+        return [("FRONT SPRING & SHOCK ABSORBER", "data:image/jpeg;base64,AAA"), ("FRONT AXLE", "data:image/jpeg;base64,BBB")]
+    a.scheme_pictures = pictures
+
+    async def search(tree, query, v=None):
+        return []
+    a.search = search
+    from types import SimpleNamespace
+    v = SimpleNamespace(brand="LEXUS", summary=lambda: "LEXUS RX330")
+    p = asyncio.run(a.select(v, None, {"need": "пыльник амортизатора переднего"}, {"in": 0, "out": 0, "calls": 0}))
+    assert p["why"] == "по схеме — пыльник"
+    first = seen[1]   # реплика после первого show_scheme: подпись узлов и сами картинки
+    assert first["role"] == "user" and [x["type"] for x in first["content"]] == ["text", "image_url", "image_url"]
+    assert seen[2]["role"] == "tool" and "уже хватит" in seen[2]["content"]   # третья и дальше — без картинок
