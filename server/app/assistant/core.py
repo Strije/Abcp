@@ -47,7 +47,7 @@ SPLIT_FROM = 3          # строк-позиций в заявке, с кото
 SELECT_STEPS = 7        # шагов подборщика на одну деталь
 MAX_SCHEMES = 2         # картинок схем подборщику на одну деталь (одна — около 2 копеек у Haiku)
 MAX_NAMES = 3           # «как называют продавцы» на одну деталь: каждый — поиск ABCP по номеру
-MAX_STRONG = 4          # позиций на заявку, которые подбирает модель сильнее (Sonnet ~20× дороже Haiku)
+MAX_STRONG = 2          # позиций на заявку, которые подбирает модель сильнее (Sonnet ~20× дороже Haiku; стенд 27.10)
 SCHEME_SIDE = 1100      # сторона схемы для модели, px: номера позиций читаются, токенов немного
 HISTORY = 8             # реплик разговора в памяти
 
@@ -559,15 +559,17 @@ class Assistant:
         """Одна позиция: подборщик → (не нашёл или сомневается — модель сильнее) → номера и предложения → кандидат
         в словарь переводов. strong_left — сколько вторых мнений осталось на заявку (общий список, pop — минус одно)."""
         p = await self._safe(self.select(v, tree, it, used), {"found": False})
-        if self.strong and (not p.get("found") or p.get("sure") is False) and strong_left:
-            # Второе мнение (27.10): платим за модель сильнее только на трудных местах. Её ответ берём, если она нашла
-            # (иначе остаётся честное «не нашли»)
+        pr = await self._safe(self.priced(v, it, p), [])
+        if self.strong and not pr and strong_left:
+            # Второе мнение (27.10): платим за модель сильнее только там, где подборщик не дошёл до цен. Стенд 97 фраз:
+            # все находки Sonnet — на «не нашёл»; на «нашёл, но сомневаюсь» он только тратил и раз навредил («10 шпилек»:
+            # Haiku — верно, Sonnet — «болты ступицы» без цен). Её ответ — только если дошёл до цен
             strong_left.pop()
             p2 = await self._safe(self.select(v, tree, it, used, self.strong), {"found": False})
-            if p2.get("found"):
-                p = dict(p2, why=f"второе мнение ({self.strong.rsplit('/', 1)[-1]}): {p2.get('why', '')}"
-                                 f" | сначала: {p.get('why', '')}")
-        pr = await self._safe(self.priced(v, it, p), [])
+            pr2 = await self._safe(self.priced(v, it, p2), []) if p2.get("found") else []
+            if pr2:
+                p, pr = dict(p2, why=f"второе мнение ({self.strong.rsplit('/', 1)[-1]}): {p2.get('why', '')}"
+                                     f" | сначала: {p.get('why', '')}"), pr2
         self._candidate(v, it, p, pr)
         return p, pr
 

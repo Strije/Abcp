@@ -676,14 +676,13 @@ def test_second_opinion_and_rename_candidates(tmp_path):
 
     async def select(v, tree, item, used, model=""):
         models.append(model)
-        if model == "big":
-            found = item["need"] != "колодки"
-            return {"found": found, "id": "g1", "parts": [{"name": "x", "pos": "1"}], "why": "по схеме"}
-        sure = item["need"] == "отбойник"
+        if model == "big":   # сильная: колодки не нашла, шпильки «нашла» болты без цен
+            return {"found": item["need"] != "колодки", "id": "g1", "why": "по схеме"}
+        sure = item["need"] in ("отбойник", "шпилька")
         return {"found": sure or item["need"] == "втулка", "sure": sure, "why": "сомневаюсь"}
 
     async def priced(v, item, pick):
-        if not pick.get("found"):
+        if not pick.get("found") or item["need"] == "шпилька" and pick.get("why") == "по схеме":
             return []
         part = {"пыльник амортизатора": "Изолятор передней спиральной пружины, верхний правый"}.get(item["need"], item["need"])
         return [{"part": part, "oem": "4815728020" if "Изолятор" in part else "1", "offers": []}]
@@ -691,13 +690,13 @@ def test_second_opinion_and_rename_candidates(tmp_path):
     a.heard["4815728020"] = {"продавцы оригинала": ["пыльник амортизатора"]}
     v = SimpleNamespace(brand="LEXUS", name="RX330/350")
     left = [1] * C.MAX_STRONG
-    run = lambda need: asyncio.run(a.pick_item(v, None, {"need": need}, {}, left))[0]  # noqa: E731
-    assert "второе мнение" in run("пыльник амортизатора")["why"]             # не нашёл — нашла сильная
-    assert run("отбойник")["why"] == "сомневаюсь" and models[-1] == ""        # уверен — без второго мнения
-    assert run("втулка")["why"].startswith("второе мнение")                   # нашёл, но сомневается
-    assert not run("колодки")["found"]                                          # сильная тоже не нашла — честное «нет»
-    assert run("стойка")["why"].startswith("второе мнение") and not left       # четвёртое — последнее
-    assert not run("тяга")["found"] and models.count("big") == C.MAX_STRONG    # потолок: дальше без сильной
+    run = lambda need: asyncio.run(a.pick_item(v, None, {"need": need}, {}, left))  # noqa: E731
+    p, pr = run("пыльник амортизатора")
+    assert "второе мнение" in p["why"] and pr                                   # не нашёл — нашла сильная
+    assert run("отбойник")[0]["why"] == "сомневаюсь" and models[-1] == ""        # дошёл до цен — без второго мнения
+    assert run("втулка")[0]["why"] == "сомневаюсь" and models[-1] == ""          # «сомневаюсь», но с ценами — тоже
+    assert not run("колодки")[1] and not left                                    # сильная не нашла — честное «нет»
+    assert not run("стойка")[1] and models.count("big") == C.MAX_STRONG          # потолок: дальше без сильной
     rows = CD.summary(tmp_path / "assistant" / "candidates.jsonl")
     assert [r["part"] for r in rows] == ["Изолятор передней спиральной пружины, верхний"] and rows[0]["family"] == "toyota"
     assert rows[0]["heard"]["пыльник амортизатора"] == 1 and rows[0]["needs"]["пыльник амортизатора"] == 1
