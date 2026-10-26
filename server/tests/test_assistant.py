@@ -79,7 +79,9 @@ class ScriptGW(Gateway):
             return {"tool_calls": [{"id": "1", "function": {"name": "decoded", "arguments": json.dumps(args)}}]}, {"in": 10, "out": 5}
         if "pick" in names:
             self.calls.append("select")
-            return {"tool_calls": [{"id": "2", "function": {"name": "pick", "arguments": '{"found": false}'}}]}, {"in": 10, "out": 5}
+            args = {"found": False, "why": "в группах тормозов передних колодок нет"}
+            call = {"id": "2", "function": {"name": "pick", "arguments": json.dumps(args, ensure_ascii=False)}}
+            return {"tool_calls": [call]}, {"in": 10, "out": 5}
         self.calls.append("sell:" + messages[0]["content"].split("Потребность клиента: ")[1].split(".")[0])
         return {"content": "**Колодки:** передам менеджеру."}, {"in": 10, "out": 5}
 
@@ -99,6 +101,9 @@ def test_conversation_vin_questions_buttons_then_podbor(tmp_path):
     # Не нашли — строка без модели; рамку ответа собирает код: потребность видна в заголовке
     assert r["status"] == "ok" and "Колодки" in r["text"] and "качество, срочно" in r["text"]
     assert r["text"].startswith("Здравствуйте!")
+    # «Почему» подборщика — в данных для журнала, а продавцу (и клиенту) не уходит
+    assert r["data"]["items"][0]["why"]["selector"] == "в группах тормозов передних колодок нет"
+    assert "why" not in C._no_schemes(r["data"]["items"][0])
     # Тот же разговор: «надолго / срочно» не переспрашиваем (26.10, Audi: «Диски тормозные передние» снова получили
     # вопросы), только уточнение по делу — и одна кнопка «Подобрать»; предпочтения — с прошлого подбора
     r = asyncio.run(a.reply("tg-1", "а задние колодки?"))

@@ -83,6 +83,8 @@ DECODER = """Ты — опытный мастер-приёмщик автосе�
 - scheme — просит схему, «где стоит», картинку;
 - question — вопрос не о подборе (оплата, доставка, срок, магазин) или болтовня.
 note пиши клиенту на «вы», не о нём в третьем лице.
+В каждой позиции why — одной фразой, как ты понял слова клиента: какое слово во что перевёл и почему (знание мастера,
+устройство машины, ответ на вопрос выше). Это для разбора ошибок, клиент его не видит.
 Машина уже определена по VIN — VIN, кузов и марку не спрашивай.{notes}
 Ответь вызовом decoded."""
 
@@ -99,7 +101,9 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 Деталь отдельно не продаётся ни у кого, но есть сборка, в которую она входит (подшипник — в ступице, датчик — в колодках),
 — pick found=true с этой сборкой и reason «отдельно не продаётся — только в сборе с …»: клиенту лучше вариант, чем «нет».
 Нет детали ни в каталоге, ни у поставщиков, ни в сборе — found=false; reason — ОДНА короткая фраза для клиента, без id
-групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick.{notes}"""
+групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick.
+В pick всегда заполняй why — одной-двумя фразами: где искал, почему взял именно эти детали и что отбросил (похожее
+название, не та ось, не тот узел). Это для разбора ошибок, клиент его не видит.{notes}"""
 SEPARATE = ("\nКлиент просит ИМЕННО ОТДЕЛЬНО, не в сборе: сборку вместо детали не предлагай — только саму деталь из "
             "каталога или через assembly_parts; нет нигде — found=false и в reason, что отдельно не продаётся.")
 
@@ -183,7 +187,9 @@ T_PICK = {"type": "function", "function": {
         "parts": {"type": "array", "items": {"type": "object", "properties": {
             "name": {"type": "string"}, "pos": {"type": "string"}}, "required": ["name"]}},
         "via": {"type": "string", "enum": ["catalog", "assembly"]},
-        "want": {"type": "string"}, "reason": {"type": "string"}}, "required": ["found"]}}}
+        "want": {"type": "string"}, "reason": {"type": "string"},
+        "why": {"type": "string", "description": "для разбора, клиент не видит: где искал, почему именно эта деталь, "
+                                                 "что отбросил и почему"}}, "required": ["found", "why"]}}}
 T_DECODED = {"type": "function", "function": {
     "name": "decoded", "description": "Точный список деталей",
     "parameters": {"type": "object", "properties": {
@@ -193,8 +199,10 @@ T_DECODED = {"type": "function", "function": {
             "qty": {"type": "integer"}, "certainty": {"type": "string", "enum": ["sure", "maybe"]},
             "words": {"type": "string", "description": "слова клиента"}, "note": {"type": "string"},
             "separate": {"type": "boolean", "description": "клиент хочет именно отдельно, не в сборе"},
-            "brand": {"type": "string", "description": "фирма, которую назвал клиент («nagamochi», «Bosch»), — не в need"}},
-            "required": ["need", "axis", "certainty", "words"]}},
+            "brand": {"type": "string", "description": "фирма, которую назвал клиент («nagamochi», «Bosch»), — не в need"},
+            "why": {"type": "string", "description": "для разбора, клиент не видит: как понял слова клиента — что во что "
+                                                     "перевёл и на каком основании"}},
+            "required": ["need", "axis", "certainty", "words", "why"]}},
         "questions": {"type": "array", "items": {"type": "string"}},
         "not_parts": {"type": "array", "items": {"type": "string"}},
         "intent": {"type": "string", "enum": ["parts", "order", "more", "number", "scheme", "question"]},
@@ -1021,7 +1029,11 @@ class Assistant:
                      "found": bool(p.get("found")) and bool(pr), "catalog": pr, "group": _group_name(tree, p.get("id")),
                      "separate": bool(it.get("separate")), "brand": it.get("brand") or "",
                      "reason": p.get("reason", "") if not pr or re.search(r"отдельно|в сборе", p.get("reason", ""), re.I)
-                     else ""}
+                     else "",
+                     # Как агенты пришли к детали — для журнала и разбора ошибок (продавцу и клиенту не уходит)
+                     "why": {"decoder": it.get("why", ""), "selector": p.get("why", ""),
+                             "notes": K.notes("decoder", it.get("words", ""), v.brand)
+                             + K.notes("selector", f"{it['need']} {it.get('words', '')}", v.brand)}}
             if on_part is None:
                 return entry, None
             block = await self._block(car, entry, used, prefs)
@@ -1053,7 +1065,8 @@ class Assistant:
             self.journal.turn(sid, len(hist) // 2, text, {
                 "status": f"assistant:{status}", "seconds": res["seconds"], "text": answer,
                 "vehicle": {"summary": s.get("car", "")},
-                "positions": [{"query": i["need"], "status": "found" if i["found"] else "not_found"}
+                "positions": [{"query": i["need"], "status": "found" if i["found"] else "not_found",
+                               "why": i.get("why") or {}, "group": i.get("group") or ""}
                               for i in (data or {}).get("items", [])]})
         return res
 
@@ -1154,8 +1167,9 @@ def _goal_need(prefs: dict) -> tuple[str, str]:
 
 
 def _no_schemes(item: dict) -> dict:
-    """Продавцу схема и кроссы не нужны — лишние токены."""
-    return dict(item, catalog=[{k: v for k, v in c.items() if k not in ("scheme", "numbers")} for c in item.get("catalog") or []])
+    """Продавцу схема, кроссы и «почему» агентов не нужны — лишние токены, а «почему» клиенту не показываем."""
+    return dict({k: v for k, v in item.items() if k != "why"},
+                catalog=[{k: v for k, v in c.items() if k not in ("scheme", "numbers")} for c in item.get("catalog") or []])
 
 
 def _schemes(data: dict) -> list[dict]:

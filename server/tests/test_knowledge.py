@@ -93,3 +93,14 @@ def test_kirill_prompts_get_notes():
     from app.assistant import core
     assert "{notes}" in core.DECODER and "{notes}" in core.SELECTOR
     assert "Знания мастера" in core._notes("decoder", "плавающие", "LEXUS") and core._notes("decoder", "фильтр", "") == ""
+
+
+def test_journal_keeps_why():
+    """Журнал хранит «почему» Кирилла рядом с позицией — страница «Как выбирал» (27.10)."""
+    from app.podbor.journal import brief
+    why = {"decoder": "«плавающие» — сайлентблоки цапфы", "selector": "взял из узла цапфы", "notes": ["n"]}
+    res = {"status": "assistant:ok", "positions": [{"query": "Сайлентблок цапфы", "status": "found", "why": why,
+                                                     "group": "Задняя подвеска"}]}
+    p = brief(res)["positions"][0]
+    assert p["why"] == why and p["group"] == "Задняя подвеска"
+    assert "why" not in brief({"positions": [{"query": "колодки", "status": "found"}]})["positions"][0]

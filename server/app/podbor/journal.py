@@ -32,6 +32,8 @@ def brief(res: dict) -> dict:
                        # Что подставила модель вместо слов клиента и какие группы давали правила — запас для словаря
                        # синонимов: повторяющиеся подтверждённые пары переносим в podbor_rules.json, модель им не нужна
                        **({"llm_part": p["llm_part"], "was_score": p.get("was_score")} if p.get("llm_part") else {}),
+                       # Кирилл: как понял слова клиента, почему взял деталь, какие знания мастера сработали
+                       **({"why": p["why"], "group": p.get("group", "")} if p.get("why") else {}),
                        "groups": [g.get("name") for g in (p.get("groups") or [])[:3]],
                        "variants": [[v.get("oem"), v.get("name")] for v in p.get("variants", [])[:4]]}
                       for p in res.get("positions", [])],
@@ -118,7 +120,8 @@ def dialogs(folder: Path, days: int = 7) -> list[dict]:
             d["turns"].append({"turn": r.get("turn"), "t": r.get("t", ""), "text": r.get("text", ""),
                                "answer": r.get("answer", ""), "status": r.get("status", ""),
                                "seconds": r.get("seconds"), "llm": bool(r.get("llm")), "handoff": r.get("handoff") or [],
-                               "positions": [{"query": p.get("query"), "status": p.get("status")}
+                               "positions": [{"query": p.get("query"), "status": p.get("status"),
+                                              **({"why": p["why"], "group": p.get("group", "")} if p.get("why") else {})}
                                              for p in r.get("positions") or []],
                                "judge": {"verdict": j["verdict"], "problems": j.get("problems") or []} if j.get("verdict") else None,
                                "feedback": [], "used": ""})
