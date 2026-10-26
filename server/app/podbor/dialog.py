@@ -14,6 +14,7 @@ from difflib import SequenceMatcher
 from typing import Any, Iterable
 
 from .. import brands as AB
+from . import knowledge as K
 from . import text as T
 
 MAX_REMEMBERED = 12
@@ -87,29 +88,8 @@ FILLER = {T.stem(w) for w in (
     "есть", "нет", "нету", "будет", "какие", "какой", "какая", "так", "же", "сторона", "стороны", "посмотрите",
     "гляньте", "глянуть", "посмотреть", "подберите", "подобрать", "интересует", "давайте", "давай", "плиз")}
 
-# Бренды кириллицей — как пишут в переписке
-BRAND_RU_MORE = {"масума": "MASUMA", "джикиу": "JIKIU", "жикиу": "JIKIU", "тацуми": "TATSUMI", "татсуми": "TATSUMI",
-                 "бендикс": "BENDIX", "текнорот": "TEKNOROT", "сасик": "SASIC", "валео": "VALEO", "аисин": "AISIN",
-                 "айсин": "AISIN", "лукас": "LUCAS", "текстар": "TEXTAR", "нипартс": "NIPPARTS", "кортеко": "CORTECO",
-                 "зентпартс": "ZENTPARTS", "фрей": "FREY", "юнио": "UNIO", "унио": "UNIO",
-                 "нордфил": "NORDFIL", "свернов": "SVERNOV", "мэйле": "MEYLE", "мейле": "MEYLE", "ниссенс": "NISSENS",
-                 "херт": "HERTH+BUSS JAKOPARTS", "блюпринт": "BLUE PRINT", "блю": "BLUE PRINT"}
-BRAND_RU = {"бош": "BOSCH", "хелла": "HELLA", "хела": "HELLA", "ман": "MANN", "манн": "MANN", "махле": "MAHLE",
-            "мале": "MAHLE", "нгк": "NGK", "денсо": "DENSO", "лемфордер": "LEMFORDER", "лемфёрдер": "LEMFORDER",
-            "сакс": "SACHS", "фебест": "FEBEST", "зеккерт": "ZEKKERT", "зекерт": "ZEKKERT",
-            "кайаба": "KYB", "каяба": "KYB", "кйб": "KYB", "гейтс": "GATES", "контитех": "CONTITECH",
-            "скф": "SKF", "фаг": "FAG", "ина": "INA", "трв": "TRW", "брембо": "BREMBO", "ферадо": "FERODO",
-            "мейл": "MEYLE", "майле": "MEYLE", "сваг": "SWAG", "феби": "FEBI", "кронер": "KRONER",
-            "лузар": "LUZAR", "маршал": "MARSHALL", "стеллокс": "STELLOX", "тойота": "TOYOTA",
-            "триали": "TRIALLI", "триалли": "TRIALLI", "миля": "MILES", "майлз": "MILES", "майлс": "MILES",
-            "патрон": "PATRON", "линкс": "LYNXAUTO", "азуми": "AZUMI", "сангсин": "SANGSIN", "кортеко": "CORTECO",
-            "викторрейнц": "VICTOR REINZ", "рейнц": "VICTOR REINZ", "мобис": "MOBIS", "филтрон": "FILTRON",
-            "фильтрон": "FILTRON", "кнехт": "KNECHT", "лукойл": "LUKOIL", "шелл": "SHELL", "мотул": "MOTUL",
-            "суфикс": "SUFIX", "пиленга": "PILENGA", "элринг": "ELRING", "полкар": "POLCAR", "циммерман": "ZIMMERMANN",
-            "зимерман": "ZIMMERMANN", "кашияма": "KASHIYAMA", "нагамочи": "SB NAGAMOCHI", "нагомочи": "SB NAGAMOCHI",
-            "мапко": "MAPCO", "депо": "DEPO", "тайк": "TYC", "абсел": "ABSEL", "квадро": "QUATTRO FRENI",
-            "кватро": "QUATTRO FRENI", "кваттро": "QUATTRO FRENI", "сакура": "SAKURA", "мотюль": "MOTUL"}
-BRAND_RU.update(BRAND_RU_MORE)   # «масуму есть?» — частые фирмы прайсов
+# Бренды кириллицей — как пишут в переписке («масуму есть?»): data/podbor_knowledge.json, part_brands_ru
+BRAND_RU = K.table("part_brands_ru")
 _NOT_BRAND = {"ok", "ок", "abs", "vin", "вин", "грм", "гбц", "акпп", "мкпп", "шрус", "дпкв", "дпрв", "тнвд", "egr",
               "lh", "rh", "fr", "rr", "the", "for", "and", "set", "kit", "oem"}
 

@@ -5,71 +5,12 @@
 Hyundai = Kia, Opel = Chevrolet = Daewoo — запчасти и клиенты там общие). Любое слово из семейства машины по VIN снимает вопрос."""
 import re
 
-# семейство → (как показать клиенту, марки каталога без пробелов и дефисов)
-FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "vag": ("Volkswagen/Audi/Skoda", ("VOLKSWAGEN", "VW", "AUDI", "SKODA", "SEAT", "PORSCHE", "CUPRA")),
-    "toyota": ("Toyota/Lexus", ("TOYOTA", "LEXUS")),
-    "hk": ("Hyundai/Kia", ("HYUNDAI", "KIA", "GENESIS")),
-    "nissan": ("Nissan/Infiniti", ("NISSAN", "INFINITI")),
-    "renault": ("Renault", ("RENAULT", "DACIA")),
-    "gm": ("Opel/Chevrolet", ("OPEL", "VAUXHALL", "CHEVROLET", "DAEWOO", "CADILLAC", "GM")),
-    "psa": ("Peugeot/Citroen", ("PEUGEOT", "CITROEN", "DS")),
-    "bmw": ("BMW", ("BMW", "MINI")),
-    "mercedes": ("Mercedes-Benz", ("MERCEDES", "MERCEDESBENZ", "SMART")),
-    "ford": ("Ford", ("FORD",)),
-    "mitsubishi": ("Mitsubishi", ("MITSUBISHI",)),
-    "mazda": ("Mazda", ("MAZDA",)),
-    "honda": ("Honda", ("HONDA", "ACURA")),
-    "subaru": ("Subaru", ("SUBARU",)),
-    "suzuki": ("Suzuki", ("SUZUKI",)),
-    "ssangyong": ("SsangYong", ("SSANGYONG",)),
-    "volvo": ("Volvo", ("VOLVO",)),
-    "landrover": ("Land Rover/Jaguar", ("LANDROVER", "JAGUAR", "RANGEROVER")),
-    "fiat": ("Fiat/Alfa Romeo", ("FIAT", "ALFAROMEO", "LANCIA", "ABARTH")),
-    "chery": ("Chery", ("CHERY",)),
-    "geely": ("Geely", ("GEELY",)),
-    "haval": ("Haval/Great Wall", ("HAVAL", "GREATWALL")),
-    "changan": ("Changan", ("CHANGAN",)),
-}
+from . import knowledge as K
 
-# слово клиента → семейство. Русские формы принимают окончания («тойоте»), латинские — как есть.
-_WORDS: dict[str, tuple[str, ...]] = {
-    "vag": ("volkswagen", "vw", "фольксваген", "фольц", "audi", "ауди", "skoda", "шкода", "seat", "сеат", "порше", "гольф", "golf", "polo",
-            "тигуан", "tiguan", "пассат", "passat", "джетта", "jetta", "октавия", "octavia", "рапид", "rapid", "йети", "yeti",
-            "суперб", "superb", "фабия", "fabia"),
-    "toyota": ("toyota", "тойота", "тоёта", "lexus", "лексус", "камри", "camry", "королла", "corolla", "рав4", "rav4", "прадо", "prado",
-               "ленд крузер", "land cruiser", "виста", "аурис", "auris", "авенсис", "avensis", "хайлендер", "highlander"),
-    "hk": ("hyundai", "хундай", "хендай", "хёндай", "хьюндай", "kia", "киа", "кия", "солярис", "solaris", "крета", "creta",
-           "элантра", "elantra", "туксон", "tucson", "санта фе", "santa fe", "рио", "rio", "ceed", "спортейдж", "sportage",
-           "соренто", "sorento", "пиканто", "picanto", "церато", "cerato", "оптима", "optima"),
-    "nissan": ("nissan", "ниссан", "infiniti", "инфинити", "х трейл", "x trail", "x-trail", "кашкай", "qashqai", "juke",
-               "альмера", "almera", "теана", "teana", "микра", "micra", "тиида", "tiida", "мурано", "murano"),
-    "renault": ("renault", "рено", "логан", "logan", "сандеро", "sandero", "дастер", "duster", "меган", "megane", "клио", "clio",
-                "каптур", "kaptur", "флюенс", "fluence", "трафик", "traffic"),
-    "gm": ("opel", "опель", "chevrolet", "шевроле", "шевролет", "daewoo", "дэу", "деу", "астра", "astra", "корса", "corsa",
-           "вектра", "vectra", "зафира", "zafira", "мерива", "meriva", "инсигния", "insignia", "лачетти", "lacetti", "авео", "aveo",
-           "круз", "cruze", "каптива", "captiva", "ланос", "lanos", "нексия", "nexia", "матиз", "matiz", "кобальт", "cobalt"),
-    "psa": ("peugeot", "пежо", "citroen", "ситроен", "ситроэн", "берлинго", "berlingo"),
-    "bmw": ("bmw", "бмв", "бумер", "mini cooper", "мини купер"),
-    "mercedes": ("mercedes", "мерседес", "мерс", "спринтер", "sprinter", "виано", "viano", "вито", "vito"),
-    "ford": ("ford", "форд", "фокус", "focus", "мондео", "mondeo", "фиеста", "fiesta", "куга", "kuga", "транзит", "transit"),
-    "mitsubishi": ("mitsubishi", "митсубиси", "митсубиши", "мицубиси", "лансер", "lancer", "аутлендер", "оутлендер", "outlander",
-                   "паджеро", "pajero", "l200", "л200"),
-    "mazda": ("mazda", "мазда", "cx5", "cx-5", "cx 5"),
-    "honda": ("honda", "хонда", "цивик", "civic", "аккорд", "accord", "acura", "акура"),
-    "subaru": ("subaru", "субару", "импреза", "impreza", "форестер", "forester"),
-    "suzuki": ("suzuki", "сузуки", "свифт", "swift", "гранд витара", "grand vitara", "витара", "vitara"),
-    "ssangyong": ("ssangyong", "ssang yong", "сангйонг", "санг йонг", "сан енг", "сан йонг", "сансенг", "саньенг", "санйонг",
-                  "кайрон", "kyron", "актион", "actyon", "рекстон", "rexton", "корандо", "korando"),
-    "volvo": ("volvo", "вольво"),
-    "landrover": ("land rover", "ленд ровер", "ландровер", "range rover", "рэнж ровер", "рендж ровер", "jaguar", "ягуар",
-                  "дискавери", "discovery", "фрилендер", "freelander"),
-    "fiat": ("fiat", "фиат", "альфа ромео", "alfa romeo"),
-    "chery": ("chery", "чери"),
-    "geely": ("geely", "джили"),
-    "haval": ("haval", "хавейл", "хавал", "great wall", "грейт волл"),
-    "changan": ("changan", "чанган"),
-}
+# семейство → (как показать клиенту, марки каталога без пробелов и дефисов) и слова клиента → семейство
+# (русские формы принимают окончания — «тойоте», латинские — как есть): data/podbor_knowledge.json, раздел makes
+FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = K.families()
+_WORDS: dict[str, tuple[str, ...]] = K.family_words()
 
 
 def _compile() -> tuple[re.Pattern, dict[str, str]]:

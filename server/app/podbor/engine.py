@@ -18,6 +18,7 @@ from .. import brands as AB
 from ..abcp import _key, _num
 from . import dialog as D
 from . import emb as EMB
+from . import knowledge as K
 from . import lexicon as LEX
 from . import article as A
 from . import differ as DF
@@ -1822,7 +1823,8 @@ class Engine:
                                 "same": DF.interchangeable(common, total),
                                 "hints": {a["oem"]: hints_a, b["oem"]: hints_b}, "with": {}, "siblings": None,
                                 "vin": bool(a.get("match") and b.get("match")),
-                                "eco": [x["oem"] for x in (a, b) if DF.economy(x["oem"], x["name"])]}
+                                "eco": [x["oem"] for x in (a, b) if DF.economy(x["oem"], x["name"])],
+                                "eco_line": next(filter(None, (DF.economy_line(x["oem"], x["name"]) for x in (a, b))), None)}
         for x in (a, b):
             n = DF.partner(x["name"], x["note"])
             if n:
@@ -2172,15 +2174,11 @@ def _main(q: list[str]) -> str | None:
     h = T.head(q)
     nouns = [s for s in q if s not in T.ADJ and s != h]
     return nouns[0] if h in _BUNDLE and nouns else h
-# Как деталь, которую клиент называет по-своему, может называться в каталоге: сайлентблок у Toyota — «втулка»
-_PART_ALIASES = {T.stem("сайлентблок"): [T.stem("втулка"), "bush", T.stem("сайлент")],
-                 # у VAG пыльник рейки — «Манжета» 1K0423831B (Golf 2009, 12.10): не узнав её, робот уходил в пыльники ШРУСа
-                 T.stem("пыльник"): [T.stem("чехол"), "boot", T.stem("манжета")],
-                 T.stem("отбойник"): [T.stem("буфер"), "bumper"]}
-# Другие названия той же детали — только чтобы найти её в узлах; главное слово детали при этом не проверяется (у Kia прокладки —
-# «ПРОКЛАДОЧНОЕ КОЛЬЦО-…», у VAG — «К-т прокладок…»). Passat 2002: прокладка клапанной крышки — «Уплотнитель» 06A103483D,
-# не узнав её, робот брал герметик
-_NAME_KIN = {T.stem("прокладка"): [T.stem("уплотнитель"), T.stem("уплотнение"), "gasket"]}
+# Как деталь, которую клиент называет по-своему, может называться в каталоге (сайлентблок у Toyota — «втулка»);
+# _NAME_KIN — другие названия только для поиска в узлах, главное слово детали не проверяется (у Kia прокладки —
+# «ПРОКЛАДОЧНОЕ КОЛЬЦО-…»). Оба — data/podbor_knowledge.json
+_PART_ALIASES = K.kin("part_aliases", T.stem)
+_NAME_KIN = K.kin("name_kin", T.stem)
 # Герметик вместо прокладки (VAG D 176 501 A1, Audi AKD 456 000 02, GM sealer): деталь каталога, но не прокладка — объясняем
 _SEALANT = re.compile(r"герметик|sealant|sealer|liquid\s+gasket|жидк\w*\s+прокладк", re.I)
 # Пояснения движка «слово клиента потеряно»: «Шланг» уточним по каталогу отдельно…, Отдельно «усилителя» в каталоге не нашли…
@@ -2933,13 +2931,11 @@ def draft(res: dict, numbers: bool = False, analogs: int = 3) -> str:
                 "Проверим по вашей машине.")
     if st == "vehicle_not_found":
         req = res.get("request") or {}
-        if re.match(r"[ZX]", req.get("ident", "")) and \
-                re.search(r"ssang|санг|саньен|санйон|korando|kyron|actyon|rexton|корандо|кайрон|актион|рекстон",
-                          (req.get("model", "") + " " + " ".join(req.get("chunks", []))), re.I):
-            # SsangYong российской сборки: каталог знает только корейский VIN (начинается на K)
-            return ("У SsangYong российской сборки VIN в каталоге не ищется. Пришлите, пожалуйста, корейский VIN — "
-                    "он начинается на букву K: в ПТС в «Особых отметках» (номер шасси) или на табличке "
-                    "в проёме водительской двери.")
+        said = req.get("model", "") + " " + " ".join(req.get("chunks", []))
+        for ident, words, hint in _VIN_HINTS:
+            # SsangYong российской сборки: каталог знает только корейский VIN (data/podbor_knowledge.json, vin_hints)
+            if ident.match(req.get("ident", "")) and words.search(said):
+                return hint
         if "-" in req.get("ident", ""):
             # Номер кузова (японские машины): Daihatsu L275V-1003754 в каталоге нет — про VIN и 17 знаков тут не к месту
             return ("По этому номеру кузова машина в каталоге не нашлась — возможно, в номере опечатка или такой модели "
@@ -3158,10 +3154,10 @@ def differ_lines(d: dict, called: dict[str, str], numbers: bool = False) -> list
     na, nb = called.get(a, "первый вариант"), called.get(b, "второй вариант")
     out = []
     if d.get("eco") and len(d["eco"]) < 2:
-        # VAG: «JZW…», «…'ECO'» — не загадка: та же деталь от VAG, только бюджетная линейка
-        e = d["eco"][0]
-        out.append(f"{called.get(e, 'Вариант').capitalize()} — линейка VAG Economy: та же деталь от VAG, дешевле, "
-                   f"ставится на то же место.")
+        # VAG: «JZW…», «…'ECO'» — не загадка: та же деталь от VAG, только бюджетная линейка (старые записи — без eco_line)
+        e, eco = d["eco"][0], d.get("eco_line") or DF.ECONOMY[0][2]
+        out.append(f"{called.get(e, 'Вариант').capitalize()} — линейка {eco['line']}: та же деталь от {eco['maker']}, "
+                   f"дешевле, ставится на то же место.")
         return out
     if d.get("siblings"):
         s = d["siblings"]
@@ -3365,10 +3361,8 @@ _ID_MODS = ("главн", "основн")   # слова в названии у�
 _ADJ_DEFAULT = {"топливн": "топливный фильтр", "маслян": "масляный фильтр", "воздушн": "воздушный фильтр",
                 "салон": "салонный фильтр"}   # одно прилагательное без детали: самое частое значение
 
-_CAR_RU = {"рено": "renault", "мерс": "mercedes", "мерседес": "mercedes", "бмв": "bmw", "киа": "kia", "кия": "kia",
-           "хундай": "hyundai", "хендай": "hyundai", "хьюндай": "hyundai", "тойота": "toyota", "шкода": "skoda",
-           "фольксваген": "volkswagen", "фольц": "volkswagen", "ниссан": "nissan", "мицубиси": "mitsubishi",
-           "митсубиси": "mitsubishi", "шевроле": "chevrolet", "ситроен": "citroen", "пежо": "peugeot", "вольво": "volvo"}
+_VIN_HINTS = K.vin_hints()   # «машина не нашлась» с понятной причиной (SsangYong российской сборки)
+_CAR_RU = K.table("car_ru")   # «киа» → kia: марка машины кириллицей (data/podbor_knowledge.json)
 
 
 def _without_car(query: str, v: Vehicle) -> str:

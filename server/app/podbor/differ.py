@@ -11,6 +11,7 @@ import collections
 import re
 from typing import Iterable
 
+from . import knowledge as K
 from . import text as T
 
 # «SHOULD USE T/W 96800088», «USE WITH 1K0…», «ставится вместе с 8K0…»
@@ -97,9 +98,17 @@ def contrast(rows_a: list[dict], rows_b: list[dict], limit: int = 3) -> tuple[li
 _DECIDES = re.compile(r"суппорт|caliper|скоба\s+тормоз", re.I)
 
 
+# Бюджетные линейки производителей (VAG Economy: номера на JZW) — data/podbor_knowledge.json, economy_lines
+ECONOMY = K.economy_lines()
+
+
+def economy_line(oem: str, name: str) -> dict | None:
+    """{"line", "maker"}, если номер или название — из бюджетной линейки производителя: та же деталь, дешевле."""
+    return next((line for num, words, line in ECONOMY if num.match(oem or "") or words.search(name or "")), None)
+
+
 def economy(oem: str, name: str) -> bool:
-    """VAG Economy: номера на JZW и «Economy»/«'ECO'» в названии — та же деталь от VAG, бюджетная линейка."""
-    return bool(re.match(r"JZW", oem or "", re.I) or re.search(r"\beconomy\b|'eco'", name or "", re.I))
+    return economy_line(oem, name) is not None
 
 
 def siblings(details: list, variant_oems: set[str], variant_unit: str) -> tuple[str, int] | None:

@@ -14,12 +14,14 @@ from typing import Any
 from .. import brands as AB
 from ..abcp import _key, _num
 from . import brands as B
+from . import knowledge as K
 from . import text as T
 
 _OEM = B.load()
 _MAKES = {_key(m): b for m, b in _OEM.get("makes", {}).items()}
 _FAMILIES = {_key(b): fam for b, fam in _OEM.get("families", {}).items()}
 _EXTRA = {_key(b): fam for b, fam in _OEM.get("extra", B.EXTRA_FAMILY).items()}
+_FALLBACK = K.table("oem_fallback")   # марки нет ни в справочнике ABCP, ни в выжимке (data/podbor_knowledge.json)
 
 
 def bkey(brand: Any) -> str:
@@ -35,12 +37,7 @@ def oem_brand_for(car_brand: str) -> str:
     hit = _MAKES.get(_key(car_brand))
     if hit:
         return hit
-    b = re.sub(r"[^A-Z]", "", car_brand.upper())
-    if b in ("VOLKSWAGEN", "VW", "AUDI", "SKODA", "SEAT", "CUPRA"):
-        return "VAG"
-    return {"LEXUS": "TOYOTA", "INFINITI": "NISSAN", "MINI": "BMW", "DACIA": "RENAULT",
-            "CHEVROLET": "GENERAL MOTORS", "OPEL": "GENERAL MOTORS", "CADILLAC": "GENERAL MOTORS",
-            "DAEWOO": "GENERAL MOTORS", "MERCEDESBENZ": "MERCEDES", "MERCEDES": "MERCEDES"}.get(b, car_brand.strip())
+    return _FALLBACK["brands"].get(re.sub(r"[^A-Z]", "", car_brand.upper()), car_brand.strip())
 
 
 def original_keys(car_brand: str) -> set[str]:
@@ -49,8 +46,9 @@ def original_keys(car_brand: str) -> set[str]:
     main = oem_brand_for(car_brand)
     keys = {bkey(car_brand), bkey(main)} | AB.get().family(main)
     keys |= {bkey(x) for x in _FAMILIES.get(_key(main), []) + _EXTRA.get(_key(main), [])}
-    if keys & {"HYUNDAI", "KIA", "HYUNDAIKIA"}:
-        keys |= {bkey("Hyundai-KIA"), "HYUNDAIKIA", "MOBIS"}
+    for also in _FALLBACK["also"]:   # оригинал Hyundai/Kia — и под «Hyundai-KIA», и под MOBIS
+        if keys & set(also["if_any"]):
+            keys |= {bkey(b) for b in also["brands"]} | set(also["keys"])
     return {k for k in keys if k}
 
 

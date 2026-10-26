@@ -1,0 +1,1006 @@
+{
+ "_": "Знания о машинах и деталях, которые раньше жили в коде робота (аудит 26.10.2026). Код — только механизмы; новое о марках, каталогах и названиях — сюда. После правки: тесты и rules_check (см. app/podbor/CLAUDE.md).",
+ "makes": {
+  "_": "Семейства марок: как показать клиенту, марки каталога (без пробелов и дефисов), слова клиентов. Русские слова принимают окончания («тойоте»). Используется для сверки «машина в словах ≠ машина по VIN».",
+  "families": {
+   "vag": {
+    "show": "Volkswagen/Audi/Skoda",
+    "catalog": [
+     "VOLKSWAGEN",
+     "VW",
+     "AUDI",
+     "SKODA",
+     "SEAT",
+     "PORSCHE",
+     "CUPRA"
+    ],
+    "words": [
+     "volkswagen",
+     "vw",
+     "фольксваген",
+     "фольц",
+     "audi",
+     "ауди",
+     "skoda",
+     "шкода",
+     "seat",
+     "сеат",
+     "порше",
+     "гольф",
+     "golf",
+     "polo",
+     "тигуан",
+     "tiguan",
+     "пассат",
+     "passat",
+     "джетта",
+     "jetta",
+     "октавия",
+     "octavia",
+     "рапид",
+     "rapid",
+     "йети",
+     "yeti",
+     "суперб",
+     "superb",
+     "фабия",
+     "fabia"
+    ]
+   },
+   "toyota": {
+    "show": "Toyota/Lexus",
+    "catalog": [
+     "TOYOTA",
+     "LEXUS"
+    ],
+    "words": [
+     "toyota",
+     "тойота",
+     "тоёта",
+     "lexus",
+     "лексус",
+     "камри",
+     "camry",
+     "королла",
+     "corolla",
+     "рав4",
+     "rav4",
+     "прадо",
+     "prado",
+     "ленд крузер",
+     "land cruiser",
+     "виста",
+     "аурис",
+     "auris",
+     "авенсис",
+     "avensis",
+     "хайлендер",
+     "highlander"
+    ]
+   },
+   "hk": {
+    "show": "Hyundai/Kia",
+    "catalog": [
+     "HYUNDAI",
+     "KIA",
+     "GENESIS"
+    ],
+    "words": [
+     "hyundai",
+     "хундай",
+     "хендай",
+     "хёндай",
+     "хьюндай",
+     "kia",
+     "киа",
+     "кия",
+     "солярис",
+     "solaris",
+     "крета",
+     "creta",
+     "элантра",
+     "elantra",
+     "туксон",
+     "tucson",
+     "санта фе",
+     "santa fe",
+     "рио",
+     "rio",
+     "ceed",
+     "спортейдж",
+     "sportage",
+     "соренто",
+     "sorento",
+     "пиканто",
+     "picanto",
+     "церато",
+     "cerato",
+     "оптима",
+     "optima"
+    ]
+   },
+   "nissan": {
+    "show": "Nissan/Infiniti",
+    "catalog": [
+     "NISSAN",
+     "INFINITI"
+    ],
+    "words": [
+     "nissan",
+     "ниссан",
+     "infiniti",
+     "инфинити",
+     "х трейл",
+     "x trail",
+     "x-trail",
+     "кашкай",
+     "qashqai",
+     "juke",
+     "альмера",
+     "almera",
+     "теана",
+     "teana",
+     "микра",
+     "micra",
+     "тиида",
+     "tiida",
+     "мурано",
+     "murano"
+    ]
+   },
+   "renault": {
+    "show": "Renault",
+    "catalog": [
+     "RENAULT",
+     "DACIA"
+    ],
+    "words": [
+     "renault",
+     "рено",
+     "логан",
+     "logan",
+     "сандеро",
+     "sandero",
+     "дастер",
+     "duster",
+     "меган",
+     "megane",
+     "клио",
+     "clio",
+     "каптур",
+     "kaptur",
+     "флюенс",
+     "fluence",
+     "трафик",
+     "traffic"
+    ]
+   },
+   "gm": {
+    "show": "Opel/Chevrolet",
+    "catalog": [
+     "OPEL",
+     "VAUXHALL",
+     "CHEVROLET",
+     "DAEWOO",
+     "CADILLAC",
+     "GM"
+    ],
+    "words": [
+     "opel",
+     "опель",
+     "chevrolet",
+     "шевроле",
+     "шевролет",
+     "daewoo",
+     "дэу",
+     "деу",
+     "астра",
+     "astra",
+     "корса",
+     "corsa",
+     "вектра",
+     "vectra",
+     "зафира",
+     "zafira",
+     "мерива",
+     "meriva",
+     "инсигния",
+     "insignia",
+     "лачетти",
+     "lacetti",
+     "авео",
+     "aveo",
+     "круз",
+     "cruze",
+     "каптива",
+     "captiva",
+     "ланос",
+     "lanos",
+     "нексия",
+     "nexia",
+     "матиз",
+     "matiz",
+     "кобальт",
+     "cobalt"
+    ]
+   },
+   "psa": {
+    "show": "Peugeot/Citroen",
+    "catalog": [
+     "PEUGEOT",
+     "CITROEN",
+     "DS"
+    ],
+    "words": [
+     "peugeot",
+     "пежо",
+     "citroen",
+     "ситроен",
+     "ситроэн",
+     "берлинго",
+     "berlingo"
+    ]
+   },
+   "bmw": {
+    "show": "BMW",
+    "catalog": [
+     "BMW",
+     "MINI"
+    ],
+    "words": [
+     "bmw",
+     "бмв",
+     "бумер",
+     "mini cooper",
+     "мини купер"
+    ]
+   },
+   "mercedes": {
+    "show": "Mercedes-Benz",
+    "catalog": [
+     "MERCEDES",
+     "MERCEDESBENZ",
+     "SMART"
+    ],
+    "words": [
+     "mercedes",
+     "мерседес",
+     "мерс",
+     "спринтер",
+     "sprinter",
+     "виано",
+     "viano",
+     "вито",
+     "vito"
+    ]
+   },
+   "ford": {
+    "show": "Ford",
+    "catalog": [
+     "FORD"
+    ],
+    "words": [
+     "ford",
+     "форд",
+     "фокус",
+     "focus",
+     "мондео",
+     "mondeo",
+     "фиеста",
+     "fiesta",
+     "куга",
+     "kuga",
+     "транзит",
+     "transit"
+    ]
+   },
+   "mitsubishi": {
+    "show": "Mitsubishi",
+    "catalog": [
+     "MITSUBISHI"
+    ],
+    "words": [
+     "mitsubishi",
+     "митсубиси",
+     "митсубиши",
+     "мицубиси",
+     "лансер",
+     "lancer",
+     "аутлендер",
+     "оутлендер",
+     "outlander",
+     "паджеро",
+     "pajero",
+     "l200",
+     "л200"
+    ]
+   },
+   "mazda": {
+    "show": "Mazda",
+    "catalog": [
+     "MAZDA"
+    ],
+    "words": [
+     "mazda",
+     "мазда",
+     "cx5",
+     "cx-5",
+     "cx 5"
+    ]
+   },
+   "honda": {
+    "show": "Honda",
+    "catalog": [
+     "HONDA",
+     "ACURA"
+    ],
+    "words": [
+     "honda",
+     "хонда",
+     "цивик",
+     "civic",
+     "аккорд",
+     "accord",
+     "acura",
+     "акура"
+    ]
+   },
+   "subaru": {
+    "show": "Subaru",
+    "catalog": [
+     "SUBARU"
+    ],
+    "words": [
+     "subaru",
+     "субару",
+     "импреза",
+     "impreza",
+     "форестер",
+     "forester"
+    ]
+   },
+   "suzuki": {
+    "show": "Suzuki",
+    "catalog": [
+     "SUZUKI"
+    ],
+    "words": [
+     "suzuki",
+     "сузуки",
+     "свифт",
+     "swift",
+     "гранд витара",
+     "grand vitara",
+     "витара",
+     "vitara"
+    ]
+   },
+   "ssangyong": {
+    "show": "SsangYong",
+    "catalog": [
+     "SSANGYONG"
+    ],
+    "words": [
+     "ssangyong",
+     "ssang yong",
+     "сангйонг",
+     "санг йонг",
+     "сан енг",
+     "сан йонг",
+     "сансенг",
+     "саньенг",
+     "санйонг",
+     "кайрон",
+     "kyron",
+     "актион",
+     "actyon",
+     "рекстон",
+     "rexton",
+     "корандо",
+     "korando"
+    ]
+   },
+   "volvo": {
+    "show": "Volvo",
+    "catalog": [
+     "VOLVO"
+    ],
+    "words": [
+     "volvo",
+     "вольво"
+    ]
+   },
+   "landrover": {
+    "show": "Land Rover/Jaguar",
+    "catalog": [
+     "LANDROVER",
+     "JAGUAR",
+     "RANGEROVER"
+    ],
+    "words": [
+     "land rover",
+     "ленд ровер",
+     "ландровер",
+     "range rover",
+     "рэнж ровер",
+     "рендж ровер",
+     "jaguar",
+     "ягуар",
+     "дискавери",
+     "discovery",
+     "фрилендер",
+     "freelander"
+    ]
+   },
+   "fiat": {
+    "show": "Fiat/Alfa Romeo",
+    "catalog": [
+     "FIAT",
+     "ALFAROMEO",
+     "LANCIA",
+     "ABARTH"
+    ],
+    "words": [
+     "fiat",
+     "фиат",
+     "альфа ромео",
+     "alfa romeo"
+    ]
+   },
+   "chery": {
+    "show": "Chery",
+    "catalog": [
+     "CHERY"
+    ],
+    "words": [
+     "chery",
+     "чери"
+    ]
+   },
+   "geely": {
+    "show": "Geely",
+    "catalog": [
+     "GEELY"
+    ],
+    "words": [
+     "geely",
+     "джили"
+    ]
+   },
+   "haval": {
+    "show": "Haval/Great Wall",
+    "catalog": [
+     "HAVAL",
+     "GREATWALL"
+    ],
+    "words": [
+     "haval",
+     "хавейл",
+     "хавал",
+     "great wall",
+     "грейт волл"
+    ]
+   },
+   "changan": {
+    "show": "Changan",
+    "catalog": [
+     "CHANGAN"
+    ],
+    "words": [
+     "changan",
+     "чанган"
+    ]
+   }
+  }
+ },
+ "make_names": {
+  "_": "Как пишут марку люди, если .title() исказит: SSANGYONG → SsangYong",
+  "SSANGYONG": "SsangYong",
+  "MERCEDES-BENZ": "Mercedes-Benz",
+  "LANDROVER": "Land Rover",
+  "ALFAROMEO": "Alfa Romeo",
+  "GREATWALL": "Great Wall",
+  "DS": "DS",
+  "MG": "MG",
+  "GMC": "GMC"
+ },
+ "car_ru": {
+  "_": "Марка кириллицей → латиницей: убрать марку машины из фразы клиента («свечи для киа пиканто»)",
+  "рено": "renault",
+  "мерс": "mercedes",
+  "мерседес": "mercedes",
+  "бмв": "bmw",
+  "киа": "kia",
+  "кия": "kia",
+  "хундай": "hyundai",
+  "хендай": "hyundai",
+  "хьюндай": "hyundai",
+  "тойота": "toyota",
+  "шкода": "skoda",
+  "фольксваген": "volkswagen",
+  "фольц": "volkswagen",
+  "ниссан": "nissan",
+  "мицубиси": "mitsubishi",
+  "митсубиси": "mitsubishi",
+  "шевроле": "chevrolet",
+  "ситроен": "citroen",
+  "пежо": "peugeot",
+  "вольво": "volvo"
+ },
+ "part_brands_ru": {
+  "_": "Фирмы запчастей кириллицей, как пишут в переписке → бренд ABCP",
+  "бош": "BOSCH",
+  "хелла": "HELLA",
+  "хела": "HELLA",
+  "ман": "MANN",
+  "манн": "MANN",
+  "махле": "MAHLE",
+  "мале": "MAHLE",
+  "нгк": "NGK",
+  "денсо": "DENSO",
+  "лемфордер": "LEMFORDER",
+  "лемфёрдер": "LEMFORDER",
+  "сакс": "SACHS",
+  "фебест": "FEBEST",
+  "зеккерт": "ZEKKERT",
+  "зекерт": "ZEKKERT",
+  "кайаба": "KYB",
+  "каяба": "KYB",
+  "кйб": "KYB",
+  "гейтс": "GATES",
+  "контитех": "CONTITECH",
+  "скф": "SKF",
+  "фаг": "FAG",
+  "ина": "INA",
+  "трв": "TRW",
+  "брембо": "BREMBO",
+  "ферадо": "FERODO",
+  "мейл": "MEYLE",
+  "майле": "MEYLE",
+  "сваг": "SWAG",
+  "феби": "FEBI",
+  "кронер": "KRONER",
+  "лузар": "LUZAR",
+  "маршал": "MARSHALL",
+  "стеллокс": "STELLOX",
+  "тойота": "TOYOTA",
+  "триали": "TRIALLI",
+  "триалли": "TRIALLI",
+  "миля": "MILES",
+  "майлз": "MILES",
+  "майлс": "MILES",
+  "патрон": "PATRON",
+  "линкс": "LYNXAUTO",
+  "азуми": "AZUMI",
+  "сангсин": "SANGSIN",
+  "кортеко": "CORTECO",
+  "викторрейнц": "VICTOR REINZ",
+  "рейнц": "VICTOR REINZ",
+  "мобис": "MOBIS",
+  "филтрон": "FILTRON",
+  "фильтрон": "FILTRON",
+  "кнехт": "KNECHT",
+  "лукойл": "LUKOIL",
+  "шелл": "SHELL",
+  "мотул": "MOTUL",
+  "суфикс": "SUFIX",
+  "пиленга": "PILENGA",
+  "элринг": "ELRING",
+  "полкар": "POLCAR",
+  "циммерман": "ZIMMERMANN",
+  "зимерман": "ZIMMERMANN",
+  "кашияма": "KASHIYAMA",
+  "нагамочи": "SB NAGAMOCHI",
+  "нагомочи": "SB NAGAMOCHI",
+  "мапко": "MAPCO",
+  "депо": "DEPO",
+  "тайк": "TYC",
+  "абсел": "ABSEL",
+  "квадро": "QUATTRO FRENI",
+  "кватро": "QUATTRO FRENI",
+  "кваттро": "QUATTRO FRENI",
+  "сакура": "SAKURA",
+  "мотюль": "MOTUL",
+  "масума": "MASUMA",
+  "джикиу": "JIKIU",
+  "жикиу": "JIKIU",
+  "тацуми": "TATSUMI",
+  "татсуми": "TATSUMI",
+  "бендикс": "BENDIX",
+  "текнорот": "TEKNOROT",
+  "сасик": "SASIC",
+  "валео": "VALEO",
+  "аисин": "AISIN",
+  "айсин": "AISIN",
+  "лукас": "LUCAS",
+  "текстар": "TEXTAR",
+  "нипартс": "NIPPARTS",
+  "зентпартс": "ZENTPARTS",
+  "фрей": "FREY",
+  "юнио": "UNIO",
+  "унио": "UNIO",
+  "нордфил": "NORDFIL",
+  "свернов": "SVERNOV",
+  "мэйле": "MEYLE",
+  "мейле": "MEYLE",
+  "ниссенс": "NISSENS",
+  "херт": "HERTH+BUSS JAKOPARTS",
+  "блюпринт": "BLUE PRINT",
+  "блю": "BLUE PRINT"
+ },
+ "catalog_renames": {
+  "_": "Машинный перевод Laximo, по которому деталь не найти словами клиента. name — регулярка названия (без учёта регистра), oem — регулярка номера (только цифры и латиница), to — чем заменить найденное.",
+  "rules": [
+   {
+    "name": "^Крепление заднего моста",
+    "oem": "^4230[45]",
+    "to": "Задний кулак (цапфа)",
+    "why": "Toyota «CARRIER SUB-ASSY, RR AXLE» (42304/42305) — задняя цапфа, в неё запрессован «плавающий сайлентблок»; перевод Laximo — «Крепление заднего моста, правый (в подсборе)»"
+   },
+   {
+    "name": "^КРЫШКА В СБОРЕ-ПЕРЕДН\\.?\\s*БАМПЕР.*",
+    "oem": "^865",
+    "to": "Бампер передний (облицовка в сборе)",
+    "why": "Hyundai/Kia «COVER ASSY-FRONT BUMPER» — это и есть бампер (облицовка), а «крышка» роботу — мелочь: на «бампер передний» он показывал гаситель и выступ, а сам бампер прятал"
+   },
+   {
+    "name": "^КРЫШКА В СБОРЕ-ЗАДН\\.?\\s*БАМПЕР.*",
+    "oem": "^866",
+    "to": "Бампер задний (облицовка в сборе)",
+    "why": "Hyundai/Kia «COVER ASSY-REAR BUMPER» — задний бампер"
+   },
+   {
+    "name": "^OUT OF PRODUCTION FRONT BUMPER$",
+    "oem": ".",
+    "to": "Бампер передний (снят с производства)",
+    "why": "Peugeot 307: сам бампер — по-английски («OUT OF PRODUCTION FRONT BUMPER», 7401 T4), русский поиск его не видел"
+   },
+   {
+    "name": "^OUT OF PRODUCTION REAR BUMPER$",
+    "oem": ".",
+    "to": "Бампер задний (снят с производства)",
+    "why": "Peugeot 307: задний бампер по-английски"
+   },
+   {
+    "name": "^FRONT BUMPER$",
+    "oem": ".",
+    "to": "Бампер передний",
+    "why": "Бампер по-английски"
+   },
+   {
+    "name": "^REAR BUMPER$",
+    "oem": ".",
+    "to": "Бампер задний",
+    "why": "Бампер по-английски"
+   },
+   {
+    "name": "^КРЫШКА ТОРМОЗНОГО СУППОРТА",
+    "oem": "^440\\d",
+    "to": "Суппорт тормозной",
+    "why": "Peugeot: 4404 66/67 — задние суппорты, а перевод — «Крышка тормозного суппорта»"
+   },
+   {
+    "name": "^Тяга рулевого механизма \\(в сборе\\)",
+    "oem": "^455[01]0",
+    "to": "Рейка рулевая (в сборе)",
+    "why": "Toyota «LINK ASSY, STEERING» (45500/45510) — рулевая рейка в сборе, а перевод — «Тяга рулевого механизма»"
+   }
+  ]
+ },
+ "vin_hints": {
+  "_": "Машина по VIN не нашлась, но по номеру и словам клиента понятно почему — подсказка клиенту. ident — регулярка начала номера, words — регулярка по модели и словам заявки (без учёта регистра).",
+  "rules": [
+   {
+    "ident": "[ZX]",
+    "words": "ssang|санг|саньен|санйон|korando|kyron|actyon|rexton|корандо|кайрон|актион|рекстон",
+    "text": "У SsangYong российской сборки VIN в каталоге не ищется. Пришлите, пожалуйста, корейский VIN — он начинается на букву K: в ПТС в «Особых отметках» (номер шасси) или на табличке в проёме водительской двери.",
+    "why": "SsangYong российской сборки: каталог знает только корейский VIN (начинается на K)"
+   }
+  ]
+ },
+ "part_aliases": {
+  "_": "Как деталь, которую клиент называет по-своему, может называться в каталоге (слова без окончаний не нужны — основа берётся сама). Главное слово найденной детали проверяется.",
+  "сайлентблок": {
+   "also": [
+    "втулка",
+    "bush",
+    "сайлент"
+   ],
+   "why": "сайлентблок у Toyota — «втулка»"
+  },
+  "пыльник": {
+   "also": [
+    "чехол",
+    "boot",
+    "манжета"
+   ],
+   "why": "у VAG пыльник рейки — «Манжета» 1K0423831B (Golf 2009, 12.10): не узнав её, робот уходил в пыльники ШРУСа"
+  },
+  "отбойник": {
+   "also": [
+    "буфер",
+    "bumper"
+   ],
+   "why": ""
+  }
+ },
+ "name_kin": {
+  "_": "Другие названия той же детали — только чтобы найти её в узлах; главное слово детали при этом не проверяется.",
+  "прокладка": {
+   "also": [
+    "уплотнитель",
+    "уплотнение",
+    "gasket"
+   ],
+   "why": "у Kia прокладки — «ПРОКЛАДОЧНОЕ КОЛЬЦО-…», у VAG — «К-т прокладок…». Passat 2002: прокладка клапанной крышки — «Уплотнитель» 06A103483D, не узнав её, робот брал герметик"
+  }
+ },
+ "wizard_brands": {
+  "_": "Машина без VIN в каталоге (мастер подбора Laximo): марка в словах клиента → марка в listCatalogs. words — регулярка по тексту в нижнем регистре, проверяются по порядку, первое совпадение решает.",
+  "rules": [
+   {
+    "words": "шкод|skoda",
+    "brand": "SKODA"
+   },
+   {
+    "words": "фольксваген|вольксваген|фольц|volkswagen|\\bvw\\b",
+    "brand": "VOLKSWAGEN"
+   },
+   {
+    "words": "рено|renault",
+    "brand": "RENAULT"
+   },
+   {
+    "words": "хенд[аэе]й|хундай|хёнд|хендэ|hyundai",
+    "brand": "HYUNDAI"
+   },
+   {
+    "words": "\\bки[ая]\\b|\\bkia\\b",
+    "brand": "KIA"
+   },
+   {
+    "words": "ниссан|nissan",
+    "brand": "NISSAN"
+   },
+   {
+    "words": "тойот|тайот|toyota",
+    "brand": "TOYOTA"
+   },
+   {
+    "words": "лексус|lexus",
+    "brand": "LEXUS"
+   },
+   {
+    "words": "мазд|mazda",
+    "brand": "MAZDA"
+   },
+   {
+    "words": "митсубиси|мицубиси|митсубиши|mitsubishi",
+    "brand": "MITSUBISHI"
+   },
+   {
+    "words": "мерседес|мерс\\b|mercedes",
+    "brand": "MERCEDES-BENZ"
+   },
+   {
+    "words": "\\bбмв\\b|bmw",
+    "brand": "BMW"
+   },
+   {
+    "words": "\\bауди\\b|audi",
+    "brand": "AUDI"
+   },
+   {
+    "words": "\\bфорд|ford",
+    "brand": "FORD"
+   },
+   {
+    "words": "шевроле|chevrolet",
+    "brand": "CHEVROLET"
+   },
+   {
+    "words": "опел[ья]|opel",
+    "brand": "OPEL"
+   },
+   {
+    "words": "пежо|peugeot",
+    "brand": "PEUGEOT"
+   },
+   {
+    "words": "ситроен|citro[eë]n",
+    "brand": "CITROEN"
+   },
+   {
+    "words": "хонд|honda",
+    "brand": "HONDA"
+   },
+   {
+    "words": "субару|subaru",
+    "brand": "SUBARU"
+   },
+   {
+    "words": "сузуки|suzuki",
+    "brand": "SUZUKI"
+   },
+   {
+    "words": "вольво|volvo",
+    "brand": "VOLVO"
+   },
+   {
+    "words": "санг\\s*йонг|ссанг|саньенг|ssang",
+    "brand": "SSANGYONG"
+   },
+   {
+    "words": "инфинити|infiniti",
+    "brand": "INFINITI"
+   },
+   {
+    "words": "джип|jeep",
+    "brand": "JEEP"
+   },
+   {
+    "words": "ленд\\s*ровер|land\\s*rover",
+    "brand": "LAND ROVER"
+   },
+   {
+    "words": "дэу|daewoo|деу\\b",
+    "brand": "DAEWOO"
+   },
+   {
+    "words": "сеат|seat\\b",
+    "brand": "SEAT"
+   },
+   {
+    "words": "фиат|fiat",
+    "brand": "FIAT"
+   },
+   {
+    "words": "додж|dodge",
+    "brand": "DODGE"
+   },
+   {
+    "words": "крайслер|chrysler",
+    "brand": "CHRYSLER"
+   },
+   {
+    "words": "порше|porsche",
+    "brand": "PORSCHE"
+   },
+   {
+    "words": "ягуар|jaguar",
+    "brand": "JAGUAR"
+   },
+   {
+    "words": "исузу|isuzu",
+    "brand": "ISUZU"
+   },
+   {
+    "words": "дач[ия]|dacia",
+    "brand": "DACIA"
+   },
+   {
+    "words": "\\bмини\\b|\\bmini\\b",
+    "brand": "MINI"
+   }
+  ]
+ },
+ "wmi_brands": {
+  "_": "Начало VIN (производитель) → марки, чьи каталоги пробуем, когда клиент марку не назвал («бампер на карок»): заводы РФ и СНГ, которые Laximo по VIN знает хуже всего. Марок несколько — модель решает, в каком каталоге искать.",
+  "XW8": [
+   "VOLKSWAGEN",
+   "SKODA"
+  ],
+  "XW7": [
+   "TOYOTA"
+  ],
+  "X7L": [
+   "RENAULT"
+  ],
+  "X7M": [
+   "HYUNDAI"
+  ],
+  "XWE": [
+   "KIA",
+   "HYUNDAI"
+  ],
+  "Z94": [
+   "HYUNDAI",
+   "KIA"
+  ],
+  "XUU": [
+   "CHEVROLET"
+  ],
+  "XWB": [
+   "DAEWOO",
+   "CHEVROLET"
+  ],
+  "X9F": [
+   "FORD"
+  ],
+  "Z6F": [
+   "FORD"
+  ],
+  "XUF": [
+   "CHEVROLET",
+   "OPEL"
+  ],
+  "X4X": [
+   "BMW"
+  ],
+  "XMC": [
+   "MITSUBISHI"
+  ],
+  "Z8N": [
+   "NISSAN"
+  ],
+  "Z8T": [
+   "PEUGEOT",
+   "CITROEN"
+  ],
+  "WVW": [
+   "VOLKSWAGEN"
+  ],
+  "WV1": [
+   "VOLKSWAGEN"
+  ],
+  "WV2": [
+   "VOLKSWAGEN"
+  ],
+  "TMB": [
+   "SKODA"
+  ],
+  "WAU": [
+   "AUDI"
+  ]
+ },
+ "oem_fallback": {
+  "_": "Под каким брендом ABCP ведёт оригинал марки, если её нет ни в справочнике брендов ABCP, ни в oem_brands.json (как oemBrandFor в приложении). Ключ — марка только латиницей без пробелов и дефисов. also — бренды оригинала, которые добавляются всегда, если в группе есть марка из if_any.",
+  "brands": {
+   "VOLKSWAGEN": "VAG",
+   "VW": "VAG",
+   "AUDI": "VAG",
+   "SKODA": "VAG",
+   "SEAT": "VAG",
+   "CUPRA": "VAG",
+   "LEXUS": "TOYOTA",
+   "INFINITI": "NISSAN",
+   "MINI": "BMW",
+   "DACIA": "RENAULT",
+   "CHEVROLET": "GENERAL MOTORS",
+   "OPEL": "GENERAL MOTORS",
+   "CADILLAC": "GENERAL MOTORS",
+   "DAEWOO": "GENERAL MOTORS",
+   "MERCEDESBENZ": "MERCEDES",
+   "MERCEDES": "MERCEDES"
+  },
+  "also": [
+   {
+    "if_any": [
+     "HYUNDAI",
+     "KIA",
+     "HYUNDAIKIA"
+    ],
+    "brands": [
+     "Hyundai-KIA"
+    ],
+    "keys": [
+     "HYUNDAIKIA",
+     "MOBIS"
+    ],
+    "why": "оригинал Hyundai/Kia продаётся и под «Hyundai-KIA», и под MOBIS"
+   }
+  ]
+ },
+ "economy_lines": {
+  "_": "Бюджетная линейка самого производителя — та же деталь, дешевле, ставится на то же место. oem — регулярка начала номера, name — регулярка названия (обе без учёта регистра; хватает любой). line и maker — для текста клиенту.",
+  "rules": [
+   {
+    "oem": "JZW",
+    "name": "\\beconomy\\b|'eco'",
+    "line": "VAG Economy",
+    "maker": "VAG",
+    "why": "VAG: номера на JZW и «Economy»/«'ECO'» в названии"
+   }
+  ]
+ }
+}

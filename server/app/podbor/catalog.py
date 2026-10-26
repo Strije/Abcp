@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from . import knowledge as K
 from . import text as T
 from . import wizard as W
 
@@ -181,23 +182,9 @@ def _specs(o: dict) -> str:
                       if isinstance(a, dict) and a.get("key") not in ("amount",) and a.get("value"))
 
 
-# Машинный перевод Laximo, по которому деталь не найти словами клиента: у Toyota «CARRIER SUB-ASSY, RR AXLE»
-# (42304/42305 — задняя цапфа, в неё запрессован «плавающий сайлентблок») переведено как
-# «Крепление заднего моста, правый (в подсборе)»
-_RENAME = [(re.compile(r"^Крепление заднего моста", re.I), re.compile(r"^4230[45]"), "Задний кулак (цапфа)"),
-           # Hyundai/Kia «COVER ASSY-FRONT BUMPER» — это и есть бампер (облицовка), а «крышка» роботу — мелочь:
-           # на «бампер передний» он показывал гаситель и выступ, а сам бампер прятал
-           (re.compile(r"^КРЫШКА В СБОРЕ-ПЕРЕДН\.?\s*БАМПЕР.*", re.I), re.compile(r"^865"), "Бампер передний (облицовка в сборе)"),
-           (re.compile(r"^КРЫШКА В СБОРЕ-ЗАДН\.?\s*БАМПЕР.*", re.I), re.compile(r"^866"), "Бампер задний (облицовка в сборе)"),
-           # Peugeot 307: сам бампер — по-английски («OUT OF PRODUCTION FRONT BUMPER», 7401 T4), русский поиск его не видел
-           (re.compile(r"^OUT OF PRODUCTION FRONT BUMPER$", re.I), re.compile(r"."), "Бампер передний (снят с производства)"),
-           (re.compile(r"^OUT OF PRODUCTION REAR BUMPER$", re.I), re.compile(r"."), "Бампер задний (снят с производства)"),
-           (re.compile(r"^FRONT BUMPER$", re.I), re.compile(r"."), "Бампер передний"),
-           (re.compile(r"^REAR BUMPER$", re.I), re.compile(r"."), "Бампер задний"),
-           # Peugeot: 4404 66/67 — задние суппорты, а перевод — «Крышка тормозного суппорта»
-           (re.compile(r"^КРЫШКА ТОРМОЗНОГО СУППОРТА", re.I), re.compile(r"^440\d"), "Суппорт тормозной"),
-           # Toyota «LINK ASSY, STEERING» (45500/45510) — рулевая рейка в сборе, а перевод — «Тяга рулевого механизма»
-           (re.compile(r"^Тяга рулевого механизма \(в сборе\)", re.I), re.compile(r"^455[01]0"), "Рейка рулевая (в сборе)")]
+# Машинный перевод Laximo, по которому деталь не найти словами клиента (у Toyota 42304/42305 «CARRIER SUB-ASSY, RR AXLE» —
+# задняя цапфа — переведено «Крепление заднего моста»): data/podbor_knowledge.json, раздел catalog_renames
+_RENAME = K.renames()
 
 
 def _rename(name: str, oem: str) -> str:
@@ -472,9 +459,8 @@ class TreeIndex:
 Call = Callable[[str, dict], Awaitable[Any]]
 
 
-# Как марки пишут люди, если «.title()» исказит: SSANGYONG → SsangYong, не Ssangyong
-_MAKE_NAMES = {"SSANGYONG": "SsangYong", "MERCEDES-BENZ": "Mercedes-Benz", "LANDROVER": "Land Rover",
-               "ALFAROMEO": "Alfa Romeo", "GREATWALL": "Great Wall", "DS": "DS", "MG": "MG", "GMC": "GMC"}
+# Как марки пишут люди, если «.title()» исказит: SSANGYONG → SsangYong (data/podbor_knowledge.json, make_names)
+_MAKE_NAMES = K.table("make_names")
 
 
 def _safe(s: str) -> str:

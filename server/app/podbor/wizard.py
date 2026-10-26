@@ -8,21 +8,10 @@
 import difflib
 import re
 
-# Марка в словах клиента → марка в списке каталогов Laximo (listCatalogs, поле brand)
-_BRANDS: list[tuple[str, str]] = [
-    (r"шкод|skoda", "SKODA"), (r"фольксваген|вольксваген|фольц|volkswagen|\bvw\b", "VOLKSWAGEN"),
-    (r"рено|renault", "RENAULT"), (r"хенд[аэе]й|хундай|хёнд|хендэ|hyundai", "HYUNDAI"), (r"\bки[ая]\b|\bkia\b", "KIA"),
-    (r"ниссан|nissan", "NISSAN"), (r"тойот|тайот|toyota", "TOYOTA"), (r"лексус|lexus", "LEXUS"),
-    (r"мазд|mazda", "MAZDA"), (r"митсубиси|мицубиси|митсубиши|mitsubishi", "MITSUBISHI"),
-    (r"мерседес|мерс\b|mercedes", "MERCEDES-BENZ"), (r"\bбмв\b|bmw", "BMW"), (r"\bауди\b|audi", "AUDI"),
-    (r"\bфорд|ford", "FORD"), (r"шевроле|chevrolet", "CHEVROLET"), (r"опел[ья]|opel", "OPEL"),
-    (r"пежо|peugeot", "PEUGEOT"), (r"ситроен|citro[eë]n", "CITROEN"), (r"хонд|honda", "HONDA"),
-    (r"субару|subaru", "SUBARU"), (r"сузуки|suzuki", "SUZUKI"), (r"вольво|volvo", "VOLVO"),
-    (r"санг\s*йонг|ссанг|саньенг|ssang", "SSANGYONG"), (r"инфинити|infiniti", "INFINITI"), (r"джип|jeep", "JEEP"),
-    (r"ленд\s*ровер|land\s*rover", "LAND ROVER"), (r"дэу|daewoo|деу\b", "DAEWOO"), (r"сеат|seat\b", "SEAT"),
-    (r"фиат|fiat", "FIAT"), (r"додж|dodge", "DODGE"), (r"крайслер|chrysler", "CHRYSLER"), (r"порше|porsche", "PORSCHE"),
-    (r"ягуар|jaguar", "JAGUAR"), (r"исузу|isuzu", "ISUZU"), (r"дач[ия]|dacia", "DACIA"), (r"\bмини\b|\bmini\b", "MINI"),
-]
+from . import knowledge as K
+
+# Марка в словах клиента → марка в списке каталогов Laximo (listCatalogs, поле brand): data/podbor_knowledge.json
+_BRANDS: list[tuple[str, str]] = [(r["words"], r["brand"]) for r in K.rules("wizard_brands")]
 _NOISE = {"подойдёт", "подойдет", "подходит", "ли", "для", "на", "мой", "мою", "авто", "автомобиль", "машину", "машина",
           "vin", "frame", "здравствуйте", "добрый", "день", "вечер", "утро", "нужен", "нужна", "нужно", "есть", "можно",
           "рестайлинг", "дорест", "дорестайлинг", "год", "года", "лет", "объем", "объём", "двигатель", "дизель", "бензин",
@@ -55,13 +44,8 @@ def brand_of(text: str) -> str:
 
 
 # Начало VIN (производитель) → марки, чьи каталоги пробуем, когда клиент марку не назвал («бампер на карок»):
-# заводы РФ и СНГ, которые Laximo по VIN знает хуже всего. Марок несколько — модель решает, в каком каталоге искать.
-_WMI_BRANDS = {
-    "XW8": ["VOLKSWAGEN", "SKODA"], "XW7": ["TOYOTA"], "X7L": ["RENAULT"], "X7M": ["HYUNDAI"], "XWE": ["KIA", "HYUNDAI"],
-    "Z94": ["HYUNDAI", "KIA"], "XUU": ["CHEVROLET"], "XWB": ["DAEWOO", "CHEVROLET"], "X9F": ["FORD"], "Z6F": ["FORD"],
-    "XUF": ["CHEVROLET", "OPEL"], "X4X": ["BMW"], "XMC": ["MITSUBISHI"], "Z8N": ["NISSAN"], "Z8T": ["PEUGEOT", "CITROEN"],
-    "WVW": ["VOLKSWAGEN"], "WV1": ["VOLKSWAGEN"], "WV2": ["VOLKSWAGEN"], "TMB": ["SKODA"], "WAU": ["AUDI"],
-}
+# заводы РФ и СНГ, которые Laximo по VIN знает хуже всего (data/podbor_knowledge.json, wmi_brands)
+_WMI_BRANDS = K.table("wmi_brands")
 
 
 def wmi_brands(vin: str) -> list[str]:
