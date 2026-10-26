@@ -9,7 +9,7 @@
   и `direct` (раздача напрямую, автообновление с нашего сервера). Пакет `ru.avtodrug92.app`.
 - Сервер (FastAPI: всё, что ABCP даёт только API-администратору, прокси Laximo, push RuStore, робот подбора,
   ИИ-помощник Кирилл, боты) с 27.10.2026 — в **закрытом** репозитории на нашем VPS:
-  `ssh://root@109.73.199.217/srv/git/avtodrug-server.git`, клон на ПК — `Documents\GitHubvtodrug-server`
+  `ssh://root@109.73.199.217/srv/git/avtodrug-server.git`, клон на ПК — `Documents/GitHub/avtodrug-server`
   (свой CLAUDE.md там). GitHub не даёт закрыть репозиторий из Крыма — код сервера сюда больше НЕ кладём.
 - Секретов в репозитории НЕТ и быть не должно (он публичный): пароли и токены — только
   в `/etc/avtodrug-api.env` на сервере и в секретах GitHub.
