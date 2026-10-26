@@ -70,6 +70,7 @@ DECODER = """Ты — опытный мастер-приёмщик автосе�
 - не деталь (вопрос о цене, сроке, оплате, доставке, приветствие, «спасибо») — в not_parts;
 - неясно, какая именно деталь («диски» — тормозные или колёсные?) — вопрос в questions, а не позиция;
 - клиент просит именно отдельно, не в сборе («сайлентблоки отдельно», «только шаровую, без рычага») — separate=true;
+- фирму детали («колодки nagamochi», «фильтр Mann») — в brand, а в need — только сама деталь;
 - в разговоре выше ты уже задавал вопрос, а клиент на него отвечает («диски тормозные») — это уточнение к прошлой
   просьбе: верни позиции с учётом ответа, вопрос не повторяй.
 Сначала определи intent — чего клиент хочет ЭТИМ сообщением:
@@ -97,9 +98,10 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 только в сборе с рычагом, цапфой, стойкой; у неоригинальных фирм они есть. Если в группе нашлась только сборка — открой её
 и вызови assembly_parts(id, сборка, что нужно); если предложения есть — pick с via=assembly (в parts — сама сборка,
 в want — что нужно).
-Нет детали ни в каталоге, ни у поставщиков — found=false; reason — ОДНА короткая фраза для клиента, без id групп и
-позиций («отдельно не продаётся, только в сборе с задним рычагом — передам менеджеру»). Не больше 6 вызовов
-инструментов до pick."""
+Деталь отдельно не продаётся ни у кого, но есть сборка, в которую она входит (подшипник — в ступице, датчик — в колодках),
+— pick found=true с этой сборкой и reason «отдельно не продаётся — только в сборе с …»: клиенту лучше вариант, чем «нет».
+Нет детали ни в каталоге, ни у поставщиков, ни в сборе — found=false; reason — ОДНА короткая фраза для клиента, без id
+групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick."""
 SEPARATE = ("\nКлиент просит ИМЕННО ОТДЕЛЬНО, не в сборе: сборку вместо детали не предлагай — только саму деталь из "
             "каталога или через assembly_parts; нет нигде — found=false и в reason, что отдельно не продаётся.")
 
@@ -134,7 +136,10 @@ SELLER_ITEM = """Ты — Кирилл, консультант магазина 
 «✅ Качество» — только для quality=OE; good — «Альтернатива», eco — «Эконом». Нет OE — строки «Качество» нет.
 {variants}
 Если certainty=maybe — одна строка «Зачем проверить: …» сразу после названия. via=assembly или note — одна строка,
-что производитель отдельно не продаёт. found=false — одна строка с reason или «передам менеджеру».
+что производитель отдельно не продаёт. found=false — одна строка с reason или «передам менеджеру». reason при
+found=true (например «отдельно не продаётся — только в сборе со ступицей») — одной строкой после названия.
+brand_wanted — фирма, которую просил клиент: если role=«просили» есть в предложениях — первой строкой «• Ваша фирма:
+… — цена · срок»; brand_found=false — одной строкой «<фирма> сейчас нет в продаже по этому номеру», дальше варианты.
 Цены, сроки, бренды, номера — ТОЛЬКО из данных. После срока — только why дословно; why пустой — после срока
 ничего. Своих оценок не добавляй (никаких «лучшее соотношение», «надёжнее», «гарантия посадки», стран производства).
 Про гарантии не пиши. К клиенту — на «вы», никогда не «клиент …» в третьем лице. Цены с пробелом в тысячах.
@@ -186,7 +191,8 @@ T_DECODED = {"type": "function", "function": {
             "axis": {"type": "string", "enum": ["front", "rear", ""]},
             "qty": {"type": "integer"}, "certainty": {"type": "string", "enum": ["sure", "maybe"]},
             "words": {"type": "string", "description": "слова клиента"}, "note": {"type": "string"},
-            "separate": {"type": "boolean", "description": "клиент хочет именно отдельно, не в сборе"}},
+            "separate": {"type": "boolean", "description": "клиент хочет именно отдельно, не в сборе"},
+            "brand": {"type": "string", "description": "фирма, которую назвал клиент («nagamochi», «Bosch»), — не в need"}},
             "required": ["need", "axis", "certainty", "words"]}},
         "questions": {"type": "array", "items": {"type": "string"}},
         "not_parts": {"type": "array", "items": {"type": "string"}},
@@ -527,11 +533,20 @@ class Assistant:
             offers = [_why_for(o, d.name) for o in offers]
             kept, dropped = check(d.name, offers[:7], v.brand)
             kept = kept[:6]
+            want = Q.key(item.get("brand") or "")
+            if want:
+                # «Колодки к ним nagamochi» (26.10, стенд): фирма — фильтр предложений, а не часть детали
+                mine = [r for r in rows or [] if Q.key(r.get("brand")).startswith(want[:6])]
+                best = min(mine, key=lambda r: (days(r.get("deliveryPeriod")), float(r.get("price") or 0)), default=None)
+                kept = [o for o in kept if not Q.key(o["brand"]).startswith(want[:6])]
+                if best is not None:
+                    kept = [dict(self._offer(_offer(best)), role="просили")] + kept
             extra, more = check(d.name, [_why_for(o, d.name) for o in
                                          self.quality(rows, v.brand, d.name, {Q.key(o["brand"]) for o in kept})], v.brand)
             if dropped or more:
                 log.info("проверяющий убрал: %s", dropped + more)
             out.append({"part": d.name, "oem": d.oem, "pos": d.code_on_image, "offers": kept + extra,
+                        "brand_wanted": item.get("brand") or "", "brand_found": any(o.get("role") == "просили" for o in kept),
                         "numbers": (cur.get("numbers") or [])[:60],   # кроссы: «а этот номер подойдёт?»
                         "dropped": dropped + more,
                         "scheme": {"catalog": v.catalog, "unit_id": d.unit_id, "ssd": d.unit_ssd,
@@ -667,9 +682,9 @@ class Assistant:
             s.update(ident=req.ident, plate=req.plate if not req.ident else "", car=v.summary(), history=[])
             s.pop("asking", None)
             rest = re.sub(re.escape(req.ident or req.plate), " ", text, flags=re.I).strip(" ,.:;-\n")
-            if len(T.words(rest)) < 2 and s.get("pending"):
+            if not _asks(rest) and s.get("pending"):
                 rest = s.pop("pending")   # сначала просьба, потом VIN — отвечаем на просьбу
-            if len(T.words(rest)) < 2:
+            if not _asks(rest):
                 return self._done(sid, s, text, f"Машина: {v.summary()}. Что подобрать?", "car", t0)
             text = rest
         if not s.get("ident") and not s.get("plate"):
@@ -966,7 +981,8 @@ class Assistant:
                            "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
                            "found": bool(p.get("found")) and bool(pr), "catalog": pr,
                            "group": _group_name(tree, p.get("id")),
-                           "separate": bool(it.get("separate")), "reason": "" if pr else p.get("reason", "")}
+                           "separate": bool(it.get("separate")), "reason": p.get("reason", "") if not pr or
+                           re.search(r"отдельно|в сборе", p.get("reason", ""), re.I) else ""}
                           for it, p, pr in zip(items, picks, priced)],
                 "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", [])}
         answer = await self.sell_items(car, data, used, prefs, greet)
@@ -1041,6 +1057,16 @@ def _group_name(tree, gid) -> str:
     if g[:1] == "u":
         return "узел " + g
     return tree.groups[int(g[1:])].name if tree is not None and g[1:].isdigit() and int(g[1:]) in tree.groups else ""
+
+
+_HELLO_WORDS = {"здравствуйте", "привет", "добрый", "день", "вечер", "утро", "вот", "вин", "vin", "мой", "моя", "машина",
+                "авто", "автомобиль", "номер", "кузова", "госномер", "пожалуйста", "спасибо", "это"}
+
+
+def _asks(rest: str) -> bool:
+    """После VIN есть просьба: хоть одно слово, кроме приветствия и «вот мой вин» (26.10, стенд: «калодка» после VIN
+    принималась за «просто VIN» — «Что подобрать?»)."""
+    return any(len(w) >= 3 and w.lower() not in _HELLO_WORDS for w in T.words(rest))
 
 
 def _rub(x: float) -> str:

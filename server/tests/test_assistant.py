@@ -474,3 +474,36 @@ def test_pick_matches_by_position_and_meaning():
     assert C._match(d, {"name": "Комплект тормозных колодок суппорта передние"})
     assert not C._match(d, {"name": "Диск тормозной передний", "pos": "2001"})
     assert not C._match(N(name="Кольцо упорное подшипника", code_on_image="4"), {"name": "Подшипник ступицы", "pos": "2X"})
+
+
+def test_one_word_after_vin_is_a_request():
+    """26.10, стенд: «<VIN> калодка» — Кирилл отвечал «Что подобрать?»."""
+    assert C._asks("калодка") and C._asks("колодки передние")
+    assert not C._asks("") and not C._asks("вот мой вин") and not C._asks("Здравствуйте!")
+
+
+def test_client_brand_filters_offers_not_part(tmp_path):
+    """26.10, стенд: «колодки к ним nagamochi» — подборщик искал колодки Nagamochi в каталоге и отвечал «нет»."""
+    from types import SimpleNamespace
+    from app.podbor.catalog import Detail
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path)
+    pads = Detail(oem="0446533471", name="Колодки тормозные передние", note="", amount="", match=None, unit="", unit_note="",
+                  unit_id="1", unit_ssd="", image="", code_on_image="1", category="")
+
+    async def det(v, t, gid, full=False):
+        return [pads]
+
+    async def tree(v):
+        return None
+
+    async def offers(oem, brand):
+        return "TOYOTA", [{"brand": "TOYOTA", "number": oem, "numberFix": oem, "price": "9000", "deliveryPeriod": "120"},
+                          {"brand": "Nagamochi", "number": "N1", "price": "2100", "deliveryPeriod": "48", "description": "Колодки"},
+                          {"brand": "Zekkert", "number": "Z1", "price": "1500", "deliveryPeriod": "24", "description": "Колодки"}]
+    a._details, a._tree, a.eng.offers = det, tree, offers
+    car = SimpleNamespace(brand="TOYOTA", catalog="T")
+    pick = {"found": True, "id": "g15", "parts": [{"name": "Колодки тормозные передние", "pos": "1"}]}
+    got = asyncio.run(a.priced(car, {"need": "Колодки", "brand": "nagamochi"}, pick))
+    assert got[0]["offers"][0]["role"] == "просили" and got[0]["offers"][0]["brand"] == "Nagamochi" and got[0]["brand_found"]
+    got = asyncio.run(a.priced(car, {"need": "Колодки", "brand": "Brembo"}, pick))
+    assert got[0]["brand_wanted"] == "Brembo" and not got[0]["brand_found"]
