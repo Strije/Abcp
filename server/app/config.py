@@ -55,6 +55,9 @@ class Settings:
     # Расшифровщик — шаг, где нужно знание устройства машины («плавающие» — цапфа, у Audi A7 3.0 нет щупа): можно
     # модель посильнее (Sonnet ~20× дороже Haiku, но шаг короткий — +0,5–2 ₽ к запросу). Пусто — как assistant_model
     assistant_decoder_model: str = ""
+    # Второе мнение: позицию, которую подборщик не нашёл или в которой сомневается, подбирает эта модель (27.10).
+    # «off» — выключено
+    assistant_strong_model: str = "anthropic/claude-sonnet-5-5"
     assistant_tg_token: str = ""
     assistant_day_rub: float = 300.0
     assistant_managers_chat: str = ""   # группа менеджеров в Telegram: заказы Кирилла (id группы, «-100…»)
@@ -91,6 +94,8 @@ def load() -> Settings:
         aigw_key=os.environ.get("AIGW_API_KEY", "").strip(),
         assistant_model=os.environ.get("ASSISTANT_MODEL", "").strip() or "anthropic/claude-haiku-5-5",
         assistant_decoder_model=os.environ.get("ASSISTANT_DECODER_MODEL", "").strip(),
+        assistant_strong_model=(lambda m: "" if m == "off" else m or "anthropic/claude-sonnet-5-5")(
+            os.environ.get("ASSISTANT_STRONG_MODEL", "").strip()),
         assistant_tg_token=os.environ.get("ASSISTANT_TG_TOKEN", "").strip(),
         assistant_day_rub=float(os.environ.get("ASSISTANT_DAY_RUB", "") or 300),
         assistant_managers_chat=os.environ.get("ASSISTANT_MANAGERS_CHAT", "").strip(),

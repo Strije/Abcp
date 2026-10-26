@@ -47,6 +47,7 @@ SPLIT_FROM = 3          # строк-позиций в заявке, с кото
 SELECT_STEPS = 7        # шагов подборщика на одну деталь
 MAX_SCHEMES = 2         # картинок схем подборщику на одну деталь (одна — около 2 копеек у Haiku)
 MAX_NAMES = 3           # «как называют продавцы» на одну деталь: каждый — поиск ABCP по номеру
+MAX_STRONG = 4          # позиций на заявку, которые подбирает модель сильнее (Sonnet ~20× дороже Haiku)
 SCHEME_SIDE = 1100      # сторона схемы для модели, px: номера позиций читаются, токенов немного
 HISTORY = 8             # реплик разговора в памяти
 
@@ -212,6 +213,7 @@ T_PICK = {"type": "function", "function": {
             "name": {"type": "string"}, "pos": {"type": "string"}}, "required": ["name"]}},
         "via": {"type": "string", "enum": ["catalog", "assembly"]},
         "want": {"type": "string"}, "reason": {"type": "string"},
+        "sure": {"type": "boolean", "description": "уверен, что это именно нужная деталь (false — сомневаешься)"},
         "why": {"type": "string", "description": "для разбора, клиент не видит: где искал, почему именно эта деталь, "
                                                  "что отбросил и почему"}}, "required": ["found", "why"]}}}
 T_DECODED = {"type": "function", "function": {
@@ -322,8 +324,12 @@ class Sessions:
 
 class Assistant:
     def __init__(self, engine, gateway: Gateway, model: str, folder: Path | None, journal=None, warranty: dict | None = None,
-                 decoder_model: str = ""):
+                 decoder_model: str = "", strong_model: str = ""):
         self.eng, self.gw, self.model, self.journal = engine, gateway, model, journal
+        self.strong = strong_model if strong_model and strong_model != model else ""   # второе мнение на трудных позициях
+        # Кандидаты в словарь переводов каталога (на сервере, не в git): python -m app.assistant.candidates
+        self.candidates = folder / "candidates.jsonl" if folder else None
+        self.heard: dict[str, dict] = {}   # номер → как его называют продавцы (из supplier_names)
         self.decoder_model = decoder_model or model   # расшифровка — знание устройства машины, можно модель сильнее
         self.cat = engine.catalog
         self.sessions = Sessions(folder / "sessions" if folder else None)
@@ -468,7 +474,7 @@ class Assistant:
                      {"role": "user", "content": "Ответь вызовом decoded."}]
         return {"items": []}
 
-    async def select(self, v, tree, item: dict, used: dict) -> dict:
+    async def select(self, v, tree, item: dict, used: dict, model: str = "") -> dict:
         async with self.pace:
             # Кандидаты и детали лучшей группы — сразу в первом сообщении (26.10: подборщик ходил по каталогу по 5–7 шагов,
             # подбор большого запроса шёл минуту): для частых деталей хватает одного вызова модели
@@ -483,7 +489,7 @@ class Assistant:
                      + "\nПодбери."}]
             looked = asked = 0
             for _ in range(SELECT_STEPS):
-                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_SCHEME, T_NAMES, T_ASSEMBLY,
+                m, u = await self.gw.chat(model or self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_SCHEME, T_NAMES, T_ASSEMBLY,
                                                              T_PICK])
                 _add(used, u)
                 calls = m.get("tool_calls") or []
@@ -543,7 +549,48 @@ class Assistant:
                     (orig if Q.key(r.get("brand")) in own else other)[name] += 1
             out.append({"pos": pos, "продавцы оригинала": [n for n, _ in orig.most_common(3)],
                         "продавцы аналогов": [n for n, _ in other.most_common(4)]})
+            if len(self.heard) > 500:
+                self.heard.clear()
+            self.heard[oem] = out[-1]   # для кандидатов в словарь переводов
         return out
+
+    async def pick_item(self, v, tree, it: dict, used: dict, strong_left: list) -> tuple[dict, list[dict]]:
+        """Одна позиция: подборщик → (не нашёл или сомневается — модель сильнее) → номера и предложения → кандидат
+        в словарь переводов. strong_left — сколько вторых мнений осталось на заявку (общий список, pop — минус одно)."""
+        p = await self._safe(self.select(v, tree, it, used), {"found": False})
+        if self.strong and (not p.get("found") or p.get("sure") is False) and strong_left:
+            # Второе мнение (27.10): платим за модель сильнее только на трудных местах. Её ответ берём, если она нашла
+            # (иначе остаётся честное «не нашли»)
+            strong_left.pop()
+            p2 = await self._safe(self.select(v, tree, it, used, self.strong), {"found": False})
+            if p2.get("found"):
+                p = dict(p2, why=f"второе мнение ({self.strong.rsplit('/', 1)[-1]}): {p2.get('why', '')}"
+                                 f" | сначала: {p.get('why', '')}")
+        pr = await self._safe(self.priced(v, it, p), [])
+        self._candidate(v, it, p, pr)
+        return p, pr
+
+    def _candidate(self, v, it: dict, p: dict, pr: list[dict]):
+        """Кандидат в словарь переводов каталога (27.10): клиент назвал деталь одним словом, а в каталоге она другим
+        («пыльник» — «изолятор пружины»), и подборщик её всё же выбрал (по схеме, по продавцам, вторым мнением).
+        Раз в неделю — сводка (python -m app.assistant.candidates), принятое — в catalog_renames podbor_knowledge.json."""
+        if not self.candidates or not pr:
+            return
+        want = T.head_text(T.expand(it.get("need", "")))
+        for c in pr:
+            got = T.head_text(T.expand(c.get("part", "")))
+            if c.get("via") == "assembly" or not want or not got or T.same(want, got):
+                continue
+            rec = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "brand": v.brand, "family": K.family(v.brand),
+                   "model": getattr(v, "name", ""), "need": it.get("need", ""), "words": it.get("words", ""),
+                   "part": c["part"], "oem": c.get("oem", ""), "heard": self.heard.get(c.get("oem", ""), {}),
+                   "why": str(p.get("why", ""))[:400]}
+            try:
+                self.candidates.parent.mkdir(parents=True, exist_ok=True)
+                with self.candidates.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
 
     async def scheme_pictures(self, v, tree, gid: str) -> list[tuple[str, str]]:
         """Схемы узлов группы для подборщика: [(узел, data-URL JPEG)], не больше двух узлов, уменьшенные (26.10, Lexus
@@ -1126,14 +1173,14 @@ class Assistant:
                     "client": text}
             return await self.sell(car, data, used, prefs, greet), data
         t1 = time.time()
+        strong_left = [1] * MAX_STRONG   # второе мнение — не больше MAX_STRONG позиций на заявку
         if on_part is not None:
             await on_part({"start": len(items)})
 
         async def one(it: dict) -> tuple[dict, str | None]:
             # Деталь целиком: подбор → цены → блок ответа. По частям (26.10, пользователь: «клиент не сидит минуту
             # перед „печатает…“») — готовая деталь уходит клиенту сразу, со схемой узла
-            p = await self._safe(self.select(v, tree, it, used), {"found": False})
-            pr = await self._safe(self.priced(v, it, p), [])
+            p, pr = await self.pick_item(v, tree, it, used, strong_left)
             # Как выглядит деталь (26.10, пользователь: «картинок деталей нет — печально для восприятия»): фото из прайса
             # СТМ; разбор прайса — не в цикле событий (первая загрузка — секунды)
             photo = await self._safe(asyncio.to_thread(self.stm.photo_for, it["need"], pr[0]["part"], v.brand, v.name),

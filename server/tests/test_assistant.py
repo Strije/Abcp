@@ -664,3 +664,40 @@ def test_supplier_names_tool(tmp_path):
     assert r[0]["продавцы оригинала"][:1] in (["пыльник амортизатора"], ["изолятор пружины"])
     assert r[0]["продавцы аналогов"][0] == "пыльник переднего амортизатора" and "4815728020" not in json.dumps(r)
     assert "error" in asyncio.run(a.supplier_names(v, None, "g1", "99999"))[0]
+
+
+def test_second_opinion_and_rename_candidates(tmp_path):
+    """27.10: «не нашёл» или «сомневаюсь» — позицию подбирает модель сильнее (не больше MAX_STRONG на заявку, её ответ —
+    только если нашла); деталь, выбранная под другим названием, чем у клиента, — кандидат в словарь переводов."""
+    from types import SimpleNamespace
+    from app.assistant import candidates as CD
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path / "assistant", strong_model="big")
+    models = []
+
+    async def select(v, tree, item, used, model=""):
+        models.append(model)
+        if model == "big":
+            found = item["need"] != "колодки"
+            return {"found": found, "id": "g1", "parts": [{"name": "x", "pos": "1"}], "why": "по схеме"}
+        sure = item["need"] == "отбойник"
+        return {"found": sure or item["need"] == "втулка", "sure": sure, "why": "сомневаюсь"}
+
+    async def priced(v, item, pick):
+        if not pick.get("found"):
+            return []
+        part = {"пыльник амортизатора": "Изолятор передней спиральной пружины, верхний правый"}.get(item["need"], item["need"])
+        return [{"part": part, "oem": "4815728020" if "Изолятор" in part else "1", "offers": []}]
+    a.select, a.priced = select, priced
+    a.heard["4815728020"] = {"продавцы оригинала": ["пыльник амортизатора"]}
+    v = SimpleNamespace(brand="LEXUS", name="RX330/350")
+    left = [1] * C.MAX_STRONG
+    run = lambda need: asyncio.run(a.pick_item(v, None, {"need": need}, {}, left))[0]  # noqa: E731
+    assert "второе мнение" in run("пыльник амортизатора")["why"]             # не нашёл — нашла сильная
+    assert run("отбойник")["why"] == "сомневаюсь" and models[-1] == ""        # уверен — без второго мнения
+    assert run("втулка")["why"].startswith("второе мнение")                   # нашёл, но сомневается
+    assert not run("колодки")["found"]                                          # сильная тоже не нашла — честное «нет»
+    assert run("стойка")["why"].startswith("второе мнение") and not left       # четвёртое — последнее
+    assert not run("тяга")["found"] and models.count("big") == C.MAX_STRONG    # потолок: дальше без сильной
+    rows = CD.summary(tmp_path / "assistant" / "candidates.jsonl")
+    assert [r["part"] for r in rows] == ["Изолятор передней спиральной пружины, верхний"] and rows[0]["family"] == "toyota"
+    assert rows[0]["heard"]["пыльник амортизатора"] == 1 and rows[0]["needs"]["пыльник амортизатора"] == 1
