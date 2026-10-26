@@ -42,6 +42,7 @@ log = logging.getLogger("assistant")
 _ON_PART: contextvars.ContextVar = contextvars.ContextVar("kirill_on_part", default=None)   # ответ по частям
 
 MAX_ITEMS = 15          # позиций в одном сообщении: дальше — менеджеру
+SPLIT_FROM = 3          # строк-позиций в заявке, с которых расшифровка идёт по строкам (короткую — целиком)
 SELECT_STEPS = 7        # шагов подборщика на одну деталь
 MAX_SCHEMES = 2         # картинок схем подборщику на одну деталь (одна — около 2 копеек у Haiku)
 SCHEME_SIDE = 1100      # сторона схемы для модели, px: номера позиций читаются, токенов немного
@@ -90,6 +91,11 @@ note пиши клиенту на «вы», не о нём в третьем л�
 устройство машины, ответ на вопрос выше). Это для разбора ошибок, клиент его не видит.
 Машина уже определена по VIN — VIN, кузов и марку не спрашивай.{notes}
 Ответь вызовом decoded."""
+
+FOCUS = """
+Сейчас расшифруй ТОЛЬКО эту часть сообщения: «{part}». Всё сообщение — для контекста (ось из заголовков вроде
+«Передок:», «Задок:», уточнения рядом). Детали из других строк не добавляй — их разберут отдельно. В этой части нет
+детали (заголовок, вопрос, приветствие) — items пустой."""
 
 SELECTOR = """Ты подбираешь одну деталь в каталоге машины {car}. Нужно: {need} (ось: {axis}; клиент писал: «{words}»).{separate}
 Ниже уже есть кандидаты из каталога и детали первой группы — если нужная деталь там есть, сразу вызывай pick.
@@ -413,11 +419,34 @@ class Assistant:
 
     # ---------- агенты ----------
 
-    async def decode(self, car: str, history: list[dict], text: str, used: dict, brand: str = "") -> dict:
-        said = " ".join([h["content"] for h in history if h.get("role") == "user" and isinstance(h.get("content"), str)]
-                        + [text])
-        msgs = [{"role": "system", "content": DECODER.format(car=car, notes=_notes("decoder", said, brand))}] + \
-            history + [{"role": "user", "content": text}]
+    async def decode_parts(self, car: str, history: list[dict], text: str, used: dict, brand: str = "") -> dict:
+        """Длинная заявка — по строкам (27.10, руководитель: на 15 позициях расшифровщик то брал передние втулки
+        стабилизатора, то терял). Цельный разбор — для намерения и вопросов, детали — из разборов каждой строки отдельно
+        (всё сообщение у каждой — контекст: «Передок:» задаёт ось следующим строкам); всё параллельно."""
+        chunks = [c for c in T.split_chunks(text) if re.search(r"[а-яёa-z]{3}", c, re.I)]
+        if len(chunks) < SPLIT_FROM:
+            return await self.decode(car, history, text, used, brand)
+        whole, *parts = await asyncio.gather(self.decode(car, history, text, used, brand),
+                                             *(self.decode(car, history, text, used, brand, focus=c) for c in chunks))
+        if (whole.get("intent") or "parts") != "parts":
+            return whole
+        items, seen, questions = [], set(), []
+        for p in parts:
+            for it in p.get("items") or []:
+                key = (re.sub(r"\s+", " ", str(it.get("need", "")).lower().strip()), it.get("axis") or "")
+                if key[0] and key not in seen:
+                    seen.add(key)
+                    items.append(it)
+            questions += [q for q in p.get("questions") or [] if q not in questions]
+        if not items:
+            return whole
+        return dict(whole, items=items, questions=questions or whole.get("questions") or [], split=len(chunks))
+
+    async def decode(self, car: str, history: list[dict], text: str, used: dict, brand: str = "", focus: str = "") -> dict:
+        said = focus or " ".join([h["content"] for h in history if h.get("role") == "user"
+                                  and isinstance(h.get("content"), str)] + [text])
+        system = DECODER.format(car=car, notes=_notes("decoder", said, brand)) + (FOCUS.format(part=focus) if focus else "")
+        msgs = [{"role": "system", "content": system}] + history + [{"role": "user", "content": text}]
         for _ in range(2):   # tool_choice у Claude через шлюз не поддерживается — просим словами
             m, u = await self.gw.chat(self.decoder_model, msgs, [T_DECODED])
             _add(used, u)
@@ -823,7 +852,7 @@ class Assistant:
                 log.info("tree: %s", str(e)[:100])
                 tree = None
             used = {"in": 0, "out": 0, "calls": 0}
-            dec = await self.decode(v.summary(), s.get("history", []), mask(text), used, brand=v.brand)
+            dec = await self.decode_parts(v.summary(), s.get("history", []), mask(text), used, brand=v.brand)
             # Сначала — чего клиент хочет (26.10, испытание: «оформляй», «а какие есть», «зепро», «схему дай» каждый
             # раз запускали новый подбор)
             intent = dec.get("intent") or "parts"

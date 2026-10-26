@@ -612,3 +612,32 @@ def test_selector_looks_at_scheme(tmp_path):
     first = seen[1]   # реплика после первого show_scheme: подпись узлов и сами картинки
     assert first["role"] == "user" and [x["type"] for x in first["content"]] == ["text", "image_url", "image_url"]
     assert seen[2]["role"] == "tool" and "уже хватит" in seen[2]["content"]   # третья и дальше — без картинок
+
+
+def test_long_request_decoded_line_by_line(tmp_path):
+    """27.10, руководитель (15 позиций): расшифровщик то брал передние втулки стабилизатора, то терял. Длинную заявку —
+    по строкам параллельно, цельный разбор — только для намерения; повторы склеиваются, короткую — как раньше."""
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path)
+    calls = []
+
+    async def dec(car, history, text, used, brand="", focus=""):
+        calls.append(focus)
+        if not focus:
+            return {"intent": "parts", "items": [{"need": "Рычаг", "axis": "front"}], "questions": []}
+        need = {"Задок: втулки стабилизатора": "Втулка стабилизатора", "Передок:": "",
+                "Эл-ты стаба": "Втулка стабилизатора"}.get(focus, focus)
+        return {"intent": "parts", "items": [{"need": need, "axis": "rear" if "Задок" in focus else "front"}] if need else [],
+                "questions": ["Какие стойки?"] if focus == "Стойки" else []}
+    a.decode = dec
+    text = "Задок: втулки стабилизатора\nПередок:\nЭл-ты стаба\nСтойки"
+    d = asyncio.run(a.decode_parts("car", [], text, {}))
+    assert [(i["need"], i["axis"]) for i in d["items"]] == [("Втулка стабилизатора", "rear"), ("Втулка стабилизатора", "front"),
+                                                             ("Стойки", "front")]
+    assert d["questions"] == ["Какие стойки?"] and d["split"] == 4 and "" in calls
+    calls.clear()
+    assert asyncio.run(a.decode_parts("car", [], "колодки передние", {}))["items"][0]["need"] == "Рычаг" and calls == [""]
+
+    async def order(car, history, text, used, brand="", focus=""):
+        return {"intent": "order" if not focus else "parts", "items": [{"need": "x"}] if focus else [], "order": "беру"}
+    a.decode = order
+    assert asyncio.run(a.decode_parts("car", [], "беру\nоба\nварианта\nоформляй", {}))["intent"] == "order"
