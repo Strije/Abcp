@@ -540,3 +540,35 @@ def test_quantity_and_side_from_catalog(tmp_path):
     balls = run_pick("Шаровая опора левая", "Шаровая опора правая")
     assert [(b["side"], b["qty"], b["pair"]) for b in balls] == [("левый", None, False), ("правый", None, False)]
     assert run_pick("Тяга рулевая")[0]["qty"] == 2
+
+
+def test_streamed_parts_go_to_their_own_chat(tmp_path):
+    """Ответ по частям: «подбираю N позиций», затем детали по одной; у двух собеседников разом — каждому свои."""
+    class GW(ScriptGW):
+        async def chat(self, model, messages, tools=None, max_out=8000):
+            names = {t["function"]["name"] for t in tools or []}
+            if "decoded" in names:
+                args = {"intent": "parts", "items": [{"need": "Колодки", "axis": "front", "certainty": "sure", "words": "к"},
+                                                     {"need": "Диски", "axis": "front", "certainty": "maybe", "words": "д"}]}
+                return {"tool_calls": [{"id": "1", "function": {"name": "decoded", "arguments": json.dumps(args)}}]}, {}
+            return await super().chat(model, messages, tools, max_out)
+    a = C.Assistant(Engine(Fake(), None, set()), GW(), "m", tmp_path)
+    got: dict = {"tg-a": [], "tg-b": []}
+
+    def cb(sid):
+        async def on_part(ev):
+            await asyncio.sleep(0)
+            got[sid].append(ev)
+        return on_part
+
+    async def both():
+        for sid in got:
+            a.sessions.save(sid, {"ident": VIN, "last_ok": time.time(), "last_prefs": {"goal": "quality"}})
+        return await asyncio.gather(a.reply("tg-a", "колодки и диски", on_part=cb("tg-a")),
+                                    a.reply("tg-b", "колодки и диски", on_part=cb("tg-b")))
+    import time
+    ra, rb = asyncio.run(both())
+    for r, sid in ((ra, "tg-a"), (rb, "tg-b")):
+        evs = got[sid]
+        assert evs[0] == {"start": 2} and len([e for e in evs if "block" in e]) == 2, evs
+        assert r["streamed"] and "Напишите, какие варианты оформить." in r["footer"] and "Колодки" not in r["footer"]

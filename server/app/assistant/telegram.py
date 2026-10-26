@@ -123,6 +123,26 @@ class KirillBot:
             except OSError:
                 pass
 
+    def _parts(self, chat):
+        """Ответ по частям: «подбираю N позиций», затем каждая деталь — схемой узла с подписью-блоком."""
+        async def on_part(ev: dict):
+            if "start" in ev:
+                if ev["start"] >= 2:
+                    await self.send(chat, f"📝 Понял, подбираю {ev['start']} позиций — пришлю по мере готовности.", md=False)
+                return
+            block = ("🔍 Проверить при осмотре\n" if ev.get("maybe") else "") + ev["block"]
+            got = await self.assistant.render_scheme(ev["scheme"]) if ev.get("scheme") else None
+            if got:
+                cap = to_html(block)
+                short = len(cap) <= 1000
+                r = await self.http.post(self._url("sendPhoto"), data={
+                    "chat_id": str(chat), "caption": cap if short else to_html(f"Схема: {ev['scheme']['label']}"),
+                    "parse_mode": "HTML"}, files={"photo": ("scheme.jpg", got[0], "image/jpeg")})
+                if r.status_code == 200 and short:
+                    return
+            await self.send(chat, block)
+        return on_part
+
     async def press(self, cb: dict):
         """Кнопки: предпочтение на этот подбор, «Подобрать» (go) или «📐 деталь» — схема (sch:N)."""
         msg = cb.get("message") or {}
@@ -131,11 +151,12 @@ class KirillBot:
             return
         sid = f"tg-{chat}"
         data = str(cb.get("data") or "")
-        res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, "", action=data))
+        res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, "", action=data,
+                                                                              on_part=self._parts(chat)))
         note = res.get("ack") or ("Подбираю…" if res.get("text") else "Этот вопрос уже неактуален")
         await self.http.post(self._url("answerCallbackQuery"), json={"callback_query_id": cb.get("id"), "text": note[:190]})
         if res.get("text"):
-            await self.send(chat, res["text"], buttons=res.get("buttons"))
+            await self.send(chat, res["footer"] if res.get("streamed") else res["text"], buttons=res.get("buttons"))
         await self.photos(chat, sid, res.get("photos") or [])
 
     async def _with_typing(self, chat, sid: str, work):
@@ -278,8 +299,9 @@ class KirillBot:
             # Стикер, видео, геометка… — не молчим: клиент не поймёт, дошло ли
             await self.send(chat, "Я пока понимаю текст и голосовые 🙂 Напишите или запишите, что нужно.", md=False)
             return
-        res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, text))
-        await self.send(chat, res["text"], buttons=res.get("buttons"), contact=bool(res.get("contact")))
+        res = await self._with_typing(chat, sid, lambda: self.assistant.reply(sid, text, on_part=self._parts(chat)))
+        await self.send(chat, res["footer"] if res.get("streamed") else res["text"], buttons=res.get("buttons"),
+                        contact=bool(res.get("contact")))
         await self.photos(chat, sid, res.get("photos") or [])
 
     async def poll_once(self, timeout: int = 25):

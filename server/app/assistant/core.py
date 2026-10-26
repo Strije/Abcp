@@ -17,6 +17,7 @@
 телефонов и VIN (understand.mask). Лаборатория и замеры — /srv/podbor-lab/runs/2026-10-26-agent (26.10.2026).
 """
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -36,6 +37,7 @@ from . import quality as Q
 from .models import Gateway, OverBudget
 
 log = logging.getLogger("assistant")
+_ON_PART: contextvars.ContextVar = contextvars.ContextVar("kirill_on_part", default=None)   # ответ по частям
 
 MAX_ITEMS = 15          # позиций в одном сообщении: дальше — менеджеру
 SELECT_STEPS = 7        # шагов подборщика на одну деталь
@@ -299,8 +301,8 @@ class Assistant:
         self.images = folder.parent / "podbor" / "schemes" if folder else None   # тот же кэш, что у страницы подбора
         self.warranty = warranty or {}
         self.pace = asyncio.Semaphore(6)   # параллельных подборщиков: Laximo 600/мин на весь сервис
-        self.locks: dict[str, asyncio.Lock] = {}
-        self.notify = None   # async (текст) — карточка в группу менеджеров; ставит Telegram-бот   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
+        self.locks: dict[str, asyncio.Lock] = {}   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
+        self.notify = None   # async (текст) — карточка в группу менеджеров; ставит Telegram-бот
 
     # ---------- инструменты подборщика ----------
 
@@ -570,20 +572,25 @@ class Assistant:
         _add(used, u)
         return (m.get("content") or "").strip()
 
-    async def sell_items(self, car: str, data: dict, used: dict, prefs: dict, greet: bool) -> str:
+    async def _block(self, car: str, it: dict, used: dict, prefs: dict) -> str:
+        """Блок ответа по одной детали; не нашли — без модели, честная строка с причиной."""
+        goal, need = _goal_need(prefs)
+        if not it.get("found"):
+            why = re.sub(r"\s*\((?:группа\s+)?g-?\d+[^)]*\)|\bg-?\d+\b", "", it.get("reason") or "").strip()
+            why = re.split(r"(?<=[.!?])\s", why)[0][:200]   # одна фраза: подборщик бывает многословен
+            return f"🔧 **{it['need']}** — " + (f"{why[0].lower()}{why[1:]}" if why else "передам менеджеру, он подберёт.")
+        return await self._safe(self.sell_item(car, it, used, need, goal), "") or \
+            f"🔧 **{it['need']}** — передам менеджеру."
+
+    async def sell_items(self, car: str, data: dict, used: dict, prefs: dict, greet: bool,
+                         blocks: list[str] | None = None) -> str:
         """Ответ по деталям: блоки пишутся параллельно (26.10: один длинный ответ на 13 позиций модель печатала
-        больше минуты), рамку — приветствие, «Проверьте при осмотре», вопросы — собирает код: всегда одинаково."""
-        goal = prefs.get("goal") if prefs.get("goal") in VARIANTS else "optimal"
-        need = GOALS[goal] + ("; срочно — в первую очередь то, что привезём за 1–2 дня" if prefs.get("when") == "urgent"
-                              else "; можно подождать ради цены и качества" if prefs.get("when") == "wait" else "")
+        больше минуты), рамку — приветствие, «Проверьте при осмотре», вопросы — собирает код: всегда одинаково.
+        blocks — уже написанные (ответ по частям)."""
+        goal, _ = _goal_need(prefs)
         items = data["items"]
-        async def block(it: dict) -> str:
-            if not it.get("found"):   # не нашли — без модели: честная строка с причиной
-                why = re.sub(r"\s*\((?:группа\s+)?g-?\d+[^)]*\)|\bg-?\d+\b", "", it.get("reason") or "").strip()
-                why = re.split(r"(?<=[.!?])\s", why)[0][:200]   # одна фраза: подборщик бывает многословен
-                return f"🔧 **{it['need']}** — " + (f"{why[0].lower()}{why[1:]}" if why else "передам менеджеру, он подберёт.")
-            return await self._safe(self.sell_item(car, it, used, need, goal), "")
-        blocks = await asyncio.gather(*(block(it) for it in items))
+        if blocks is None:
+            blocks = await asyncio.gather(*(self._block(car, it, used, prefs) for it in items))
         sure = [b or f"🔧 **{it['need']}** — передам менеджеру." for it, b in zip(items, blocks)
                 if it.get("certainty") != "maybe"]
         maybe = [b or f"🔧 **{it['need']}** — передам менеджеру." for it, b in zip(items, blocks)
@@ -598,6 +605,7 @@ class Assistant:
         if qs:
             parts += ["❓ **Вопросы**\n" + "\n".join(f"{n}. {q}" for n, q in enumerate(qs, 1))]
         parts.append("Напишите, какие варианты оформить.")
+        data["footer"] = "\n\n".join(parts[parts.index(maybe[-1]) + 1 if maybe else len(sure) + 1:])
         return "\n\n".join(parts)
 
     async def sell(self, car: str, data: dict, used: dict, prefs: dict | None = None, greet: bool = False) -> str:
@@ -622,7 +630,10 @@ class Assistant:
         sch = (self.sessions.load(sid).get("schemes") or [])
         if not 0 <= i < len(sch):
             return None
-        x = sch[i]
+        return await self.render_scheme(sch[i])
+
+    async def render_scheme(self, x: dict) -> tuple[bytes, str] | None:
+        """Схема узла с отмеченной позицией: (JPEG, подпись) или None."""
         img = await self._image(x["image"])
         if not img:
             return None
@@ -666,13 +677,19 @@ class Assistant:
 
     # ---------- разговор ----------
 
-    async def reply(self, sid: str, text: str, action: str = "") -> dict:
+    async def reply(self, sid: str, text: str, action: str = "", on_part=None) -> dict:
         """Ответ собеседнику sid («tg-123»): {"text", "status", "buttons", "used", "data", "seconds"}.
         action — нажатая кнопка: «goal:quality», «when:urgent», «go» (подобрать с тем, что уже ответил).
         Реплики одного собеседника — по очереди (26.10: двойное «Подобрать» подбирало дважды)."""
         lock = self.locks.setdefault(sid, asyncio.Lock())
         async with lock:
-            return await self._reply(sid, text, action)
+            # Куда отдавать готовые детали — в контексте ЭТОЙ реплики: у разных собеседников свои задачи, и общее поле
+            # отдало бы детали одного клиента другому
+            token = _ON_PART.set(on_part)
+            try:
+                return await self._reply(sid, text, action)
+            finally:
+                _ON_PART.reset(token)
 
     async def _reply(self, sid: str, text: str, action: str) -> dict:
         t0 = time.time()
@@ -781,7 +798,7 @@ class Assistant:
                 return self._done(sid, s, shown or text, _questions(items, qs, need_prefs=not recent), "ask", t0, used,
                                   buttons=BUTTONS if not recent else BUTTONS[-1:])
             answer, data = await self._pipeline(v, tree, dec, items, mask(text), prefs, used,
-                                                greet=not s.get("last_ok"))
+                                                greet=not s.get("last_ok"), on_part=self._parts_cb())
             if answer:
                 s["last_ok"], s["last_prefs"] = time.time(), prefs
                 s["schemes"] = _schemes(data)
@@ -791,12 +808,19 @@ class Assistant:
         except Exception as e:  # noqa: BLE001 — модель/каталог сбоят: менеджеру, а не тишина
             log.warning("assistant failed: %s: %s", type(e).__name__, str(e)[:200])
             return self._done(sid, s, shown or text, FAILED, "error", t0)
+        streamed = bool(data and data.get("streamed"))
         res = self._done(sid, s, shown or text, answer or FAILED, "ok" if answer else "error", t0, used, data,
-                         buttons=_scheme_buttons(s.get("schemes") or []) if answer else None)
-        if answer and 0 < len(s.get("schemes") or []) <= 2:
+                         buttons=_scheme_buttons(s.get("schemes") or []) if answer and not streamed else None)
+        if streamed:
+            res["streamed"], res["footer"] = True, data.get("footer", "")   # детали со схемами уже отправлены
+        elif answer and 0 < len(s.get("schemes") or []) <= 2:
             res["photos"] = list(range(len(s["schemes"])))   # 1–2 детали — схемы сразу, без кнопок
             res["buttons"] = []
         return res
+
+    @staticmethod
+    def _parts_cb():
+        return _ON_PART.get()
 
     # ---------- после подбора: заказ, ещё варианты, номер клиента ----------
 
@@ -975,7 +999,7 @@ class Assistant:
                 "можно списком или голосовым."), pending
 
     async def _pipeline(self, v, tree, dec: dict, items: list[dict], text: str, prefs: dict,
-                        used: dict, greet: bool = False) -> tuple[str, dict]:
+                        used: dict, greet: bool = False, on_part=None) -> tuple[str, dict]:
         car = v.summary()
         if not items:
             # Не про детали: короткий ответ продавца на вопросы и болтовню, без подбора
@@ -983,21 +1007,35 @@ class Assistant:
                     "client": text}
             return await self.sell(car, data, used, prefs, greet), data
         t1 = time.time()
-        picks = await asyncio.gather(*(self._safe(self.select(v, tree, it, used), {"found": False}) for it in items))
+        if on_part is not None:
+            await on_part({"start": len(items)})
+
+        async def one(it: dict) -> tuple[dict, str | None]:
+            # Деталь целиком: подбор → цены → блок ответа. По частям (26.10, пользователь: «клиент не сидит минуту
+            # перед „печатает…“») — готовая деталь уходит клиенту сразу, со схемой узла
+            p = await self._safe(self.select(v, tree, it, used), {"found": False})
+            pr = await self._safe(self.priced(v, it, p), [])
+            entry = {"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
+                     "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
+                     "found": bool(p.get("found")) and bool(pr), "catalog": pr, "group": _group_name(tree, p.get("id")),
+                     "separate": bool(it.get("separate")), "brand": it.get("brand") or "",
+                     "reason": p.get("reason", "") if not pr or re.search(r"отдельно|в сборе", p.get("reason", ""), re.I)
+                     else ""}
+            if on_part is None:
+                return entry, None
+            block = await self._block(car, entry, used, prefs)
+            sch = next((c["scheme"] for c in pr if c.get("scheme")), None)
+            await self._safe(on_part({"block": block, "maybe": entry["certainty"] == "maybe",
+                                      "scheme": dict(sch, label=entry["need"][:40]) if sch else None}), None)
+            return entry, block
+        done = await asyncio.gather(*(one(it) for it in items))
         t2 = time.time()
-        priced = await asyncio.gather(*(self._safe(self.priced(v, it, p), []) for it, p in zip(items, picks)))
-        t3 = time.time()
-        data = {"items": [{"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
-                           "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
-                           "found": bool(p.get("found")) and bool(pr), "catalog": pr,
-                           "group": _group_name(tree, p.get("id")),
-                           "separate": bool(it.get("separate")), "reason": p.get("reason", "") if not pr or
-                           re.search(r"отдельно|в сборе", p.get("reason", ""), re.I) else ""}
-                          for it, p, pr in zip(items, picks, priced)],
-                "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", [])}
-        answer = await self.sell_items(car, data, used, prefs, greet)
+        data = {"items": [e for e, _ in done], "questions": dec.get("questions", []), "not_parts": dec.get("not_parts", []),
+                "streamed": on_part is not None}
+        answer = await self.sell_items(car, data, used, prefs, greet,
+                                       blocks=[b for _, b in done] if on_part is not None else None)
         # Сколько секунд на этапах — в расход (журнал и /v1/assistant): видно, что тормозит
-        used["timing"] = {"select": round(t2 - t1), "prices": round(t3 - t2), "sell": round(time.time() - t3)}
+        used["timing"] = {"parts": round(t2 - t1), "sell": round(time.time() - t2)}
         return answer, data
 
     def _done(self, sid: str, s: dict, text: str, answer: str, status: str, t0: float,
@@ -1098,6 +1136,13 @@ def _last(data: dict) -> dict:
                                               for o in c.get("offers") or []]}
                                   for c in it.get("catalog") or []]})
     return {"items": items[:MAX_ITEMS]}
+
+
+def _goal_need(prefs: dict) -> tuple[str, str]:
+    goal = prefs.get("goal") if prefs.get("goal") in VARIANTS else "optimal"
+    need = GOALS[goal] + ("; срочно — в первую очередь то, что привезём за 1–2 дня" if prefs.get("when") == "urgent"
+                          else "; можно подождать ради цены и качества" if prefs.get("when") == "wait" else "")
+    return goal, need
 
 
 def _no_schemes(item: dict) -> dict:
