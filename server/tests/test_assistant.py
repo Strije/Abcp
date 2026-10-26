@@ -641,3 +641,26 @@ def test_long_request_decoded_line_by_line(tmp_path):
         return {"intent": "order" if not focus else "parts", "items": [{"need": "x"}] if focus else [], "order": "беру"}
     a.decode = order
     assert asyncio.run(a.decode_parts("car", [], "беру\nоба\nварианта\nоформляй", {}))["intent"] == "order"
+
+
+def test_supplier_names_tool(tmp_path):
+    """27.10, Lexus RX330: в каталоге «изолятор пружины» 48157, продавцы оригинала и аналогов — «пыльник амортизатора».
+    Номеров модели не даём, только названия; оригинал отдельно от аналогов."""
+    from types import SimpleNamespace
+    a = C.Assistant(Engine(Fake(), None, set()), ScriptGW(), "m", tmp_path)
+    d = SimpleNamespace(oem="4815728020", code_on_image="48157B")
+
+    async def details(v, tree, gid, full=False):
+        return [d, SimpleNamespace(oem="4833148020", code_on_image="48331B")]
+
+    async def offers(oem, brand):
+        return "TOYOTA", [{"brand": "TOYOTA", "description": "ПЫЛЬНИК АМОРТИЗАТОРА"},
+                          {"brand": "TOYOTA", "description": "Изолятор пружины"},
+                          {"brand": "Febest", "description": "Пыльник переднего амортизатора"},
+                          {"brand": "Masuma", "description": "Пыльник переднего амортизатора Toyota"}]
+    a._details, a.eng.offers = details, offers
+    v = SimpleNamespace(brand="LEXUS")
+    r = asyncio.run(a.supplier_names(v, None, "g1", "48157B"))
+    assert r[0]["продавцы оригинала"][:1] in (["пыльник амортизатора"], ["изолятор пружины"])
+    assert r[0]["продавцы аналогов"][0] == "пыльник переднего амортизатора" and "4815728020" not in json.dumps(r)
+    assert "error" in asyncio.run(a.supplier_names(v, None, "g1", "99999"))[0]

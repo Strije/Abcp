@@ -17,6 +17,7 @@
 телефонов и VIN (understand.mask). Лаборатория и замеры — /srv/podbor-lab/runs/2026-10-26-agent (26.10.2026).
 """
 import asyncio
+import collections
 import contextvars
 import hashlib
 import json
@@ -45,6 +46,7 @@ MAX_ITEMS = 15          # позиций в одном сообщении: да�
 SPLIT_FROM = 3          # строк-позиций в заявке, с которых расшифровка идёт по строкам (короткую — целиком)
 SELECT_STEPS = 7        # шагов подборщика на одну деталь
 MAX_SCHEMES = 2         # картинок схем подборщику на одну деталь (одна — около 2 копеек у Haiku)
+MAX_NAMES = 3           # «как называют продавцы» на одну деталь: каждый — поиск ABCP по номеру
 SCHEME_SIDE = 1100      # сторона схемы для модели, px: номера позиций читаются, токенов немного
 HISTORY = 8             # реплик разговора в памяти
 
@@ -113,7 +115,8 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick.
 Узел нужный, а детали с подходящим названием в нём нет — прежде чем found=false, открой show_scheme этой группы: названия
 каталога — машинный перевод («изолятор пружины» на рисунке может оказаться гофрированным пыльником). Найди деталь по
-виду, возьми её pos и название из show_parts, в why напиши, что узнал по схеме.
+виду, возьми её pos и название из show_parts; сомневаешься — supplier_names(id, pos): как её называют продавцы.
+В why напиши, что узнал по схеме и у продавцов.
 В pick всегда заполняй why — одной-двумя фразами: где искал, почему взял именно эти детали и что отбросил (похожее
 название, не та ось, не тот узел). Это для разбора ошибок, клиент его не видит.{notes}"""
 SEPARATE = ("\nКлиент просит ИМЕННО ОТДЕЛЬНО, не в сборе: сборку вместо детали не предлагай — только саму деталь из "
@@ -189,6 +192,11 @@ T_SCHEME = {"type": "function", "function": {
     "name": "show_scheme", "description": "Картинка схемы узла этой группы: номера на рисунке — pos деталей из show_parts. "
     "Названия в каталоге — машинный перевод и бывают неверными; по рисунку видно, что это за деталь на самом деле.",
     "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}}}
+T_NAMES = {"type": "function", "function": {
+    "name": "supplier_names", "description": "Как позицию pos группы называют продавцы — оригинала и аналогов (по номеру "
+    "каталога). Когда название каталога непонятно или похоже на другую деталь: продавцы пишут по-человечески.",
+    "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "pos": {"type": "string"}},
+                   "required": ["id", "pos"]}}}
 T_ASSEMBLY = {"type": "function", "function": {
     "name": "assembly_parts",
     "description": "Предложения поставщиков детали, которую производитель отдельно не продаёт, к сборке из каталога",
@@ -473,9 +481,10 @@ class Assistant:
                     {"role": "user", "content": "Кандидаты из каталога: " + json.dumps(first, ensure_ascii=False)
                      + (f"\nДетали группы {first[0]['id']}: " + json.dumps(top, ensure_ascii=False) if first else "")
                      + "\nПодбери."}]
-            looked = 0
+            looked = asked = 0
             for _ in range(SELECT_STEPS):
-                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_SCHEME, T_ASSEMBLY, T_PICK])
+                m, u = await self.gw.chat(self.model, msgs, [T_SEARCH, T_UNITS, T_PARTS, T_SCHEME, T_NAMES, T_ASSEMBLY,
+                                                             T_PICK])
                 _add(used, u)
                 calls = m.get("tool_calls") or []
                 msgs.append({"role": "assistant", "content": m.get("content") or "", **({"tool_calls": calls} if calls else {})})
@@ -499,6 +508,10 @@ class Assistant:
                             pictures += got
                             res = [{"unit": unit} for unit, _ in got] or \
                                 [{"info": "схемы нет" if looked < MAX_SCHEMES else "схем на эту деталь уже хватит"}]
+                        elif fn == "supplier_names":
+                            asked += 1
+                            res = await self.supplier_names(v, tree, str(args.get("id", "")), str(args.get("pos", ""))) \
+                                if asked <= MAX_NAMES else [{"info": "хватит — реши по схеме и названиям"}]
                         else:
                             res = await self._tool(v, tree, fn, args)
                     except Exception as e:  # noqa: BLE001 — Laximo «группа недоступна для поиска» (26.10, Lexus)
@@ -511,6 +524,26 @@ class Assistant:
                                                  + "; ".join(unit for unit, _ in pictures)}]
                         + [{"type": "image_url", "image_url": {"url": url}} for _, url in pictures]})
             return {"found": False, "reason": "шаги кончились"}
+
+    async def supplier_names(self, v, tree, gid: str, pos: str) -> list[dict]:
+        """Как продавцы называют позицию pos группы (27.10, Lexus RX330: каталог — «изолятор пружины» 48157, продавцы
+        оригинала — «ПЫЛЬНИК АМОРТИЗАТОРА»). Описания — как у робота (article.name_of); номеров модели не даём."""
+        ds = await self._details(v, tree, gid, True) or []
+        oems = list(dict.fromkeys(d.oem for d in ds if str(d.code_on_image) == pos.strip()))[:2]
+        if not oems:
+            return [{"error": "нет такой позиции, возьми pos из show_parts"}]
+        own = {Q.key(x) for x in original_keys(v.brand)}
+        out = []
+        for oem in oems:
+            _, rows = await self.eng.offers(oem, v.brand)
+            orig, other = collections.Counter(), collections.Counter()
+            for r in rows or []:
+                name = A.name_of(str(r.get("description") or ""))
+                if name:
+                    (orig if Q.key(r.get("brand")) in own else other)[name] += 1
+            out.append({"pos": pos, "продавцы оригинала": [n for n, _ in orig.most_common(3)],
+                        "продавцы аналогов": [n for n, _ in other.most_common(4)]})
+        return out
 
     async def scheme_pictures(self, v, tree, gid: str) -> list[tuple[str, str]]:
         """Схемы узлов группы для подборщика: [(узел, data-URL JPEG)], не больше двух узлов, уменьшенные (26.10, Lexus
