@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..podbor import emb as EM
+from ..podbor import knowledge as K
 from ..podbor import article as A
 from ..podbor import text as T
 from ..podbor.catalog import image_url
@@ -62,11 +63,8 @@ BUTTONS = [[(v, f"goal:{k}") for k, v in GOALS.items()], [(v, f"when:{k}") for k
 DECODER = """Ты — опытный мастер-приёмщик автосервиса и продавец запчастей. Машина клиента: {car}.
 Клиент пишет сумбурно, жаргоном, с сокращениями. Переведи его ПОСЛЕДНЕЕ сообщение (с учётом разговора выше) в точный
 список запчастей, как их назвал бы каталог, используя знание устройства автомобиля:
-- жаргон → нормальное название («плавающие» — плавающие сайлентблоки задней цапфы (кулака), НЕ рычагов; «шаров» —
-  шаровая опора,
-  «майл» — сайлентблоки рычага, «стаб» — стабилизатор, «аморт» — амортизатор, «телевизор» — рамка радиатора);
-- «компл», «комплект», «+ всё что нужно» — раскрой, что обычно меняют вместе (опора стойки → подшипник опоры,
-  пыльник, отбойник; ГРМ → ремень, ролики, помпа). Такие детали помечай certainty=maybe;
+- жаргон → нормальное название (подсказки к этому сообщению — в «Знаниях мастера» ниже, если есть);
+- «компл», «комплект», «+ всё что нужно» — раскрой, что обычно меняют вместе. Такие детали помечай certainty=maybe;
 - «под вопросом», «по факту», «если надо» — certainty=maybe и note, что проверить при осмотре;
 - ось (front/rear) и сколько штук на машину (парные детали обычно 2: левая и правая);
 - не деталь (вопрос о цене, сроке, оплате, доставке, приветствие, «спасибо») — в not_parts;
@@ -85,7 +83,7 @@ DECODER = """Ты — опытный мастер-приёмщик автосе�
 - scheme — просит схему, «где стоит», картинку;
 - question — вопрос не о подборе (оплата, доставка, срок, магазин) или болтовня.
 note пиши клиенту на «вы», не о нём в третьем лице.
-Машина уже определена по VIN — VIN, кузов и марку не спрашивай.
+Машина уже определена по VIN — VIN, кузов и марку не спрашивай.{notes}
 Ответь вызовом decoded."""
 
 SELECTOR = """Ты подбираешь одну деталь в каталоге машины {car}. Нужно: {need} (ось: {axis}; клиент писал: «{words}»).{separate}
@@ -94,8 +92,6 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 нет — ищи search_units (узлы полного каталога; названия бывают английские — ищи и по-английски: «front brake»,
 «rear suspension») и открывай узел «u…» show_parts. Выбирай детали,
 которые и есть нужная (с нужной осью; левую и правую — обе). Названия и позиции бери только из инструментов.
-Сайлентблоки цапфы и «плавающие» — у сборки «кулак (цапфа)»: у Toyota/Lexus она не в группе рычагов, а в узле
-амортизатора/задней подвески — открывай show_parts(id, all=true) у групп задней подвески и амортизатора.
 Мелкие детали (сайлентблок, пыльник, втулка, шаровая, отбойник, подшипник опоры) производитель часто отдельно не продаёт —
 только в сборе с рычагом, цапфой, стойкой; у неоригинальных фирм они есть. Если в группе нашлась только сборка — открой её
 и вызови assembly_parts(id, сборка, что нужно); если предложения есть — pick с via=assembly (в parts — сама сборка,
@@ -103,7 +99,7 @@ SELECTOR = """Ты подбираешь одну деталь в каталог�
 Деталь отдельно не продаётся ни у кого, но есть сборка, в которую она входит (подшипник — в ступице, датчик — в колодках),
 — pick found=true с этой сборкой и reason «отдельно не продаётся — только в сборе с …»: клиенту лучше вариант, чем «нет».
 Нет детали ни в каталоге, ни у поставщиков, ни в сборе — found=false; reason — ОДНА короткая фраза для клиента, без id
-групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick."""
+групп и позиций. Фирма клиента тебя не касается — подбирай саму деталь. Не больше 6 вызовов инструментов до pick.{notes}"""
 SEPARATE = ("\nКлиент просит ИМЕННО ОТДЕЛЬНО, не в сборе: сборку вместо детали не предлагай — только саму деталь из "
             "каталога или через assembly_parts; нет нигде — found=false и в reason, что отдельно не продаётся.")
 
@@ -122,8 +118,8 @@ eco (эконом); why — почему бренд такого уровня. v
 Про гарантии не пиши. Пиши по-русски, просто, без воды.
 Оформление строго так (Telegram, без таблиц и без «###»):
 🔧 **Название детали** · 2 шт.
-• Оригинал Toyota — 8 080 ₽ · 5 дн.
-• ✅ Качество: CTR — 1 470 ₽ · 1 дн. Поставщик Toyota на конвейер.
+• Оригинал <марка> — 8 080 ₽ · 5 дн.
+• ✅ Качество: CTR — 1 470 ₽ · 1 дн. Поставщик автозаводов на конвейер.
 • Альтернатива: Masuma — 960 ₽ · 1 дн.
 (пустая строка между деталями; разделы — «🔍 Проверьте при осмотре», «❓ Вопросы»; цены с пробелом в тысячах)"""
 
@@ -132,7 +128,7 @@ SELLER_ITEM = """Ты — Кирилл, консультант магазина 
 поставщик автозаводов, good — проверенный производитель аналогов, eco — эконом; why — описание бренда).
 Напиши блок только про эту деталь, строго в формате:
 🔧 **Название детали** · N шт.
-• Оригинал Toyota — 8 080 ₽ · 5 дн.
+• Оригинал <марка> — 8 080 ₽ · 5 дн.
 • ✅ Качество: CTR — 1 470 ₽ · 1 дн. <why дословно, с заглавной буквы>
 • Альтернатива: Masuma — 960 ₽ · 1 дн.
 «✅ Качество» — только для quality=OE; good — «Альтернатива», eco — «Эконом». Нет OE — строки «Качество» нет.
@@ -165,7 +161,7 @@ T_SEARCH = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 T_UNITS = {"type": "function", "function": {
     "name": "search_units", "description": "Поиск по узлам ПОЛНОГО каталога машины (медленнее): когда в быстрых группах "
-    "search_catalog нужной детали нет. Узлы бывают названы по-английски (SsangYong, Kia: «FRONT BRAKE», «REAR "
+    "search_catalog нужной детали нет. Узлы у части марок названы по-английски («FRONT BRAKE», «REAR "
     "SUSPENSION») — ничего не нашлось по-русски, ищи по-английски. Возвращает узлы с id «u…»; открывай их show_parts.",
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 T_PARTS = {"type": "function", "function": {
@@ -397,8 +393,11 @@ class Assistant:
 
     # ---------- агенты ----------
 
-    async def decode(self, car: str, history: list[dict], text: str, used: dict) -> dict:
-        msgs = [{"role": "system", "content": DECODER.format(car=car)}] + history + [{"role": "user", "content": text}]
+    async def decode(self, car: str, history: list[dict], text: str, used: dict, brand: str = "") -> dict:
+        said = " ".join([h["content"] for h in history if h.get("role") == "user" and isinstance(h.get("content"), str)]
+                        + [text])
+        msgs = [{"role": "system", "content": DECODER.format(car=car, notes=_notes("decoder", said, brand))}] + \
+            history + [{"role": "user", "content": text}]
         for _ in range(2):   # tool_choice у Claude через шлюз не поддерживается — просим словами
             m, u = await self.gw.chat(self.decoder_model, msgs, [T_DECODED])
             _add(used, u)
@@ -420,7 +419,8 @@ class Assistant:
             top = await self._safe(self.parts(v, tree, first[0]["id"]), []) if first else []
             msgs = [{"role": "system", "content": SELECTOR.format(
                         car=v.summary(), need=item["need"], axis=item.get("axis") or "любая", words=item.get("words", ""),
-                        separate=SEPARATE if item.get("separate") else "")},
+                        separate=SEPARATE if item.get("separate") else "",
+                        notes=_notes("selector", f"{item['need']} {item.get('words', '')}", v.brand))},
                     {"role": "user", "content": "Кандидаты из каталога: " + json.dumps(first, ensure_ascii=False)
                      + (f"\nДетали группы {first[0]['id']}: " + json.dumps(top, ensure_ascii=False) if first else "")
                      + "\nПодбери."}]
@@ -767,7 +767,7 @@ class Assistant:
                 log.info("tree: %s", str(e)[:100])
                 tree = None
             used = {"in": 0, "out": 0, "calls": 0}
-            dec = await self.decode(v.summary(), s.get("history", []), mask(text), used)
+            dec = await self.decode(v.summary(), s.get("history", []), mask(text), used, brand=v.brand)
             # Сначала — чего клиент хочет (26.10, испытание: «оформляй», «а какие есть», «зепро», «схему дай» каждый
             # раз запускали новый подбор)
             intent = dec.get("intent") or "parts"
@@ -1119,6 +1119,13 @@ def _asks(rest: str) -> bool:
     """После VIN есть просьба: хоть одно слово, кроме приветствия и «вот мой вин» (26.10, стенд: «калодка» после VIN
     принималась за «просто VIN» — «Что подобрать?»)."""
     return any(len(w) >= 3 and w.lower() not in _HELLO_WORDS for w in T.words(rest))
+
+
+def _notes(role: str, text: str, brand: str) -> str:
+    """Знания мастера к этой заявке из data/podbor_knowledge.json (раздел notes): только те, чьи слова есть у клиента и
+    чья марка — эта машина. Знания о машинах в промптах не пишем — промпт рос бы с каждым случаем (аудит 26.10)."""
+    found = K.notes(role, text, brand)
+    return "\nЗнания мастера к этой заявке:\n" + "\n".join(f"- {n}" for n in found) if found else ""
 
 
 def _rub(x: float) -> str:

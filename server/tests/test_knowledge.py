@@ -5,7 +5,8 @@ from pathlib import Path
 
 from app.podbor import catalog as C, differ as DF, engine as E, knowledge as K, makes as MK, offers as O, wizard as W
 
-PODBOR = Path(__file__).resolve().parents[1] / "app" / "podbor"
+APP = Path(__file__).resolve().parents[1] / "app"
+CODE = [APP / "podbor", APP / "assistant"]   # робот и Кирилл
 # Сборщики выжимок и лабораторные скрипты: списки марок там — что выгружать и на чём мерить, а не знания робота
 NOT_ROBOT = {"brands.py", "fleet.py", "lab.py"}
 CARS = re.compile(r"тойот|лексус|хенд[аэе]|хунда|хёнд|хьюнда|(?<![а-я])ки[ая](?![а-я])|фольксваген|фольц|шкод|(?<![а-я])ауди|"
@@ -26,10 +27,11 @@ def _docstrings(tree: ast.AST) -> set[int]:
 
 
 def test_no_car_names_in_robot_code():
-    """Марка или модель в строке кода — это знание о машине; ему место в данных. В комментариях и описаниях функций
-    примеры марок можно и нужно: они объясняют, откуда взялось общее правило."""
+    """Марка или модель в строке кода — это знание о машине; ему место в данных. В промптах Кирилла — тоже: знание
+    мастера («плавающие» — цапфа, у Toyota цапфа в узле амортизатора) — запись в разделе notes, а не строчка в промпте.
+    В комментариях и описаниях функций примеры марок можно и нужно: они объясняют, откуда взялось общее правило."""
     found = []
-    for f in sorted(PODBOR.glob("*.py")):
+    for f in sorted(p for d in CODE for p in d.glob("*.py")):
         if f.name in NOT_ROBOT:
             continue
         tree = ast.parse(f.read_text(encoding="utf-8"))
@@ -70,3 +72,24 @@ def test_knowledge_reaches_robot():
     assert DF.economy_line("JZW615301N", "Тормозн.диск") == {"line": "VAG Economy", "maker": "VAG"}
     assert O.oem_brand_for("Неведомая") == "Неведомая"
     assert {"HYUNDAIKIA", "MOBIS"} <= O.original_keys("Kia")
+
+
+def test_master_notes_only_where_they_apply():
+    """Знания мастера попадают в промпт, только если к месту: слова клиента и марка машины (26.10, руководитель,
+    Lexus RX330: «задок плавающие» — Кирилл дал сайлентблоки рычагов; подсказка про цапфу Toyota — только Toyota/Lexus)."""
+    dec = K.notes("decoder", "Задок плавающие, стабы и шаровые", "LEXUS")
+    assert any("плавающие" in n and "цапфы" in n for n in dec) and any("шаровая опора" in n for n in dec)
+    assert not any("стабилизатор" in n for n in K.notes("decoder", "стабилизатор задний", ""))   # полное слово — не жаргон
+    assert any("цапф" in n for n in K.notes("selector", "сайлентблоки плавающие задней цапфы", "LEXUS"))
+    assert not K.notes("selector", "сайлентблоки плавающие задней цапфы", "KIA")    # не та марка — молчим
+    assert not K.notes("decoder", "колодки передние", "TOYOTA")                       # нет слов — промпт не растёт
+    assert K.family("Lexus") == "toyota" and K.family("Mercedes-Benz") == "mercedes" and K.family("") == ""
+    for r in K.rules("notes"):
+        assert r["for"] in ("decoder", "selector") and r["text"] and r["why"] and r["added"]
+        assert set(r.get("makes") or ()) <= set(K.families()), r
+
+
+def test_kirill_prompts_get_notes():
+    from app.assistant import core
+    assert "{notes}" in core.DECODER and "{notes}" in core.SELECTOR
+    assert "Знания мастера" in core._notes("decoder", "плавающие", "LEXUS") and core._notes("decoder", "фильтр", "") == ""

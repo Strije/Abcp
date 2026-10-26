@@ -47,6 +47,24 @@ def economy_lines() -> list[tuple[re.Pattern, re.Pattern, dict]]:
             for r in rules("economy_lines")]
 
 
+@lru_cache(maxsize=1)
+def _notes() -> list[tuple[str, re.Pattern, frozenset[str], str]]:
+    return [(r["for"], re.compile(r["when"], re.I), frozenset(r.get("makes") or ()), r["text"]) for r in rules("notes")]
+
+
+def family(brand: str) -> str:
+    """Семейство марки машины из раздела makes: «LEXUS» → toyota, «Mercedes-Benz» → mercedes."""
+    b = re.sub(r"[^A-Z]", "", (brand or "").upper())
+    return next((fam for fam, (_, cat) in families().items() if b in cat), "")
+
+
+def notes(role: str, text: str, brand: str = "") -> list[str]:
+    """Знания мастера к этой заявке: записи раздела notes для этого агента (decoder, selector), чьи слова есть в тексте
+    и чья марка — марка машины (пустой makes — любая). Промпт растёт не со всей базой знаний, а только с тем, что к месту."""
+    fam = family(brand)
+    return [t for who, when, makes, t in _notes() if who == role and when.search(text or "") and (not makes or fam in makes)]
+
+
 def kin(section: str, stem) -> dict[str, list[str]]:
     """Другие названия детали: основа слова клиента → основы названий в каталоге."""
     return {stem(w): [stem(a) for a in e["also"]] for w, e in table(section).items()}

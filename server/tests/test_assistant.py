@@ -337,7 +337,7 @@ def test_more_with_brand_and_number_check(tmp_path):
     assert r["status"] == "more" and "Bosch — сейчас нет в продаже" in r["text"]
     a.gw = OrderGW("number")
 
-    async def dec(car, history, text, used):
+    async def dec(car, history, text, used, brand=""):
         return {"items": [], "intent": "number", "numbers": ["OC90"]}
     a.decode = dec
     r = asyncio.run(a.reply("tg-12", "а OC90 подойдёт?"))
