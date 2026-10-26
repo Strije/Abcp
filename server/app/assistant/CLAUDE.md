@@ -2,6 +2,9 @@
 
 ИИ-помощник (Telegram @AvtoDrugAi_bot): расшифровщик → подборщик (инструменты робота) → продавец, проверяющий — код.
 `core.py` — агенты и промпты, `telegram.py` — бот, `models.py` — шлюз и расход, `quality.py` — уровни брендов.
+Фото деталей — прайс СТМ Авторусь (`app/podbor/stm.py`): выжимка без цен в `STATE_DIR/stm/parts.json`, не в git;
+новый прайс — `python -m app.podbor.stm price_stm.xlsx parts.json` на ПК и на сервер. Какие детали можно показывать
+фото с другой машины — `photo_typical` в `podbor_knowledge.json`.
 
 ## Кирилл ошибся — как чинить
 

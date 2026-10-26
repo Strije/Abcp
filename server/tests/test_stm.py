@@ -1,0 +1,73 @@
+"""Фото деталей из прайса СТМ поставщика: та же деталь на эту машину, иначе — пример типовой детали, иначе — без фото."""
+import asyncio
+import json
+
+import httpx
+
+from app.assistant.telegram import KirillBot
+from app.podbor.stm import URL, Price, model_tokens
+
+PARTS = [
+    {"g3": "Амортизаторы и стойки", "name": "Амортизатор передний (газомасляный) L для LEXUS RX300/RX330/Toyota Harrier 97-03 GANZ GIK1",
+     "art": "GIK1", "fits": "", "abc": "B", "photo": "a/l.jpeg"},
+    {"g3": "Амортизаторы и стойки", "name": "Амортизатор передний (газомасляный) R для LEXUS RX300/RX330/Toyota Harrier 97-03 GANZ GIK2",
+     "art": "GIK2", "fits": "", "abc": "B", "photo": "a/r.jpeg"},
+    {"g3": "Отбойники и пыльники амортизатора", "name": "Пыльник+отбойник переднего амортизатора (компл) для LEXUS RX II 300/330 (03-09) GANZ GIK7",
+     "art": "GIK7", "fits": "", "abc": "C", "photo": "a/boot.jpeg"},
+    {"g3": "Стойки стабилизатора", "name": "Стойки стабилизатора (компл. 2 шт) для ВАЗ 2190 BOLK BSU1", "art": "BSU1",
+     "fits": "", "abc": "A", "photo": "a/vaz.jpeg"},
+    {"g3": "Стойки стабилизатора", "name": "Стойка стабилизатора передняя L=R для TOYOTA Corolla GANZ GIL1", "art": "GIL1",
+     "fits": "", "abc": "C", "photo": "a/toy.jpeg"},
+    {"g3": "Втулки", "name": "Втулка рычага переднего для CHEVROLET Matiz GANZ GIL2", "art": "GIL2", "fits": "", "abc": "A",
+     "photo": "a/bush.jpeg"},
+    {"g3": "Кузовные детали", "name": "Кронштейн переднего бампера L для TOYOTA Camry (XV50) GANZ GIB1", "art": "GIB1",
+     "fits": "", "abc": "A", "photo": "a/br.jpeg"},
+]
+
+
+def _price(tmp_path):
+    f = tmp_path / "parts.json"
+    f.write_text(json.dumps({"parts": PARTS}, ensure_ascii=False), encoding="utf-8")
+    return Price(f)
+
+
+def test_photo_same_car_side_and_examples(tmp_path):
+    p = _price(tmp_path)
+    assert model_tokens("RX330/350") >= {"RX330", "RX350"}
+    r = p.photo_for("амортизатор передний", "Амортизатор передний правый", "LEXUS", "RX330/350")
+    assert r == {"url": URL + "a/r.jpeg", "exact": True, "label": PARTS[1]["name"]}          # своя машина и сторона
+    # «RX II 300/330» — модель словами прайса раздельно (26.10: пыльник руководителя не нашёлся в каталоге)
+    assert p.photo_for("пыльник амортизатора переднего", "", "LEXUS", "RX330/350")["exact"]
+    # На эту машину нет, деталь типовая — пример; той же марки (Toyota для Lexus), а не ВАЗ
+    r = p.photo_for("стойка стабилизатора переднего", "Шарнир переднего стабилизатора", "LEXUS", "RX330/350")
+    assert r["url"].endswith("toy.jpeg") and not r["exact"]
+    assert p.photo_for("стойка стабилизатора", "", "KIA", "CEED")["url"].endswith("vaz.jpeg")   # своей марки нет — ходовая
+    # Не та деталь: «втулка рычага» — не рычаг, «кронштейн бампера» — не бампер
+    assert p.photo_for("рычаг передний нижний", "", "CHEVROLET", "MATIZ") is None
+    assert p.photo_for("бампер передний", "Бампер передний", "TOYOTA", "CAMRY") is None
+    assert p.photo_for("амортизатор задний", "", "LEXUS", "RX330/350") is None                 # не та ось
+    assert Price(tmp_path / "нет.json").photo_for("амортизатор", "", "LEXUS", "RX330") is None  # нет выжимки — без фото
+
+
+def test_bot_sends_photo_with_scheme(tmp_path):
+    sent = []
+
+    def handler(request: httpx.Request):
+        sent.append((request.url.path.rsplit("/", 1)[-1], request.content))
+        ok = not (sent[-1][0] == "sendPhoto" and b"broken" in request.content)
+        return httpx.Response(200 if ok else 400, json={"ok": ok})
+
+    class A:
+        async def render_scheme(self, sch):
+            return (b"jpg", 0)
+
+    bot = KirillBot(httpx.AsyncClient(transport=httpx.MockTransport(handler)), "T", A(), None)
+    on_part = bot._parts(1)
+    ev = {"block": "🔧 **Амортизатор** · 2 шт.", "maybe": False, "scheme": {"label": "x"},
+          "photo": {"url": URL + "a/r.jpeg", "exact": False, "label": "…"}}
+    asyncio.run(on_part(ev))
+    assert sent[-1][0] == "sendMediaGroup" and json.dumps("фото похожей детали")[1:-1].encode() in sent[-1][1]
+    # Без схемы — одно фото; Telegram не смог открыть ссылку — как раньше, текстом
+    sent.clear()
+    asyncio.run(on_part(dict(ev, scheme=None, photo={"url": "broken", "exact": True, "label": ""})))
+    assert [m for m, _ in sent] == ["sendPhoto", "sendMessage"]

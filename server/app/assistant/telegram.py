@@ -132,6 +132,13 @@ class KirillBot:
                 return
             block = ("🔍 Проверить при осмотре\n" if ev.get("maybe") else "") + ev["block"]
             got = await self.assistant.render_scheme(ev["scheme"]) if ev.get("scheme") else None
+            photo = ev.get("photo")
+            if photo:
+                # Фото детали из прайса — всегда аналог, поэтому «так выглядит деталь», а не «ваша деталь»
+                cap = to_html(block + "\n\n📷 Так выглядит деталь" + ("" if photo.get("exact")
+                                                                     else " — фото похожей детали с другой машины"))
+                if len(cap) <= 1000 and await self._photo_post(chat, photo["url"], cap, got[0] if got else None):
+                    return
             if got:
                 cap = to_html(block)
                 short = len(cap) <= 1000
@@ -142,6 +149,19 @@ class KirillBot:
                     return
             await self.send(chat, block)
         return on_part
+
+    async def _photo_post(self, chat, url: str, cap: str, scheme: bytes | None) -> bool:
+        """Фото детали (по ссылке — Telegram заберёт сам) с подписью-блоком; есть схема — вторым снимком в том же
+        сообщении. False — Telegram не смог (ссылка не открылась): тогда как раньше, схемой или текстом."""
+        if scheme is None:
+            r = await self.http.post(self._url("sendPhoto"), data={"chat_id": str(chat), "photo": url, "caption": cap,
+                                                                    "parse_mode": "HTML"})
+            return r.status_code == 200
+        media = [{"type": "photo", "media": url, "caption": cap, "parse_mode": "HTML"},
+                 {"type": "photo", "media": "attach://scheme"}]
+        r = await self.http.post(self._url("sendMediaGroup"), data={"chat_id": str(chat), "media": json.dumps(media)},
+                                 files={"scheme": ("scheme.jpg", scheme, "image/jpeg")})
+        return r.status_code == 200
 
     async def press(self, cb: dict):
         """Кнопки: предпочтение на этот подбор, «Подобрать» (go) или «📐 деталь» — схема (sch:N)."""

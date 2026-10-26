@@ -28,6 +28,7 @@ from typing import Any
 
 from ..podbor import emb as EM
 from ..podbor import knowledge as K
+from ..podbor import stm as STM
 from ..podbor import article as A
 from ..podbor import text as T
 from ..podbor.catalog import image_url
@@ -305,6 +306,8 @@ class Assistant:
         self.sessions = Sessions(folder / "sessions" if folder else None)
         self.images = folder.parent / "podbor" / "schemes" if folder else None   # тот же кэш, что у страницы подбора
         self.warranty = warranty or {}
+        # Фото деталей из прайса СТМ поставщика (выжимка без цен — STATE_DIR/stm/parts.json, не в git): нет файла — без фото
+        self.stm = STM.Price(folder.parent / "stm" / "parts.json" if folder else None)
         self.pace = asyncio.Semaphore(6)   # параллельных подборщиков: Laximo 600/мин на весь сервис
         self.locks: dict[str, asyncio.Lock] = {}   # один разговор — по очереди: двойное «Подобрать» не подбирает дважды
         self.notify = None   # async (текст) — карточка в группу менеджеров; ставит Telegram-бот
@@ -1024,10 +1027,14 @@ class Assistant:
             # перед „печатает…“») — готовая деталь уходит клиенту сразу, со схемой узла
             p = await self._safe(self.select(v, tree, it, used), {"found": False})
             pr = await self._safe(self.priced(v, it, p), [])
+            # Как выглядит деталь (26.10, пользователь: «картинок деталей нет — печально для восприятия»): фото из прайса
+            # СТМ; разбор прайса — не в цикле событий (первая загрузка — секунды)
+            photo = await self._safe(asyncio.to_thread(self.stm.photo_for, it["need"], pr[0]["part"], v.brand, v.name),
+                                     None) if pr else None
             entry = {"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
                      "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
                      "found": bool(p.get("found")) and bool(pr), "catalog": pr, "group": _group_name(tree, p.get("id")),
-                     "separate": bool(it.get("separate")), "brand": it.get("brand") or "",
+                     "separate": bool(it.get("separate")), "brand": it.get("brand") or "", "photo": photo,
                      "reason": p.get("reason", "") if not pr or re.search(r"отдельно|в сборе", p.get("reason", ""), re.I)
                      else "",
                      # Как агенты пришли к детали — для журнала и разбора ошибок (продавцу и клиенту не уходит)
@@ -1038,7 +1045,7 @@ class Assistant:
                 return entry, None
             block = await self._block(car, entry, used, prefs)
             sch = next((c["scheme"] for c in pr if c.get("scheme")), None)
-            await self._safe(on_part({"block": block, "maybe": entry["certainty"] == "maybe",
+            await self._safe(on_part({"block": block, "maybe": entry["certainty"] == "maybe", "photo": photo,
                                       "scheme": dict(sch, label=entry["need"][:40]) if sch else None}), None)
             return entry, block
         done = await asyncio.gather(*(one(it) for it in items))
@@ -1168,7 +1175,7 @@ def _goal_need(prefs: dict) -> tuple[str, str]:
 
 def _no_schemes(item: dict) -> dict:
     """Продавцу схема, кроссы и «почему» агентов не нужны — лишние токены, а «почему» клиенту не показываем."""
-    return dict({k: v for k, v in item.items() if k != "why"},
+    return dict({k: v for k, v in item.items() if k not in ("why", "photo")},
                 catalog=[{k: v for k, v in c.items() if k not in ("scheme", "numbers")} for c in item.get("catalog") or []])
 
 
