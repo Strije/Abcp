@@ -141,9 +141,8 @@ N шт. — из catalog[].qty (по каталогу); нет — qty дета�
 Несколько номеров с side «левый»/«правый» — по подзаголовку на сторону («Левый:», «Правый:»), по 1 шт. на сторону.
 Первая строка блока — ВСЕГДА «🔧 **Название детали** · N шт.», подзаголовки сторон — только после неё.
 {variants}
-Если certainty=maybe — одна строка «Зачем проверить: …» сразу после названия. via=assembly — одна строка,
-что производитель отдельно не продаёт. via=stm — одна строка из note: подобрано по применяемости производителя аналога,
-номера в каталоге машины нет, менеджер подтвердит перед заказом. found=false — одна строка с reason или «передам менеджеру». reason при
+Если certainty=maybe — одна строка «Зачем проверить: …» сразу после названия. via=assembly или note — одна строка,
+что производитель отдельно не продаёт. found=false — одна строка с reason или «передам менеджеру». reason при
 found=true (например «отдельно не продаётся — только в сборе со ступицей») — одной строкой после названия.
 brand_wanted — фирма, которую просил клиент: если role=«просили» есть в предложениях — первой строкой «• Ваша фирма:
 … — цена · срок»; brand_found=false — одной строкой «<фирма> сейчас нет в продаже по этому номеру», дальше варианты.
@@ -512,28 +511,6 @@ class Assistant:
         out = [self._offer(_offer(r)) for r in best.values()]
         out.sort(key=lambda o: (o["quality"] != "OE", o["days"], o["price"]))
         return out[:3]
-
-    async def priced_stm(self, v, item: dict) -> list[dict]:
-        """Каталог детали не дал — прайс СТМ поставщика: позиция, которая по применяемости производителя подходит к этой
-        модели, и её предложения ABCP по артикулу (26.10: пыльник с отбойником Lexus RX330 — в каталоге нет, в прайсе есть;
-        отечественные машины Laximo знает плохо). Номер не из каталога машины — продавец пишет, что подтвердит менеджер."""
-        fits = await asyncio.to_thread(self.stm.fits_for, item["need"], "", v.brand, v.name)
-        out = []
-        for f in fits:
-            names = [b.get("brand", "") for b in await self.eng.src.brands(f["art"])]
-            brand = next((b for b in names if Q.key(b).startswith(Q.key(f["brand"])[:4])), "") if f["brand"] else ""
-            # Только сама позиция производителя: его применяемость — про неё, а не про чужие аналоги по её номеру
-            rows = [r for r in await self.eng.src.offers(f["art"], brand) if Q.key(r.get("brand")) == Q.key(brand)] \
-                if brand else []
-            cur = curate(rows, "", v.brand, set(), name=item["need"])
-            kept, dropped = check(f["name"], [self._offer(o) for o in cur.get("analogs", [])[:3]], v.brand)
-            if kept:
-                out.append({"part": f["name"], "oem": "", "pos": "", "via": "stm", "art": f["art"],
-                            "note": f"подобрано по применяемости {nice_brand(f['brand'])}: в каталоге машины номера нет — "
-                                    "менеджер подтвердит перед заказом",
-                            "offers": kept, "dropped": dropped, "qty": None, "pair": False,
-                            "side": {"left": "левый", "right": "правый"}.get(f["side"], ""), "numbers": [], "scheme": None})
-        return out
 
     async def priced(self, v, item: dict, pick: dict) -> list[dict]:
         """Выбранные детали → номера каталога → предложения ABCP → проверяющий."""
@@ -1050,12 +1027,10 @@ class Assistant:
             # перед „печатает…“») — готовая деталь уходит клиенту сразу, со схемой узла
             p = await self._safe(self.select(v, tree, it, used), {"found": False})
             pr = await self._safe(self.priced(v, it, p), [])
-            if not pr:   # каталог не дал — прайс СТМ по применяемости производителя (менеджер подтвердит)
-                pr = await self._safe(self.priced_stm(v, it), [])
             # Как выглядит деталь (26.10, пользователь: «картинок деталей нет — печально для восприятия»): фото из прайса
             # СТМ; разбор прайса — не в цикле событий (первая загрузка — секунды)
-            photo = await self._safe(asyncio.to_thread(self.stm.photo_for, it["need"], pr[0]["part"], v.brand, v.name,
-                                                       [c["art"] for c in pr if c.get("art")]), None) if pr else None
+            photo = await self._safe(asyncio.to_thread(self.stm.photo_for, it["need"], pr[0]["part"], v.brand, v.name),
+                                     None) if pr else None
             entry = {"need": it["need"], "axis": it.get("axis"), "qty": it.get("qty"),
                      "certainty": it.get("certainty"), "client_words": it.get("words"), "note": it.get("note", ""),
                      "found": bool(p.get("found")) and bool(pr), "catalog": pr, "group": _group_name(tree, p.get("id")),
@@ -1065,8 +1040,7 @@ class Assistant:
                      # Как агенты пришли к детали — для журнала и разбора ошибок (продавцу и клиенту не уходит)
                      "why": {"decoder": it.get("why", ""), "selector": p.get("why", ""),
                              "notes": K.notes("decoder", it.get("words", ""), v.brand)
-                             + K.notes("selector", f"{it['need']} {it.get('words', '')}", v.brand)
-                             + [f"прайс СТМ по применяемости: {c['part']}" for c in pr if c.get("via") == "stm"]}}
+                             + K.notes("selector", f"{it['need']} {it.get('words', '')}", v.brand)}}
             if on_part is None:
                 return entry, None
             block = await self._block(car, entry, used, prefs)
