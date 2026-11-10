@@ -35,6 +35,13 @@ android {
         // AppMetrica (Яндекс): вылеты и ошибки. Ключ приложения — не секрет. Пусто — ничего не отправляем.
         buildConfigField("String", "APPMETRICA_KEY", "\"${localProperties.getProperty("APPMETRICA_KEY", "717eaca7-de59-4828-aac1-11882fe2fe31")}\"")
         buildConfigField("String", "RUSTORE_PROJECT_ID", "\"ENyKTeW4scP40-pocP1gWiOTC-kB89sT\"")
+        // Firebase (второй канал push, Google FCM) — идентификаторы проекта из google-services.json, не секреты:
+        // их и так видно в любом APK. Ключ API ограничивается пакетом/подписью в Google Cloud. Плагин google-services
+        // не подключаем (AGP 9) — Firebase инициализируется в коде (push/Fcm.kt)
+        buildConfigField("String", "FCM_PROJECT_ID", "\"myapplication-0522ea25\"")
+        buildConfigField("String", "FCM_APP_ID", "\"1:491596388481:android:5307f4fa015510680a9580\"")
+        buildConfigField("String", "FCM_SENDER_ID", "\"491596388481\"")
+        buildConfigField("String", "FCM_API_KEY", "\"AIzaSyArb6Didgy50VUarHrn1ZY6Ehxhs7K8qMM\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -133,6 +140,8 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     // Push-уведомления RuStore (доставка через RuStore или приложения VK, без Google)
     implementation("ru.rustore.sdk:pushclient:7.5.0")
+    // Второй канал push — Google FCM: сервисы Google прошивки не усыпляют (RuStore на Xiaomi — усыпляют)
+    implementation("com.google.firebase:firebase-messaging:24.1.0")
     // Версия из RuStore: обновление через RuStore и просьба оценить приложение
     implementation("ru.rustore.sdk:appupdate:10.5.1")
     implementation("ru.rustore.sdk:review:10.5.1")

@@ -29,22 +29,28 @@ object Push {
     private const val TOKEN = "token"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** После входа: получить токен и отдать серверу. Получилось — фоновая проверка из приложения не нужна. */
+    /**
+     * После входа: токены RuStore и Google — серверу. Получилось — фоновая проверка из приложения не нужна.
+     * Нет RuStore, но есть Google — устройство регистрируется только Google (ключ «fcm:…»).
+     */
     fun register(ctx: Context) {
         val app = ctx.applicationContext
+        val noRuStore = {
+            Fcm.token { f -> if (f != null) scope.launch { send(app, "fcm:$f", null) } else OrderStatusWatch.schedule(app) }
+        }
         runCatching {
             RuStorePushClient.getToken()
-                .addOnSuccessListener { token -> scope.launch { send(app, token) } }
+                .addOnSuccessListener { token -> Fcm.token { f -> scope.launch { send(app, token, f) } } }
                 .addOnFailureListener { e ->
-                    Log.i(TAG, "push недоступен: ${e.message}")
-                    OrderStatusWatch.schedule(app)
+                    Log.i(TAG, "push RuStore недоступен: ${e.message}")
+                    noRuStore()
                 }
-        }.onFailure { OrderStatusWatch.schedule(app) }
+        }.onFailure { noRuStore() }
     }
 
-    internal suspend fun send(ctx: Context, token: String) {
+    internal suspend fun send(ctx: Context, token: String, fcm: String?) {
         if (!SessionManager(ctx).isLoggedIn()) return
-        runCatching { AppServer(ctx).pushToken(token) }
+        runCatching { AppServer(ctx).pushToken(token, fcm) }
             .onSuccess { enabled ->
                 ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TOKEN, token).apply()
                 // Сервер шлёт push — свою проверку выключаем, иначе одно изменение придёт дважды
@@ -65,8 +71,29 @@ object Push {
     /** Push от сервера: показать уведомление и записать в ленту, как при обычной проверке. */
     internal fun onMessage(ctx: Context, data: Map<String, String>) = onMessage(ctx, data, show = true)
 
+    /** Замер доставки: сервер кладёт время отправки; via — каким каналом пришло (fcm / rustore). */
+    internal fun measure(data: Map<String, String>, via: String, withNotification: Boolean = false) {
+        data["sent_at"]?.toLongOrNull()?.let { sent ->
+            com.example.myapplication.Analytics.event("push_received", mapOf(
+                "type" to data["type"], "delay_s" to ((System.currentTimeMillis() - sent) / 1000).coerceAtLeast(0),
+                "via" to via, "with_notification" to withNotification
+            ))
+        }
+    }
+
+    /** Одно сообщение приходит двумя каналами (Google и RuStore) с одним mid — второе пропускаем. */
+    @Synchronized
+    private fun firstTime(ctx: Context, mid: String): Boolean {
+        val p = ctx.getSharedPreferences("push_mids", Context.MODE_PRIVATE)
+        val seen = p.getString("mids", "").orEmpty().split(',').filter { it.isNotBlank() }
+        if (mid in seen) return false
+        p.edit().putString("mids", (seen.takeLast(49) + mid).joinToString(",")).apply()
+        return true
+    }
+
     /** show=false — уведомление уже показал RuStore (push с готовым уведомлением): только запись в ленту. */
     internal fun onMessage(ctx: Context, data: Map<String, String>, show: Boolean) {
+        data["mid"]?.let { if (!firstTime(ctx, it)) return }
         val order = data["order"]
         val items = data["items"]?.let {
             runCatching { Gson().fromJson<List<List<String>>>(it, object : TypeToken<List<List<String>>>() {}.type) }.getOrNull()
@@ -105,18 +132,13 @@ class PushService : RuStoreMessagingService() {
     }
 
     override fun onNewToken(token: String) {
-        CoroutineScope(Dispatchers.IO).launch { Push.send(applicationContext, token) }
+        Push.register(applicationContext)   // вместе с токеном Google
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         // Замер доставки: сервер кладёт время отправки. Когда приложение закрыто, уведомление показывает сам
         // RuStore и сюда мы можем не попасть — тогда замер не придёт (в отчёте это нижняя граница доставки)
-        message.data["sent_at"]?.toLongOrNull()?.let { sent ->
-            com.example.myapplication.Analytics.event("push_received", mapOf(
-                "type" to message.data["type"], "delay_s" to ((System.currentTimeMillis() - sent) / 1000).coerceAtLeast(0),
-                "with_notification" to (message.notification != null)
-            ))
-        }
+        Push.measure(message.data, "rustore", withNotification = message.notification != null)
         // Push с готовым уведомлением: когда приложение свёрнуто, его показывает сам RuStore (быстрее — не ждём, пока
         // система разбудит приложение), второе не рисуем. Когда приложение открыто, RuStore не показывает ничего и
         // отдаёт сообщение сюда — тогда рисуем сами (телефон 10.11: проверочный push при открытом экране «пропадал»)

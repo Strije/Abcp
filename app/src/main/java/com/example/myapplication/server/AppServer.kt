@@ -100,8 +100,9 @@ class AppServer(ctx: Context) {
     // ---------- push RuStore ----------
 
     /** Возвращает, включён ли push на сервере. */
-    suspend fun pushToken(token: String): Boolean =
-        post("/v1/push/token", Gson().toJson(mapOf("token" to token))).asJsonObject["push"]?.asBoolean == true
+    /** fcm — токен Google того же устройства (второй канал); null — только RuStore. */
+    suspend fun pushToken(token: String, fcm: String? = null): Boolean =
+        post("/v1/push/token", Gson().toJson(mapOf("token" to token, "fcm" to fcm))).asJsonObject["push"]?.asBoolean == true
 
     /** Проверка уведомлений: сервер пришлёт push через delay секунд тем же путём, что статус заказа. */
     suspend fun pushSelfTest(delay: Int) {

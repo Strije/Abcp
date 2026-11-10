@@ -61,6 +61,12 @@
                 <action android:name="ru.rustore.sdk.pushclient.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- Второй канал push — Google FCM (push/Fcm.kt) -->
+        <service android:name=".push.FcmService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
         <meta-data
             android:name="ru.rustore.sdk.pushclient.default_notification_channel_id"
             android:value="order_status" />

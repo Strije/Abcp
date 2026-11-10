@@ -9,6 +9,7 @@ class App : Application() {
         super.onCreate()
         Analytics.init(this) // вылеты и ошибки — в AppMetrica
         Vpn.init(this)
+        com.example.myapplication.push.Fcm.init(this) // второй канал push — Google (до регистрации токенов)
         // Каждый открытый экран — событие screen (карта путей в AppMetrica); вкладки главного экрана шлёт он сам
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(a: android.app.Activity) {
