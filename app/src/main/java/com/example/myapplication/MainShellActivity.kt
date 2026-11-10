@@ -415,8 +415,11 @@ private fun Tile(
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
             Icon(icon, null, tint = if (accent) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary)
             Column {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                // «Спросить менеджера» в одну строку обрезалось до «Спросить» (телефон 10.11): заголовок — до двух строк
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }
     }

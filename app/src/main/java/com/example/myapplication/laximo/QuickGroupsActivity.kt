@@ -114,6 +114,8 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
                     }
                 },
                 navigationIcon = {
+                    // Без выбранного раздела — обычная стрелка (с 10.11 подбор открывается сразу, минуя карточку машины)
+                    if (selectedGroup == null) com.example.myapplication.ui.BackButton()
                     if (selectedGroup != null) {
                         TextButton(onClick = {
                             selectedGroup = null
