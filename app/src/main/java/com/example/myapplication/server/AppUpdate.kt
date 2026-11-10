@@ -40,7 +40,7 @@ data class Release(
 class AppUpdate(private val ctx: Context) {
 
     private val prefs = ctx.getSharedPreferences("app_update", Context.MODE_PRIVATE)
-    private val base = BuildConfig.SERVER_URL.trimEnd('/')
+    private val base get() = ServerAddress.current
 
     /** Новая сборка или null. Без [force] — не чаще раза в 6 часов и не после «Позже» на сутки. */
     suspend fun check(force: Boolean): Release? = withContext(Dispatchers.IO) {

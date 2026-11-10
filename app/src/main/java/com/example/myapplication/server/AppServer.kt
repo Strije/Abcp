@@ -34,7 +34,8 @@ class AppServer(ctx: Context) {
 
     private val session = SessionManager(ctx)
     private val prefs = ctx.getSharedPreferences("abcp_session", Context.MODE_PRIVATE) // очищается при выходе
-    private val base = BuildConfig.SERVER_URL.trimEnd('/')
+    // Адрес может смениться на ходу (переезд сервера) — читаем при каждом запросе
+    private val base get() = ServerAddress.current
 
     val enabled: Boolean get() = base.isNotBlank()
 
@@ -217,8 +218,10 @@ class AppServer(ctx: Context) {
     private fun execute(req: Request): Pair<Int, String> = try {
         http.newCall(req).execute().use { it.code to (it.body?.string().orEmpty()) }
     } catch (e: java.io.InterruptedIOException) {
+        ServerAddress.onNetworkFailure()
         throw ServerException("Сервер не ответил. Проверьте интернет и попробуйте ещё раз.")
     } catch (e: java.io.IOException) {
+        ServerAddress.onNetworkFailure() // вдруг сервер переехал — сверимся со страницей на сайте
         throw ServerException("Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.")
     }
 

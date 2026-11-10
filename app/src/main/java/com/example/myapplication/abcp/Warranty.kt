@@ -39,7 +39,7 @@ object Warranties {
     suspend fun load(): Map<String, BrandWarranty> = cache ?: withContext(Dispatchers.IO) {
         runCatching {
             val http = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
-            val text = http.newCall(Request.Builder().url(BuildConfig.SERVER_URL.trimEnd('/') + "/v1/brands/warranty").build())
+            val text = http.newCall(Request.Builder().url(com.example.myapplication.server.ServerAddress.current + "/v1/brands/warranty").build())
                 .execute().use { it.body?.string().orEmpty() }
             val root = JsonParser.parseString(text).asJsonObject
             root.get("page")?.asString?.takeIf { it.isNotBlank() }?.let { page = it }
