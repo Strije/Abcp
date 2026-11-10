@@ -35,7 +35,7 @@ class SmartSearchTest {
 
     @Test
     fun passwordRules() {
-        assertEquals(null, passwordProblem("Avtodrug2026"))
+        assertEquals(null, passwordProblem("Zapchast2024"))
         assertTrue(passwordProblem("test123456")!!.contains("заглавная"))
         assertTrue(passwordProblem("Ab1")!!.contains("8 символов"))
     }
