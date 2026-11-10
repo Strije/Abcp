@@ -97,6 +97,7 @@ class MainShellActivity : ComponentActivity() {
         }
 
         fun logout(message: String? = null) {
+            Analytics.client(null)
             com.example.myapplication.push.Push.unregister(this)
             OrderStatusWatch.stop(this)
             AppServer.clearCache()
@@ -128,6 +129,8 @@ class MainShellActivity : ComponentActivity() {
                     ApiAccess.check(this@MainShellActivity)
                 }
                 var tab by rememberSaveable { mutableStateOf(HomeTab.Home) }
+                LaunchedEffect(tab) { Analytics.screen("Главная/" + tab.name) }
+                LaunchedEffect(user?.id) { if (!guest) Analytics.client(user?.id) }
                 // Каждая вкладка помнит своё (введённый номер, прокрутку) при переключении
                 val tabState = rememberSaveableStateHolder()
                 var visits by remember { mutableIntStateOf(0) } // для перечитывания корзины при входе на вкладку

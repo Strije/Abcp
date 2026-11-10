@@ -48,6 +48,7 @@ class CheckoutActivity : ComponentActivity() {
                 var showItems by remember { mutableStateOf(false) }
                 // Сообщение, которое переживает перечитывание корзины (например, «изменились цены»)
                 var notice by remember { mutableStateOf<String?>(null) }
+                fun ecomItems() = basket.map { com.example.myapplication.Analytics.Item(it.brand, it.number, it.description, it.price, it.quantity) }
 
                 LaunchedEffect(reload) {
                     loading = true
@@ -59,6 +60,7 @@ class CheckoutActivity : ComponentActivity() {
                         // Иначе: вариант один — выбираем его сами
                         fun keep(cur: String?, list: List<IdName>) = cur?.takeIf { c -> list.any { it.id == c } } ?: list.singleOrNull()?.id
                         val first = opts == null
+                        if (first) com.example.myapplication.Analytics.ecomBeginCheckout(ecomItems())
                         payment = keep(payment, o.payments)
                         method = keep(method, o.shipmentMethods)
                         office = keep(office, o.offices)
@@ -83,6 +85,16 @@ class CheckoutActivity : ComponentActivity() {
                     !pickup && address == null -> "Выберите адрес доставки"
                     o.dates.isNotEmpty() && date == null -> "Выберите дату"
                     else -> null
+                }
+
+                // Ушёл с оформления без заказа — на каком шаге (что ещё не выбрал) и сколько позиций
+                val leaveReason by rememberUpdatedState(missing ?: "не нажал «Подтвердить»")
+                DisposableEffect(Unit) {
+                    onDispose {
+                        if (done == null && opts != null) com.example.myapplication.Analytics.event(
+                            "checkout_leave", mapOf("step" to leaveReason, "positions" to basket.size)
+                        )
+                    }
                 }
 
                 Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Оформление заказа") }) }) { padding ->
@@ -187,6 +199,7 @@ class CheckoutActivity : ComponentActivity() {
                                                     }
                                                 }
                                                 com.example.myapplication.Analytics.event("order_placed", mapOf("positions" to basket.size))
+                                                com.example.myapplication.Analytics.purchase(numbers.joinToString(","), ecomItems())
                                             } catch (e: Exception) {
                                                 com.example.myapplication.Analytics.error("Оформление → подтвердить заказ", e)
                                                 if (isBasketChanged(e.message)) {

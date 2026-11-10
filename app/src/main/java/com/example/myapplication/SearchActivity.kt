@@ -122,6 +122,8 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 brands = found
                 // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
                 com.example.myapplication.Analytics.event("search", mapOf("number" to n, "found" to found.size, "guest" to shop.isGuest))
+                // Что ищут, а у нас нет — список для закупки
+                if (found.isEmpty()) com.example.myapplication.Analytics.event("search_empty", mapOf("number" to n))
                 val auto = autoPickBrand(found, preferredBrand)
                 if (auto != null) openOffers(ctx, auto)
                 else if (found.size > 1) picking = scope.launch {

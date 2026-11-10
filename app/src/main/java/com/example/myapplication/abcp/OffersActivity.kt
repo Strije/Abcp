@@ -103,6 +103,10 @@ class OffersActivity : ComponentActivity() {
                     error = null
                     try {
                         offers = withConfirmations(shop.offers(number, brand, all = showAll))
+                        // Номер есть, а предложений нет — тоже список «что ищут, а у нас нет»
+                        if (offers.isEmpty()) com.example.myapplication.Analytics.event(
+                            "offers_empty", mapOf("brand" to brand, "number" to number, "all" to showAll)
+                        )
                     } catch (e: Exception) {
                         com.example.myapplication.Analytics.error("Выдача → загрузка предложений", e)
                         error = e.message ?: "Не удалось загрузить предложения. Проверьте интернет."
@@ -309,6 +313,11 @@ class OffersActivity : ComponentActivity() {
                 }
 
                 picked?.let { o ->
+                    LaunchedEffect(o) {
+                        com.example.myapplication.Analytics.ecomProductCard(
+                            com.example.myapplication.Analytics.Item(o.brand, o.number, o.description, o.price, o.packing)
+                        )
+                    }
                     AddToCartSheet(
                         offer = o,
                         onImage = { viewer = it },
@@ -324,6 +333,9 @@ class OffersActivity : ComponentActivity() {
                                 try {
                                     shop.addToBasket(o, qty)
                                     com.example.myapplication.Analytics.event("add_to_cart", mapOf("brand" to o.brand, "number" to o.number, "qty" to qty, "in_store" to o.inStore))
+                                    com.example.myapplication.Analytics.ecomAddToCart(
+                                        com.example.myapplication.Analytics.Item(o.brand, o.number, o.description, o.price, qty)
+                                    )
                                     CartState.refresh(shop)
                                     val r = snackbar.showSnackbar("Добавлено в корзину", actionLabel = "Перейти", duration = SnackbarDuration.Short)
                                     if (r == SnackbarResult.ActionPerformed) startActivity(android.content.Intent(this@OffersActivity, CartActivity::class.java))
