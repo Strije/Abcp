@@ -78,15 +78,17 @@ class VinSearchActivity : ComponentActivity() {
                                 repo.findVehicleAny(vin)
                             }
                             results = list
-                            if (quickQuery.isNotBlank() && list.size == 1) {
+                            // Машина нашлась одна — сразу к подбору. Карточка остаётся позади:
+                            // «назад» — к ней, там «В мой гараж» и характеристики
+                            if (list.size == 1) {
                                 val r = list.first()
                                 startActivity(
                                     Intent(ctx, QuickGroupsActivity::class.java)
                                         .putExtra("catalog", r.catalog).putExtra("vehicleId", r.vehicleId).putExtra("ssd", r.ssd)
                                         .putExtra("brand", r.brand ?: "").putExtra("name", r.name ?: "")
-                                        .putExtra("query", quickQuery)
+                                        .apply { if (quickQuery.isNotBlank()) putExtra("query", quickQuery) }
                                 )
-                                finish()
+                                if (quickQuery.isNotBlank()) finish()
                             }
                             com.example.myapplication.Analytics.event("vehicle_search", mapOf(
                                 "kind" to when {
