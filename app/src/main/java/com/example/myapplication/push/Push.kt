@@ -63,7 +63,10 @@ object Push {
     }
 
     /** Push от сервера: показать уведомление и записать в ленту, как при обычной проверке. */
-    internal fun onMessage(ctx: Context, data: Map<String, String>) {
+    internal fun onMessage(ctx: Context, data: Map<String, String>) = onMessage(ctx, data, show = true)
+
+    /** show=false — уведомление уже показал RuStore (push с готовым уведомлением): только запись в ленту. */
+    internal fun onMessage(ctx: Context, data: Map<String, String>, show: Boolean) {
         val order = data["order"]
         val items = data["items"]?.let {
             runCatching { Gson().fromJson<List<List<String>>>(it, object : TypeToken<List<List<String>>>() {}.type) }.getOrNull()
@@ -79,6 +82,7 @@ object Push {
         if (order != null && !items.isNullOrEmpty()) {
             val changed = items.mapIndexed { i, (title, status) -> PositionStatus("$order#$i", order, title, status) }
             OrderStatusWatch.addToFeed(ctx, order, changed)
+            if (!show) return
             // «Готово к выдаче», «ждёт оплаты», «задерживается» — сервер присылает свой текст (и адрес для маршрута)
             showOrderNotification(
                 ctx, order, changed,
@@ -86,7 +90,7 @@ object Push {
                 customText = data["body"].takeIf { data["kind"] != null },
                 routeAddress = data["address"]?.takeIf { data["kind"] == "ready" && it.isNotBlank() }
             )
-        } else {
+        } else if (show) {
             showOrderNotification(ctx, order, emptyList(), data["title"] ?: "Автодруг92", data["body"].orEmpty())
         }
     }
@@ -98,9 +102,12 @@ class PushService : RuStoreMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        // Рассылки и ответы чата сервер присылает с готовым уведомлением — его уже показал RuStore
-        // (так быстрее: не надо ждать, пока система разбудит приложение). Второе не рисуем.
-        if (message.notification != null) return
+        // Сервер присылает push с готовым уведомлением — его уже показал RuStore (так быстрее: не надо ждать,
+        // пока система разбудит приложение). Второе не рисуем; статус заказа только записываем в ленту.
+        if (message.notification != null) {
+            if (message.data["type"] == "order_status") Push.onMessage(applicationContext, message.data, show = false)
+            return
+        }
         Push.onMessage(applicationContext, message.data)
     }
 }
