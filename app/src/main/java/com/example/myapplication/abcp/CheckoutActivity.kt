@@ -55,14 +55,17 @@ class CheckoutActivity : ComponentActivity() {
                     try {
                         basket = shop.basket()
                         val o = shop.checkoutOptions(basket)
+                        // Перечитали после «изменились цены» — выбор клиента сохраняем, если вариант ещё есть.
+                        // Иначе: вариант один — выбираем его сами
+                        fun keep(cur: String?, list: List<IdName>) = cur?.takeIf { c -> list.any { it.id == c } } ?: list.singleOrNull()?.id
+                        val first = opts == null
+                        payment = keep(payment, o.payments)
+                        method = keep(method, o.shipmentMethods)
+                        office = keep(office, o.offices)
+                        address = keep(address, o.addresses)
+                        date = date?.takeIf { d -> o.dates.any { it.date == d } } ?: o.dates.firstOrNull()?.date
+                        if (first) pickup = o.addresses.isEmpty() || o.offices.isNotEmpty()
                         opts = o
-                        // Если вариант один — выбираем его сами
-                        payment = o.payments.singleOrNull()?.id
-                        method = o.shipmentMethods.singleOrNull()?.id
-                        office = o.offices.singleOrNull()?.id
-                        address = o.addresses.singleOrNull()?.id
-                        date = o.dates.firstOrNull()?.date
-                        pickup = o.addresses.isEmpty() || o.offices.isNotEmpty()
                     } catch (e: Exception) {
                         com.example.myapplication.Analytics.error("Оформление → варианты доставки", e)
                         error = e.message ?: "Ошибка загрузки"
