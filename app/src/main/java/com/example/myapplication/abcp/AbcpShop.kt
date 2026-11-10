@@ -108,7 +108,9 @@ data class BasketItem(
     val packing: Int = 1,
     /** Корзина при мультикорзине (null — основная) */
     val basketId: String? = null,
-    val basketName: String? = null
+    val basketName: String? = null,
+    /** Код детали на сайте — запасной способ удалить позицию */
+    val code: String = ""
 )
 
 data class IdName(val id: String, val name: String)
@@ -133,7 +135,16 @@ data class OrderChoice(
     val comment: String
 )
 
-class AbcpException(message: String) : Exception(message)
+open class AbcpException(message: String) : Exception(message)
+
+/** ABCP ответил на basket/add, но позицию не принял (status=0) — в отличие от сбоя связи. */
+class BasketRejected(message: String) : AbcpException(message)
+
+/** Позиция в корзине устарела, и ABCP не удаляет её поштучно — только очисткой корзины. */
+class StaleBasketItem(reason: String?) : AbcpException(
+    "Эта позиция устарела (поставщик обновил прайс), и удалить её отдельно не получается" +
+        (reason?.takeIf { it.isNotBlank() }?.let { ".\n$it" } ?: ".")
+)
 
 // ---------- Репозиторий ----------
 
@@ -279,8 +290,48 @@ class AbcpShop(private val session: SessionManager) {
         }
     }
 
-    suspend fun removeFromBasket(b: BasketItem) =
-        setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, 0, b.basketId)
+    /**
+     * Удаление — тем же набором бренд/номер/itemKey/код поставки с количеством 0. У устаревшей позиции
+     * (прайс поставщика обновился) ABCP по этому набору её может не найти — тогда пробуем по коду детали.
+     * Не вышло и так — бросаем [StaleBasketItem]: удалить её можно только очисткой корзины ([rebuildBasket]).
+     */
+    suspend fun removeFromBasket(b: BasketItem) {
+        val first = runCatching { setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, 0, b.basketId) }
+        if (first.isSuccess) return
+        // Нет связи и прочие сбои — не «устарела», показываем как есть
+        first.exceptionOrNull()?.let { if (it !is BasketRejected) throw it }
+        if (b.code.isNotBlank() && runCatching { removeByCode(b) }.isSuccess) return
+        throw StaleBasketItem(first.exceptionOrNull()?.message)
+    }
+
+    private suspend fun removeByCode(b: BasketItem) {
+        val fields = auth() + (b.basketId?.let { mapOf("basketId" to it) } ?: emptyMap()) + mapOf(
+            "positions[0][code]" to b.code,
+            "positions[0][itemKey]" to b.itemKey,
+            "positions[0][quantity]" to "0"
+        )
+        val r = call(retry = false) { api.basketAdd(fields) }.asJsonObjectOrNull()
+        if (r?.str("status") == "0") throw AbcpException("Не удалось удалить позицию")
+    }
+
+    /**
+     * Очистить корзину (basket/clear) и положить обратно всё, кроме [drop]. Возвращает то, что вернуть
+     * не удалось (позиция тем временем устарела сама). Для позиций, которые ABCP не удаляет поштучно.
+     */
+    suspend fun rebuildBasket(all: List<BasketItem>, drop: Set<BasketItem>): List<String> {
+        val failed = mutableListOf<String>()
+        all.groupBy { it.basketId }.forEach { (basketId, items) ->
+            val r = call(retry = false) {
+                api.basketClear(auth() + (basketId?.let { mapOf("basketId" to it) } ?: emptyMap()))
+            }.asJsonObjectOrNull()
+            if (r?.str("status") == "0") throw AbcpException(cleanAbcpMessage(r.str("errorMessage")) ?: "Не удалось очистить корзину")
+            items.filter { it !in drop }.forEach { b ->
+                runCatching { setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, b.quantity, basketId) }
+                    .onFailure { failed += "${b.brand} ${b.number}".trim() }
+            }
+        }
+        return failed
+    }
 
     private suspend fun setBasketQuantity(
         brand: String, number: String, itemKey: String, supplierCode: String, quantity: Int,
@@ -296,7 +347,7 @@ class AbcpShop(private val session: SessionManager) {
         val r = call(retry = false) { api.basketAdd(fields) }.asJsonObjectOrNull()
         if (r?.str("status") == "0") {
             val pos = r.get("positions")?.let { items(it) }?.firstOrNull()?.asJsonObjectOrNull()
-            throw AbcpException(explainAbcpError(cleanAbcpMessage(pos?.str("errorMessage")) ?: "Не удалось изменить корзину"))
+            throw BasketRejected(explainAbcpError(cleanAbcpMessage(pos?.str("errorMessage")) ?: "Не удалось изменить корзину"))
         }
     }
 
@@ -482,7 +533,8 @@ private fun JsonElement.toBasketItem(): BasketItem? {
         itemKey = o.str("itemKey").orEmpty(),
         positionId = o.str("positionId").orEmpty(),
         packing = o.int("packing").coerceAtLeast(1),
-        errorMessage = cleanAbcpMessage(o.str("errorMessage"))
+        errorMessage = cleanAbcpMessage(o.str("errorMessage")),
+        code = o.str("code").orEmpty()
     )
 }
 

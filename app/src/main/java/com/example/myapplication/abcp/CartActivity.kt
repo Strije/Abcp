@@ -47,6 +47,8 @@ fun CartScreen(reloadKey: Int) {
     // Позиция, которую сейчас меняем, — её кнопки заблокированы, остальной экран живой
     var busy by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf<BasketItem?>(null) }
+    // Позиции, которые ABCP поштучно не удаляет (устарели) — убрать их можно только очисткой корзины
+    var confirmRebuild by remember { mutableStateOf<Set<BasketItem>?>(null) }
 
     LaunchedEffect(reloadKey, localReload) {
         loading = true
@@ -70,6 +72,9 @@ fun CartScreen(reloadKey: Int) {
             try {
                 action()
                 localReload++
+            } catch (e: StaleBasketItem) {
+                com.example.myapplication.Analytics.error("Корзина → устаревшая позиция", e)
+                confirmRebuild = setOf(b)
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Корзина → изменение", e)
                 Toast.makeText(ctx, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
@@ -119,6 +124,13 @@ fun CartScreen(reloadKey: Int) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 error?.let { e -> item { Text(e, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
+                val stale = items.filter { !it.errorMessage.isNullOrBlank() }
+                if (stale.isNotEmpty()) item {
+                    OutlinedButton(
+                        onClick = { confirmRebuild = stale.toSet() }, enabled = busy == null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Удалить позиции с ⚠ (${stale.size})", color = MaterialTheme.colorScheme.error) }
+                }
                 items(items, key = { it.basketId + "|" + it.itemKey }) { b ->
                     val isBusy = busy == b.itemKey
                     ElevatedCard(Modifier.fillMaxWidth()) {
@@ -155,7 +167,7 @@ fun CartScreen(reloadKey: Int) {
                                     ) { Text("+") }
                                 }
                                 Text("Срок: ${formatDelivery(b.deadlineHours, b.deadlineHoursMax)}", style = MaterialTheme.typography.bodySmall)
-                                b.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                b.errorMessage?.let { Text("⚠ $it", color = MaterialTheme.colorScheme.error) }
                             }
                             IconButton(enabled = !isBusy, onClick = { confirmDelete = b }) { Icon(Icons.Default.Delete, "Удалить") }
                         }
@@ -174,6 +186,43 @@ fun CartScreen(reloadKey: Int) {
                 TextButton(onClick = { confirmDelete = null; mutate(b) { shop.removeFromBasket(b) } }) { Text("Удалить") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отмена") } }
+        )
+    }
+
+    confirmRebuild?.let { drop ->
+        val keep = items.size - drop.size
+        AlertDialog(
+            onDismissRequest = { confirmRebuild = null },
+            title = { Text(if (drop.size == 1) "Позиция устарела" else "Удалить устаревшие позиции?") },
+            text = {
+                Text(
+                    drop.joinToString("\n") { "${it.brand} ${it.number}" } + "\n\n" +
+                        "Поставщик обновил прайс, и такие позиции не удаляются по одной. Очистим корзину" +
+                        (if (keep > 0) " и сразу положим обратно остальные позиции ($keep)." else ".")
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRebuild = null
+                    busy = "rebuild"
+                    scope.launch {
+                        try {
+                            val failed = shop.rebuildBasket(items, drop)
+                            com.example.myapplication.Analytics.event("basket_rebuild", mapOf("dropped" to drop.size, "failed" to failed.size))
+                            if (failed.isNotEmpty()) Toast.makeText(
+                                ctx, "Не вернулись в корзину (тоже устарели): ${failed.joinToString()}", Toast.LENGTH_LONG
+                            ).show()
+                        } catch (e: Exception) {
+                            com.example.myapplication.Analytics.error("Корзина → очистка", e)
+                            Toast.makeText(ctx, e.message ?: "Не удалось очистить корзину", Toast.LENGTH_LONG).show()
+                        } finally {
+                            busy = null
+                            localReload++
+                        }
+                    }
+                }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRebuild = null }) { Text("Отмена") } }
         )
     }
 }

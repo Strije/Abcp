@@ -116,6 +116,11 @@ interface AbcpApi {
     @POST("basket/add")
     suspend fun basketAdd(@FieldMap fields: Map<String, String>): Response<JsonElement>
 
+    /** Удаляет все позиции корзины (basketId — при мультикорзине) */
+    @FormUrlEncoded
+    @POST("basket/clear")
+    suspend fun basketClear(@FieldMap fields: Map<String, String>): Response<JsonElement>
+
     @GET("basket/paymentMethods")
     suspend fun paymentMethods(
         @Query("userlogin") userlogin: String,
