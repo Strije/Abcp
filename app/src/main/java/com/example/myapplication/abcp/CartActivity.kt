@@ -131,7 +131,9 @@ fun CartScreen(reloadKey: Int) {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Удалить позиции с ⚠ (${stale.size})", color = MaterialTheme.colorScheme.error) }
                 }
-                items(items, key = { it.basketId + "|" + it.itemKey }) { b ->
+                // itemKey у ABCP не уникален (так и сказано в документации) — две одинаковые строки корзины
+                // с одним ключом роняли экран (AppMetrica: 25 вылетов «Key … was already used»). С номером строки повтор невозможен.
+                items(items.withIndex().toList(), key = { (i, b) -> "$i|${b.basketId}|${b.positionId}|${b.itemKey}" }) { (_, b) ->
                     val isBusy = busy == b.itemKey
                     ElevatedCard(Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
