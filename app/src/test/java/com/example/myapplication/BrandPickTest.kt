@@ -33,6 +33,18 @@ class BrandPickTest {
     }
 
     @Test
+    fun compositeBrandIsMentionedByAnyPart() {
+        // Как ABCP отдал OC90 10.11: бренд «Mahle/Knecht», а в описаниях — «MAHLE» и «KNECHT» по отдельности
+        val found = listOf(
+            BrandHit("A1 stock", "OC90", "", true),
+            BrandHit("ABSEL", "OC90", "Фильтр масляный ан. MAHLE OC90 (OC71275)", true),
+            BrandHit("Filtron", "OC90", "OC90_ KNECHT ,Фильтр масляный", true),
+            BrandHit("Mahle/Knecht", "OC90", "Фильтр масляный", true),
+        )
+        assertEquals("Mahle/Knecht", brandCandidates(found).first().brand)
+    }
+
+    @Test
     fun leaderMustBeNamedByHalfOfSuppliers() {
         val found = listOf(BrandHit("ZIC", "162622", "", true), BrandHit("X", "162622", "", true), BrandHit("Y", "162622", "", true))
         // ZIC у 6 из 12 при 1–2 у остальных — берём

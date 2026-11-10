@@ -23,6 +23,9 @@ data class RepeatSource(val brand: String, val number: String, val qty: Int, val
 /** Что нашлось сейчас: лучшее предложение (или null — нет в продаже) и количество с учётом упаковки. */
 data class RepeatLine(val source: RepeatSource, val offer: Offer?, val qty: Int)
 
+/** Итог голосования по брендам номера: кого открыть сразу (или null) и у скольких поставщиков каждый проверенный. */
+data class BrandVotes(val pick: BrandHit?, val suppliers: Map<String, Int>)
+
 data class BrandHit(
     val brand: String,
     val number: String,
@@ -49,9 +52,10 @@ private fun brandKey(b: String) = b.uppercase().filter { it.isLetterOrDigit() }
 
 /** Сколько других брендов в списке упоминают этот бренд в описании («ан. MAHLE OC90» → голос за MAHLE). */
 internal fun brandMentions(h: BrandHit, found: List<BrandHit>): Int {
-    val k = brandKey(h.brand)
-    if (k.length < 3) return 0
-    return found.count { it !== h && brandKey(it.description).contains(k) }
+    // «Mahle/Knecht» в описаниях пишут по частям: «ан. MAHLE OC90», «OC90_ KNECHT» (телефон 10.11: упоминаний было 0)
+    val keys = (h.brand.split('/', ',', '(', ')').map(::brandKey) + brandKey(h.brand)).filter { it.length >= 3 }.toSet()
+    if (keys.isEmpty()) return 0
+    return found.count { other -> other !== h && brandKey(other.description).let { d -> keys.any { d.contains(it) } } }
 }
 
 /**
@@ -253,7 +257,7 @@ class AbcpShop(private val session: SessionManager) {
      * [brandCandidates]; по каждому — какие поставщики дают именно этот бренд и номер; выбор — [pickDominant].
      * null — клиент выбирает сам.
      */
-    suspend fun dominantBrand(found: List<BrandHit>): BrandHit? = kotlinx.coroutines.coroutineScope {
+    suspend fun dominantBrand(found: List<BrandHit>): BrandVotes = kotlinx.coroutines.coroutineScope {
         val counts = brandCandidates(found).map { h ->
             async {
                 val fix = cleanNumber(h.number)
@@ -263,7 +267,7 @@ class AbcpShop(private val session: SessionManager) {
                 h to providers
             }
         }.awaitAll()
-        pickDominant(found, counts)
+        BrandVotes(pickDominant(found, counts), counts.associate { (h, p) -> h.brand to p.size })
     }
 
     /** id статусов, которые в ABCP отмечены как конечные (выдано, отказ, возврат…) */

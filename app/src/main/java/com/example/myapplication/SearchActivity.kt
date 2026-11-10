@@ -69,6 +69,8 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     var history by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
     // Ищем бренд, который дают большинство поставщиков; клиент нажал бренд сам — отменяем
     var picking by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // У скольких поставщиков проверенные бренды — подпись в списке и порядок (больше поставщиков — выше)
+    var suppliers by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     fun stopPicking() { picking?.cancel(); picking = null }
 
     LaunchedEffect(Unit) { if (!shop.isGuest) history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
@@ -120,6 +122,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 // Бренды в наличии — наверху списка
                 val found = shop.brands(n).sortedByDescending { it.available }
                 brands = found
+                suppliers = emptyMap()
                 // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
                 com.example.myapplication.Analytics.event("search", mapOf("number" to n, "found" to found.size, "guest" to shop.isGuest))
                 // Что ищут, а у нас нет — список для закупки
@@ -128,7 +131,9 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 if (auto != null) openOffers(ctx, auto)
                 else if (found.size > 1) picking = scope.launch {
                     try {
-                        val best = shop.dominantBrand(found)
+                        val votes = shop.dominantBrand(found)
+                        suppliers = votes.suppliers
+                        val best = votes.pick
                         // Клиент успел нажать бренд сам — ничего не открываем поверх
                         if (best != null && isActive) {
                             com.example.myapplication.Analytics.event("brand_autopick", mapOf("brand" to best.brand))
@@ -217,7 +222,11 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                         Text("Смотрим, какой производитель чаще у поставщиков…", style = MaterialTheme.typography.bodySmall)
                     }
                     Text("Выберите производителя", style = MaterialTheme.typography.titleSmall)
-                    HitList(brands!!) { stopPicking(); openOffers(ctx, it) }
+                    // Проверенные бренды — наверх по числу поставщиков (самый ходовой первым), остальные — как пришли
+                    val ordered = brands!!.withIndex().sortedWith(
+                        compareByDescending<IndexedValue<BrandHit>> { suppliers[it.value.brand] ?: -1 }.thenBy { it.index }
+                    ).map { it.value }
+                    HitList(ordered, suppliers) { stopPicking(); openOffers(ctx, it) }
                 }
                 tips.isNotEmpty() -> HitList(tips) { openOffers(ctx, it) }
                 query.isBlank() && history.isNotEmpty() -> {
@@ -239,15 +248,21 @@ private fun openOffers(ctx: Context, hit: BrandHit) {
 }
 
 @Composable
-private fun HitList(hits: List<BrandHit>, onClick: (BrandHit) -> Unit) {
+private fun HitList(hits: List<BrandHit>, suppliers: Map<String, Int> = emptyMap(), onClick: (BrandHit) -> Unit) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(hits) { h ->
             ElevatedCard(Modifier.fillMaxWidth().clickable { onClick(h) }) {
                 Column(Modifier.padding(12.dp)) {
-                    Text(
-                        "${h.brand}  ${h.number}" + if (h.available) "  · в наличии" else "",
-                        style = MaterialTheme.typography.titleSmall
-                    )
+                    // «в наличии» ABCP ставит почти всем брендам номера — не подпись, а шум (10.11). Вместо неё — у скольких
+                    // поставщиков есть именно этот бренд и номер (известно для проверенных автовыбором)
+                    Text("${h.brand}  ${h.number}", style = MaterialTheme.typography.titleSmall)
+                    suppliers[h.brand]?.let { n ->
+                        Text(
+                            if (n == 0) "нет предложений" else "у $n ${suppliersWord(n)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (n == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
+                        )
+                    }
                     if (h.description.isNotBlank()) {
                         Text(h.description, style = MaterialTheme.typography.bodySmall)
                     }
@@ -256,3 +271,6 @@ private fun HitList(hits: List<BrandHit>, onClick: (BrandHit) -> Unit) {
         }
     }
 }
+
+/** 1 поставщика, 2 поставщиков… — «у N поставщиков» читается одинаково при любом N, кроме 1 */
+private fun suppliersWord(n: Int) = if (n % 10 == 1 && n % 100 != 11) "поставщика" else "поставщиков"
