@@ -137,6 +137,9 @@ data class OrderChoice(
 
 open class AbcpException(message: String) : Exception(message)
 
+/** 103: клиенту ещё не включены права на API (включает менеджер по заявке). */
+class NoApiAccess(message: String) : AbcpException(message)
+
 /** ABCP ответил на basket/add, но позицию не принял (status=0) — в отличие от сбоя связи. */
 class BasketRejected(message: String) : AbcpException(message)
 
@@ -153,6 +156,8 @@ class AbcpShop(private val session: SessionManager) {
     companion object {
         /** Справочник статусов на час — один на всё приложение */
         @Volatile private var statusCache: Pair<Long, Set<String>>? = null
+        /** Поиск вошедшего клиента ушёл на гостевые цены (нет доступа к API) — показать пометку над выдачей */
+        @Volatile var guestPrices = false
     }
 
     private val api = ApiClient.create()
@@ -167,14 +172,27 @@ class AbcpShop(private val session: SessionManager) {
     private val server by lazy { com.example.myapplication.server.AppServer(session.context) }
 
     suspend fun brands(number: String): List<BrandHit> = emptyIfNoResults {
-        items(if (isGuest) server.guestBrands(number) else call { api.searchBrands(login, psw, number) })
+        items(if (isGuest) server.guestBrands(number) else orGuest({ server.guestBrands(number) }) { call { api.searchBrands(login, psw, number) } })
             .mapNotNull { it.toBrandHit() }
+    }
+
+    /**
+     * Доступ к поиску ещё не включён (заявка у менеджера) — не тупик с ошибкой, а цены гостевого профиля через наш
+     * сервер, как без входа. Корзина заработает, когда менеджер включит доступ ([guestPrices] — для пометки на экране).
+     */
+    private suspend fun orGuest(guest: suspend () -> JsonElement, own: suspend () -> JsonElement): JsonElement = try {
+        own()
+    } catch (e: NoApiAccess) {
+        guestPrices = true
+        guest()
     }
 
     suspend fun offers(number: String, brand: String, all: Boolean = false): List<Offer> = emptyIfNoResults {
         items(
             if (isGuest) server.guestOffers(number, brand, all)
-            else call { api.searchArticles(login, psw, number, brand, disableFiltering = if (all) 1 else 0) }
+            else orGuest({ server.guestOffers(number, brand, all) }) {
+                call { api.searchArticles(login, psw, number, brand, disableFiltering = if (all) 1 else 0) }
+            }
         )
             .mapNotNull { it.toOffer() }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
@@ -427,7 +445,11 @@ class AbcpShop(private val session: SessionManager) {
         } catch (e: java.io.IOException) {
             throw AbcpException(networkErrorText(e))
         }
-        if (!resp.isSuccessful) throw AbcpException(prettifyAbcpError(resp.errorBody()?.string(), resp.code()))
+        if (!resp.isSuccessful) {
+            val raw = resp.errorBody()?.string()
+            val text = prettifyAbcpError(raw, resp.code())
+            throw if (abcpErrorCode(raw) == 103) NoApiAccess(text) else AbcpException(text)
+        }
         return resp.body() ?: throw AbcpException("Пустой ответ сервера")
     }
 }

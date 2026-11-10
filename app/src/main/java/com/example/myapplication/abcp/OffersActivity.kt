@@ -158,6 +158,15 @@ class OffersActivity : ComponentActivity() {
                     }
                 ) { padding ->
                     Column(Modifier.padding(padding).fillMaxSize()) {
+                        // Доступ к API ещё не включён — показали гостевые цены, объясняем, почему корзина пока не работает
+                        if (!shop.isGuest && AbcpShop.guestPrices && offers.isNotEmpty()) {
+                            Text(
+                                "Цены — как для гостя: менеджер ещё не включил ваш доступ. Как включит — будут ваши цены и корзина.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
                         Row(
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)

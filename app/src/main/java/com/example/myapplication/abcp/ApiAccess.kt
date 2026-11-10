@@ -38,6 +38,7 @@ object ApiAccess {
         missing = found
         if (found.isEmpty()) {
             p.edit().putBoolean(OK, true).apply()
+            AbcpShop.guestPrices = false // доступ включили — дальше свои цены
             // Была заявка — закрываем, менеджеры увидят «доступ работает»
             if (p.getLong(REQUESTED, 0) > 0) {
                 runCatching { AppServer(ctx).accessDone() }
