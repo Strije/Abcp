@@ -31,7 +31,11 @@ class NotificationsActivity : ComponentActivity() {
 
         setContent {
             AvtodrugTheme {
-                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Уведомления") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Уведомления") }, actions = {
+                    // Опаздывают или не приходят — настройка под марку телефона и проверка
+                    TextButton(onClick = { startActivity(Intent(this@NotificationsActivity, com.example.myapplication.push.NotificationSetupActivity::class.java)) }) { Text("Настроить") }
+                    com.example.myapplication.ui.SearchAction()
+                }) }) { padding ->
                     Box(Modifier.padding(padding).fillMaxSize()) {
                         if (feed.isEmpty()) {
                             Text(

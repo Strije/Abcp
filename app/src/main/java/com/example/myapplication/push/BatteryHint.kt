@@ -56,10 +56,10 @@ fun BatteryHintCard(modifier: Modifier = Modifier) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    Analytics.event("battery_hint_allow")
-                    BatteryHint.open(ctx)
+                    // Полная настройка под марку телефона: фон, автозапуск, RuStore и проверка
+                    ctx.startActivity(Intent(ctx, NotificationSetupActivity::class.java))
                     visible = false
-                }) { Text("Разрешить") }
+                }) { Text("Настроить") }
                 TextButton(onClick = { visible = false }) { Text("Не сейчас") }
             }
         }

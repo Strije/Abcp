@@ -341,6 +341,9 @@ private fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
                 TextButton(onClick = { ctx.startActivity(Intent(ctx, OnboardingActivity::class.java)) }) { Text("Как пользоваться") }
+                TextButton(onClick = { ctx.startActivity(Intent(ctx, com.example.myapplication.push.NotificationSetupActivity::class.java)) }) {
+                    Text("Уведомления приходят вовремя?")
+                }
                 AppVersionRow(onCheckUpdate)
                 Text("Значки поставщиков: Font Awesome Free (CC BY 4.0, SIL OFL 1.1)",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)

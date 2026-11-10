@@ -10,6 +10,11 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Поворот экрана и смена темы не пересоздают экраны: Compose перерисует сам, введённое не теряется -->
+    <!-- Экран «Уведомления вовремя»: установлен ли RuStore (через него приходят push) -->
+    <queries>
+        <package android:name="ru.vk.store" />
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="true"
@@ -74,6 +79,7 @@
         </provider>
 
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".OnboardingActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".push.NotificationSetupActivity" android:exported="false" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

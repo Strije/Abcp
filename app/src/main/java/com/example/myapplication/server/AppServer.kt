@@ -102,6 +102,11 @@ class AppServer(ctx: Context) {
     suspend fun pushToken(token: String): Boolean =
         post("/v1/push/token", Gson().toJson(mapOf("token" to token))).asJsonObject["push"]?.asBoolean == true
 
+    /** Проверка уведомлений: сервер пришлёт push через delay секунд тем же путём, что статус заказа. */
+    suspend fun pushSelfTest(delay: Int) {
+        post("/v1/push/self-test", Gson().toJson(mapOf("delay" to delay)))
+    }
+
     suspend fun pushTokenDelete(token: String) = withContext(Dispatchers.IO) {
         execute(Request.Builder().url("$base/v1/push/token")
             .delete(Gson().toJson(mapOf("token" to token)).toRequestBody(JSON)).build())
