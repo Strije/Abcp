@@ -97,6 +97,13 @@ object Push {
 }
 
 class PushService : RuStoreMessagingService() {
+    /** Приложение на экране: уведомление с готовым текстом RuStore в этом случае не показывает. */
+    private fun isForeground(): Boolean {
+        val info = android.app.ActivityManager.RunningAppProcessInfo()
+        android.app.ActivityManager.getMyMemoryState(info)
+        return info.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }
+
     override fun onNewToken(token: String) {
         CoroutineScope(Dispatchers.IO).launch { Push.send(applicationContext, token) }
     }
@@ -110,10 +117,13 @@ class PushService : RuStoreMessagingService() {
                 "with_notification" to (message.notification != null)
             ))
         }
-        // Сервер присылает push с готовым уведомлением — его уже показал RuStore (так быстрее: не надо ждать,
-        // пока система разбудит приложение). Второе не рисуем; статус заказа только записываем в ленту.
+        // Push с готовым уведомлением: когда приложение свёрнуто, его показывает сам RuStore (быстрее — не ждём, пока
+        // система разбудит приложение), второе не рисуем. Когда приложение открыто, RuStore не показывает ничего и
+        // отдаёт сообщение сюда — тогда рисуем сами (телефон 10.11: проверочный push при открытом экране «пропадал»)
         if (message.notification != null) {
-            if (message.data["type"] == "order_status") Push.onMessage(applicationContext, message.data, show = false)
+            val shown = !isForeground()
+            if (message.data["type"] == "order_status") Push.onMessage(applicationContext, message.data, show = !shown)
+            else if (!shown) Push.onMessage(applicationContext, message.data)
             return
         }
         Push.onMessage(applicationContext, message.data)
