@@ -43,6 +43,20 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <!-- Ссылки внутрь приложения avtodrug92://search?q=…, offers, order/N, chat, news/N, vin (DeepLink.kt) -->
+        <activity
+            android:name=".DeepLinkActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="avtodrug92" />
+            </intent-filter>
+        </activity>
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".VinSearchActivity" />
         <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode" android:name=".GarageActivity" />
 

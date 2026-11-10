@@ -36,6 +36,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Нажатие на уведомление RuStore открывает главный экран, ссылка из рассылки — в extras «link»
+        if (savedInstanceState == null && Tips.onboardingDone(this)) {
+            DeepLink.from(intent)?.let { DeepLink.open(this, DeepLink.parse(it), withHome = true); finish(); return }
+        }
+
         val session = SessionManager(this)
 
         setContent {

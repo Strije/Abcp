@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -46,18 +47,19 @@ object News {
     data class Item(val url: String, val html: String)
 
     suspend fun load(): List<Item> = coroutineScope {
-        pages.map { url ->
-            async(Dispatchers.IO) {
-                runCatching {
-                    http.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                        val body = r.body?.string().orEmpty().trim()
-                        // Страница целиком с оформлением сайта — значит, новость туда не положена
-                        val isWholeSite = body.contains("<body class=", ignoreCase = true) && body.length > 20_000
-                        if (r.isSuccessful && body.isNotBlank() && !isWholeSite) Item(url, body) else null
-                    }
-                }.getOrNull()
+        pages.map { url -> async { loadOne(url) } }.awaitAll().filterNotNull()
+    }
+
+    /** Одна страница новости; null — нет сети или новость туда не положена. */
+    suspend fun loadOne(url: String): Item? = withContext(Dispatchers.IO) {
+        runCatching {
+            http.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                val body = r.body?.string().orEmpty().trim()
+                // Страница целиком с оформлением сайта — значит, новость туда не положена
+                val isWholeSite = body.contains("<body class=", ignoreCase = true) && body.length > 20_000
+                if (r.isSuccessful && body.isNotBlank() && !isWholeSite) Item(url, body) else null
             }
-        }.awaitAll().filterNotNull()
+        }.getOrNull()
     }
 
     /** Фрагмент со страницы → полноценный документ под ширину телефона. */
@@ -132,11 +134,20 @@ fun NewsCarousel() {
 class NewsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val html = intent.getStringExtra(EXTRA_HTML).orEmpty()
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         setContent {
             AvtodrugTheme {
                 val dark = androidx.compose.foundation.isSystemInDarkTheme()
+                // По ссылке avtodrug92://news/N приходит только адрес — страницу догружаем сами
+                var html by remember { mutableStateOf(intent.getStringExtra(EXTRA_HTML).orEmpty()) }
+                if (html.isBlank() && url.isNotBlank()) LaunchedEffect(url) {
+                    val item = News.loadOne(url)
+                    if (item != null) html = item.html
+                    else {
+                        com.example.myapplication.ui.openExternal(this@NewsActivity, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        finish()
+                    }
+                }
                 Scaffold(
                     topBar = {
                         TopAppBar(
@@ -150,7 +161,9 @@ class NewsActivity : ComponentActivity() {
                         )
                     }
                 ) { padding ->
-                    AndroidView(
+                    if (html.isBlank()) Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    } else AndroidView(
                         factory = { newsWebView(it, html, dark, interactive = true) },
                         modifier = Modifier.padding(padding).fillMaxSize()
                     )
