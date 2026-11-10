@@ -108,6 +108,29 @@ fun BackButton() {
     }
 }
 
+/**
+ * Открыть внешнее приложение (браузер, карты). Нужного приложения нет — не падаем, а говорим об этом
+ * (AppMetrica: вылет на планшете без звонилки).
+ */
+fun openExternal(ctx: android.content.Context, intent: android.content.Intent) {
+    try {
+        ctx.startActivity(intent)
+    } catch (_: android.content.ActivityNotFoundException) {
+        android.widget.Toast.makeText(ctx, "На устройстве нет приложения, чтобы открыть это", android.widget.Toast.LENGTH_LONG).show()
+    }
+}
+
+/** Позвонить; на планшете без звонков — номер в буфер обмена. */
+fun dial(ctx: android.content.Context, phone: String) {
+    try {
+        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:$phone")))
+    } catch (_: android.content.ActivityNotFoundException) {
+        ctx.getSystemService(android.content.ClipboardManager::class.java)
+            ?.setPrimaryClip(android.content.ClipData.newPlainText("Телефон", phone))
+        android.widget.Toast.makeText(ctx, "Звонки на этом устройстве недоступны. Номер $phone скопирован", android.widget.Toast.LENGTH_LONG).show()
+    }
+}
+
 /** Открыть цены и аналоги по номеру (из корзины, заказа) — сразу выдача, без выбора бренда. */
 fun openOffers(ctx: android.content.Context, brand: String, number: String, description: String = "") {
     if (number.isBlank()) return

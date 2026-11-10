@@ -426,11 +426,11 @@ private fun StoreCard(s: Store) {
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalButton(onClick = {
-                    ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${s.phone}")))
+                    com.example.myapplication.ui.dial(ctx, s.phone)
                 }) { Icon(Icons.Default.Call, null); Spacer(Modifier.width(6.dp)); Text("Позвонить") }
                 OutlinedButton(onClick = {
                     val q = Uri.encode("${StoreInfo.city}, ${s.address}")
-                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q")))
+                    com.example.myapplication.ui.openExternal(ctx, Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q")))
                 }) { Icon(Icons.Default.Place, null); Spacer(Modifier.width(6.dp)); Text("Маршрут") }
             }
         }

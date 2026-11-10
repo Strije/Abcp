@@ -624,7 +624,7 @@ private fun PhotoSearchButton(brand: String, number: String) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var menu by remember { mutableStateOf(false) }
     val q = android.net.Uri.encode("$brand $number".trim())
-    fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+    fun open(url: String) = com.example.myapplication.ui.openExternal(ctx, android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
     Box {
         FilledTonalIconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Text("📷") }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {

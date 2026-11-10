@@ -151,7 +151,7 @@ class ChatActivity : ComponentActivity() {
                                                 text = { Column { Text(s.phoneDisplay); Text(s.address, style = MaterialTheme.typography.bodySmall) } },
                                                 onClick = {
                                                     callMenu = false
-                                                    startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${s.phone}")))
+                                                    com.example.myapplication.ui.dial(this@ChatActivity, s.phone)
                                                 }
                                             )
                                         }

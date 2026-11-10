@@ -84,7 +84,7 @@ private fun newsWebView(ctx: Context, html: String, dark: Boolean, interactive: 
         webViewClient = object : WebViewClient() {
             // Ссылки из новости открываем в браузере, а не внутри карточки
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                ctx.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                com.example.myapplication.ui.openExternal(ctx, Intent(Intent.ACTION_VIEW, request.url))
                 return true
             }
         }
@@ -144,7 +144,7 @@ class NewsActivity : ComponentActivity() {
                             title = { Text("Новости и акции") },
                             actions = {
                                 if (url.isNotBlank()) TextButton(onClick = {
-                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    com.example.myapplication.ui.openExternal(this@NewsActivity, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                                 }) { Text("На сайте") }
                             }
                         )
