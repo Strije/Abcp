@@ -5,38 +5,39 @@ import com.example.myapplication.abcp.brandCandidates
 import com.example.myapplication.abcp.pickDominant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** Выбор бренда — те же правила и случаи, что у Прайсера (search.choose_brand, запись 02.10.2026). */
 class BrandPickTest {
-    // Как ABCP отдал OC90 10.11: десятки брендов по алфавиту, все «в наличии»
-    private val oc90 = listOf(
-        BrandHit("A1 stock", "OC90", "", true),
-        BrandHit("ABSEL", "OC90", "Фильтр масляный ан. MAHLE OC90 (OC71275)", true),
-        BrandHit("ADDINOL", "OC90", "", true),
-        BrandHit("AKNUK", "OC90", "Фильтр масл. НЕКСИЯ ЭСПЕРО", true),
-        BrandHit("AM ENG", "OC90", "Фильтр масляный", true),
-        BrandHit("Bosch", "OC90", "", true),
-        BrandHit("Knecht", "OC90", "Фильтр масляный", true),
-        BrandHit("MAHLE", "OC90", "Фильтр масляный", true),
-        BrandHit("ZEKKERT", "OC90", "аналог MAHLE OC90", true),
-    )
+    private fun providers(n: Int, from: Int = 0) = (from until from + n).map { "p$it" }.toSet()
 
     @Test
-    fun ownerOfNumberIsCheckedFirstAndAnalogsAreNot() {
-        val c = brandCandidates(oc90)
-        assertEquals("MAHLE", c.first().brand)            // на него ссылаются ABSEL и ZEKKERT
-        assertTrue(c.none { it.brand == "ABSEL" || it.brand == "ZEKKERT" })
-        assertEquals(4, c.size)
+    fun mannIsPickedForW71295() {
+        val found = listOf(BrandHit("MANN", "W71295", "Фильтр масляный", true), BrandHit("Redskin", "W71295", "Фильтр", true))
+        // MANN 7 поставщиков против Redskin 4: 7 ≥ половины ответивших и в 1,75 раза впереди
+        assertEquals("MANN", pickDominant(found, listOf(found[0] to providers(7), found[1] to providers(4, 3)))?.brand)
     }
 
     @Test
-    fun ownerWinsWhenItHasSuppliers() {
-        val m = oc90.first { it.brand == "MAHLE" }
-        val k = oc90.first { it.brand == "Knecht" }
-        assertEquals("MAHLE", pickDominant(oc90, listOf(m to 3, k to 4))?.brand)
-        // У «хозяина» один поставщик — решает обычное правило «вдвое больше второго»
-        assertEquals("Knecht", pickDominant(oc90, listOf(m to 1, k to 5))?.brand)
-        assertNull(pickDominant(oc90, listOf(m to 1, k to 1)))
+    fun oc90AsksBecauseMahleLeadsTooLittle() {
+        val found = listOf(
+            BrandHit("AM POINT", "OC90", "Фильтр масляный", true),
+            BrandHit("ABSEL", "OC90", "Фильтр масляный ан. MAHLE OC90 (OC71275)", true),
+            BrandHit("ZEKKERT", "OC90", "аналог MAHLE OC90", true),
+            BrandHit("MAHLE", "OC90", "Фильтр масляный", true),
+        )
+        // MAHLE 7 + 2 упоминания = 9 против AM POINT 7: меньше чем в 1,5 раза — спрашиваем, как Прайсер
+        assertNull(pickDominant(found, listOf(found[3] to providers(7), found[0] to providers(7, 2))))
+        // Упоминаемый бренд проверяется первым, даже если по алфавиту он в конце
+        assertEquals("MAHLE", brandCandidates(found).first().brand)
+    }
+
+    @Test
+    fun leaderMustBeNamedByHalfOfSuppliers() {
+        val found = listOf(BrandHit("ZIC", "162622", "", true), BrandHit("X", "162622", "", true), BrandHit("Y", "162622", "", true))
+        // ZIC у 6 из 12 при 1–2 у остальных — берём
+        assertEquals("ZIC", pickDominant(found, listOf(found[0] to providers(6), found[1] to providers(2, 6), found[2] to providers(4, 8)))?.brand)
+        // Голоса разбросаны: ZIC 3, X 3, Y 2 из 8 — не берём никого
+        assertNull(pickDominant(found, listOf(found[0] to providers(3), found[1] to providers(3, 3), found[2] to providers(2, 6))))
     }
 }
