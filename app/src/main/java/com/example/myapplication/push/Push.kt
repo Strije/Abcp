@@ -102,6 +102,14 @@ class PushService : RuStoreMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
+        // Замер доставки: сервер кладёт время отправки. Когда приложение закрыто, уведомление показывает сам
+        // RuStore и сюда мы можем не попасть — тогда замер не придёт (в отчёте это нижняя граница доставки)
+        message.data["sent_at"]?.toLongOrNull()?.let { sent ->
+            com.example.myapplication.Analytics.event("push_received", mapOf(
+                "type" to message.data["type"], "delay_s" to ((System.currentTimeMillis() - sent) / 1000).coerceAtLeast(0),
+                "with_notification" to (message.notification != null)
+            ))
+        }
         // Сервер присылает push с готовым уведомлением — его уже показал RuStore (так быстрее: не надо ждать,
         // пока система разбудит приложение). Второе не рисуем; статус заказа только записываем в ленту.
         if (message.notification != null) {
