@@ -251,6 +251,7 @@ private fun HomeScreen(
             if (!guest) IconButton(onClick = { showProfile = true }) { Icon(Icons.Default.AccountCircle, "Профиль") }
         }
 
+        VpnWarningCard()
         if (!guest) ApiAccessCard()
 
         // Одно поле на всё: артикул, VIN, номер кузова или госномер

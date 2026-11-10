@@ -31,11 +31,11 @@ fun explainAbcpError(message: String?, httpCode: Int = 0): String {
     }
 }
 
-/** Сетевые сбои (нет интернета, таймаут) — одним понятным текстом. */
+/** Сетевые сбои (нет интернета, таймаут) — одним понятным текстом; включён VPN — просим выключить. */
 fun networkErrorText(e: Throwable): String = when (e) {
     is java.net.UnknownHostException, is java.net.ConnectException ->
         "Нет связи с магазином. Проверьте интернет и попробуйте ещё раз."
     is java.io.InterruptedIOException ->
         "Магазин отвечает слишком долго. Попробуйте ещё раз."
     else -> "Связь прервалась. Проверьте интернет и попробуйте ещё раз."
-}
+} + com.example.myapplication.Vpn.hint()
