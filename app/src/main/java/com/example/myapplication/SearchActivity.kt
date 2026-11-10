@@ -135,6 +135,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = { com.example.myapplication.ui.BackButton() },
                 title = { Text("Поиск по артикулу") },
                 actions = { if (!shop.isGuest) CartIconButton() }
             )

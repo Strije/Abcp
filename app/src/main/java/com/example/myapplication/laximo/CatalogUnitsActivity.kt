@@ -92,7 +92,7 @@ class CatalogUnitsActivity : ComponentActivity() {
                 }
 
                 Scaffold(
-                    topBar = { TopAppBar(title = { Text(categoryName.ifBlank { "Узлы" }) }) }
+                    topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text(categoryName.ifBlank { "Узлы" }) }) }
                 ) { padding ->
                     Box(Modifier.fillMaxSize().padding(padding)) {
                         when {

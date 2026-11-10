@@ -167,7 +167,7 @@ class VinSearchActivity : ComponentActivity() {
                 }
 
                 Scaffold(
-                    topBar = { TopAppBar(title = { Text("Поиск автомобиля") }) }
+                    topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Поиск автомобиля") }) }
                 ) { padding ->
                     Column(
                         modifier = Modifier

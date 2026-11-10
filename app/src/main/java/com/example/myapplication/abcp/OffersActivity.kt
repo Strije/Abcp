@@ -138,6 +138,7 @@ class OffersActivity : ComponentActivity() {
                     snackbarHost = { SnackbarHost(snackbar) },
                     topBar = {
                         TopAppBar(
+                            navigationIcon = { com.example.myapplication.ui.BackButton() },
                             title = {
                                 Column {
                                     Text("$brand $number", maxLines = 1, overflow = TextOverflow.Ellipsis)

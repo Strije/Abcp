@@ -114,7 +114,7 @@ private fun UnitDetailsScreen(
 
     @OptIn(ExperimentalMaterial3Api::class)
     Scaffold(
-        topBar = { TopAppBar(title = { Text(unit.name, maxLines = 2) }) }
+        topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text(unit.name, maxLines = 2) }) }
     ) { pad ->
         if (loading && details.isEmpty()) LinearProgressIndicator(Modifier.padding(pad).fillMaxWidth())
         LazyColumn(

@@ -54,7 +54,7 @@ class CatalogCategoriesActivity : ComponentActivity() {
                     }
                 }
 
-                Scaffold(topBar = { TopAppBar(title = { Text("Все узлы") }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Все узлы") }) }) { padding ->
                     Box(Modifier.padding(padding).fillMaxSize()) {
                         when {
                             loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))

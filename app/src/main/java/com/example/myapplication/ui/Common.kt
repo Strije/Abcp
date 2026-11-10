@@ -2,6 +2,7 @@ package com.example.myapplication.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -92,6 +93,19 @@ fun SearchAction() {
     androidx.compose.material3.IconButton(onClick = {
         ctx.startActivity(android.content.Intent(ctx, com.example.myapplication.SearchActivity::class.java))
     }) { androidx.compose.material3.Icon(Icons.Default.Search, "Поиск запчастей") }
+}
+
+/**
+ * ← в шапке экрана: системный жест «назад» находят не все. На вкладках главного экрана не показываем —
+ * там нижнее меню, а «назад» закрыл бы приложение.
+ */
+@Composable
+fun BackButton() {
+    val activity = androidx.compose.ui.platform.LocalContext.current as? androidx.activity.ComponentActivity ?: return
+    if (activity is com.example.myapplication.MainShellActivity) return
+    IconButton(onClick = { activity.onBackPressedDispatcher.onBackPressed() }) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
+    }
 }
 
 /** Открыть цены и аналоги по номеру (из корзины, заказа) — сразу выдача, без выбора бренда. */

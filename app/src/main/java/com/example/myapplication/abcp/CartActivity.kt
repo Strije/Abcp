@@ -83,7 +83,7 @@ fun CartScreen(reloadKey: Int) {
     val total = items.sumOf { it.price * it.quantity }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Корзина") }, actions = { com.example.myapplication.ui.SearchAction() }) },
+        topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Корзина") }, actions = { com.example.myapplication.ui.SearchAction() }) },
         bottomBar = {
             if (items.isNotEmpty()) {
                 Surface(tonalElevation = 3.dp) {

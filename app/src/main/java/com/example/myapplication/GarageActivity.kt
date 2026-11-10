@@ -81,7 +81,7 @@ fun GarageScreen() {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Мой гараж") }) },
+        topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Мой гараж") }) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { ctx.startActivity(Intent(ctx, VinSearchActivity::class.java)) },

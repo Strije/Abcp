@@ -35,7 +35,7 @@ class AccountActivity : ComponentActivity() {
             AvtodrugTheme {
                 var restoreMode by remember { mutableStateOf(intent.getBooleanExtra(EXTRA_RESTORE, false)) }
                 var prefill by remember { mutableStateOf(intent.getStringExtra(EXTRA_LOGIN).orEmpty()) }
-                Scaffold(topBar = { TopAppBar(title = { Text(if (restoreMode) "Восстановление пароля" else "Регистрация") }) }) { p ->
+                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text(if (restoreMode) "Восстановление пароля" else "Регистрация") }) }) { p ->
                     Column(
                         Modifier.padding(p).fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)

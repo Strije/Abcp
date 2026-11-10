@@ -140,6 +140,7 @@ class NewsActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
+                            navigationIcon = { com.example.myapplication.ui.BackButton() },
                             title = { Text("Новости и акции") },
                             actions = {
                                 if (url.isNotBlank()) TextButton(onClick = {

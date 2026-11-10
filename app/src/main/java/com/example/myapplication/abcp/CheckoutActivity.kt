@@ -82,7 +82,7 @@ class CheckoutActivity : ComponentActivity() {
                     else -> null
                 }
 
-                Scaffold(topBar = { TopAppBar(title = { Text("Оформление заказа") }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Оформление заказа") }) }) { padding ->
                     Box(Modifier.padding(padding).fillMaxSize()) {
                         when {
                             loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))

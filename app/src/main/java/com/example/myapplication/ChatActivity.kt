@@ -132,6 +132,7 @@ class ChatActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
+                            navigationIcon = { com.example.myapplication.ui.BackButton() },
                             title = {
                                 Column {
                                     Text("Чат с менеджером")

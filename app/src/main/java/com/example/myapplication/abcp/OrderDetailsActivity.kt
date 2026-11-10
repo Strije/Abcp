@@ -80,7 +80,7 @@ class OrderDetailsActivity : ComponentActivity() {
                 // Вернулись с оплаты — долг и статусы могли измениться
                 com.example.myapplication.ui.OnResume { reload++ }
 
-                Scaffold(topBar = { TopAppBar(title = { Text("Заказ № $orderNumber") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Заказ № $orderNumber") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
                     // Первая загрузка — спиннер, дальше заказ на экране, обновление тихое («потянуть вниз»)
                     com.example.myapplication.ui.RefreshableContent(
                         hasData = details != null, loading = loading, error = error,
