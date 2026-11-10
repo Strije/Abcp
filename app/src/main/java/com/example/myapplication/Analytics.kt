@@ -25,6 +25,8 @@ object Analytics {
     /** Ошибка, которую увидел клиент. where — «Экран → действие», по нему ошибки группируются в отчёте. */
     fun error(where: String, e: Throwable) {
         if (!active) return
+        // Клиент ушёл с экрана, пока шёл запрос, — это не ошибка (иначе засоряет отчёт)
+        if (e is kotlinx.coroutines.CancellationException) return
         runCatching { AppMetrica.reportError(where, e.message ?: e.javaClass.simpleName, e) }
     }
 

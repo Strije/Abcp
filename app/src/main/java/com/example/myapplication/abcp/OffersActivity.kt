@@ -318,6 +318,8 @@ class OffersActivity : ComponentActivity() {
                                     CartState.refresh(shop)
                                     val r = snackbar.showSnackbar("Добавлено в корзину", actionLabel = "Перейти", duration = SnackbarDuration.Short)
                                     if (r == SnackbarResult.ActionPerformed) startActivity(android.content.Intent(this@OffersActivity, CartActivity::class.java))
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e // ушли с экрана, пока висела плашка «Добавлено» — товар уже в корзине, это не ошибка
                                 } catch (e: Exception) {
                                     com.example.myapplication.Analytics.error("Выдача → в корзину", e)
                                     Toast.makeText(this@OffersActivity, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()

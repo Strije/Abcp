@@ -166,17 +166,29 @@ class AbcpShop(private val session: SessionManager) {
     val isGuest: Boolean get() = !session.isLoggedIn()
     private val server by lazy { com.example.myapplication.server.AppServer(session.context) }
 
-    suspend fun brands(number: String): List<BrandHit> =
+    suspend fun brands(number: String): List<BrandHit> = emptyIfNoResults {
         items(if (isGuest) server.guestBrands(number) else call { api.searchBrands(login, psw, number) })
             .mapNotNull { it.toBrandHit() }
+    }
 
-    suspend fun offers(number: String, brand: String, all: Boolean = false): List<Offer> =
+    suspend fun offers(number: String, brand: String, all: Boolean = false): List<Offer> = emptyIfNoResults {
         items(
             if (isGuest) server.guestOffers(number, brand, all)
             else call { api.searchArticles(login, psw, number, brand, disableFiltering = if (all) 1 else 0) }
         )
             .mapNotNull { it.toOffer() }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
+    }
+
+    /**
+     * «Ничего не нашлось» ABCP присылает ошибкой «No results». Для клиента это пустой список
+     * («Предложений не найдено»), а не красная ошибка по-английски (AppMetrica: 563 таких «ошибки» за месяц).
+     */
+    private inline fun <T> emptyIfNoResults(block: () -> List<T>): List<T> = try {
+        block()
+    } catch (e: Exception) {
+        if (e.message?.contains("no results", ignoreCase = true) == true) emptyList() else throw e
+    }
 
     /**
      * Брендов по номеру несколько, а однозначного нет: какой из них дают большинство поставщиков
