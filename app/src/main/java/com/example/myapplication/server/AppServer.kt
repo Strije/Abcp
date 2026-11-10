@@ -153,6 +153,10 @@ class AppServer(ctx: Context) {
             "&brand=${java.net.URLEncoder.encode(brand, "UTF-8")}&all=${if (all) 1 else 0}"
     )
 
+    /** Какой бренд открыть по номеру: сервер голосует по всем поставщикам с синонимами ABCP и уровнем фирм. */
+    suspend fun brandChoice(number: String) =
+        publicGet("/v1/brand-choice?number=${java.net.URLEncoder.encode(number, "UTF-8")}").asJsonObject
+
     private suspend fun publicGet(path: String) = withContext(Dispatchers.IO) {
         if (!enabled) throw ServerException("Сервер не настроен")
         val (code, text) = execute(Request.Builder().url(base + path).get().build())

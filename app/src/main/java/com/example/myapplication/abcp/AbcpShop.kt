@@ -257,7 +257,20 @@ class AbcpShop(private val session: SessionManager) {
      * [brandCandidates]; по каждому — какие поставщики дают именно этот бренд и номер; выбор — [pickDominant].
      * null — клиент выбирает сам.
      */
-    suspend fun dominantBrand(found: List<BrandHit>): BrandVotes = kotlinx.coroutines.coroutineScope {
+    suspend fun dominantBrand(found: List<BrandHit>): BrandVotes =
+        // Сервер знает больше (синонимы ABCP «Mahle/Knecht» = MAHLE, уровень фирм, все поставщики) и отвечает одним
+        // запросом; недоступен — голосуем здесь, по тем же правилам
+        runCatching { serverChoice(found) }.getOrNull() ?: localVotes(found)
+
+    private suspend fun serverChoice(found: List<BrandHit>): BrandVotes? {
+        val number = found.firstOrNull()?.number ?: return null
+        val o = server.brandChoice(number)
+        val brand = o.get("brand")?.takeIf { !it.isJsonNull }?.asString
+        val suppliers = o.getAsJsonObject("suppliers")?.entrySet()?.associate { (k, v) -> k to v.asInt }.orEmpty()
+        return BrandVotes(found.firstOrNull { it.brand == brand }, suppliers)
+    }
+
+    private suspend fun localVotes(found: List<BrandHit>): BrandVotes = kotlinx.coroutines.coroutineScope {
         val counts = brandCandidates(found).map { h ->
             async {
                 val fix = cleanNumber(h.number)
