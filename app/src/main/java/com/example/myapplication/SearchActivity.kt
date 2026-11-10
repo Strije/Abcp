@@ -137,7 +137,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                         // Клиент успел нажать бренд сам — ничего не открываем поверх
                         if (best != null && isActive) {
                             com.example.myapplication.Analytics.event("brand_autopick", mapOf("brand" to best.brand))
-                            openOffers(ctx, best)
+                            openOffers(ctx, best, picked = true)
                         }
                     } finally { if (picking == coroutineContext[kotlinx.coroutines.Job]) picking = null }
                 }
@@ -241,12 +241,14 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     }
 }
 
-private fun openOffers(ctx: Context, hit: BrandHit) {
+/** picked — бренд выбран сам из нескольких: на выдаче будет «Не тот? Выбрать другой». */
+private fun openOffers(ctx: Context, hit: BrandHit, picked: Boolean = false) {
     ctx.startActivity(
         Intent(ctx, OffersActivity::class.java)
             .putExtra(OffersActivity.EXTRA_BRAND, hit.brand)
             .putExtra(OffersActivity.EXTRA_NUMBER, hit.number)
             .putExtra(OffersActivity.EXTRA_DESCRIPTION, hit.description)
+            .putExtra(OffersActivity.EXTRA_AUTOPICKED, picked)
     )
 }
 

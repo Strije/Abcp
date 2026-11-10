@@ -68,6 +68,7 @@ class OffersActivity : ComponentActivity() {
         val brand = intent.getStringExtra(EXTRA_BRAND).orEmpty()
         val number = intent.getStringExtra(EXTRA_NUMBER).orEmpty()
         val description = intent.getStringExtra(EXTRA_DESCRIPTION).orEmpty()
+        val autopicked = intent.getBooleanExtra(EXTRA_AUTOPICKED, false)
         val shop = AbcpShop(SessionManager(this))
         val server = AppServer(this)
 
@@ -162,6 +163,20 @@ class OffersActivity : ComponentActivity() {
                     }
                 ) { padding ->
                     Column(Modifier.padding(padding).fillMaxSize()) {
+                        // Бренд выбрали сами — честно говорим и даём вернуться к списку (там все бренды номера).
+                        // Отказ — в AppMetrica: по нему видно, где автовыбор ошибается (исправить — /brand в боте)
+                        if (autopicked) Row(
+                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Открыли $brand — его чаще дают поставщики", style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                com.example.myapplication.Analytics.event("brand_autopick_rejected", mapOf("number" to number, "brand" to brand))
+                                finish()
+                            }) { Text("Не тот? Выбрать другой") }
+                        }
                         // Доступ к API ещё не включён — показали гостевые цены, объясняем, почему корзина пока не работает
                         if (!shop.isGuest && AbcpShop.guestPrices && offers.isNotEmpty()) {
                             Text(
@@ -359,6 +374,8 @@ class OffersActivity : ComponentActivity() {
         const val EXTRA_BRAND = "extra_brand"
         const val EXTRA_NUMBER = "extra_number"
         const val EXTRA_DESCRIPTION = "extra_description"
+        /** Бренд выбран сам из нескольких под номером — показать «Не тот? Выбрать другой» */
+        const val EXTRA_AUTOPICKED = "extra_autopicked"
     }
 }
 
