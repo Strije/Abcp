@@ -20,8 +20,9 @@ import ru.rustore.sdk.pushclient.messaging.service.RuStoreMessagingService
 
 /**
  * Push о статусах заказов через RuStore: токен устройства → наш сервер, сервер следит за заказами
- * в ABCP и присылает push, как только статус меняется. Если RuStore (или другого дистрибьютора VK)
- * на телефоне нет — остаётся проверка из приложения раз в 20 минут (OrderStatusWatch).
+ * в ABCP и присылает push, как только статус меняется. Push нет — проверка из приложения раз в 20 минут
+ * (OrderStatusWatch); есть — всё равно раз в 30 минут и при открытии: push может не дойти (Xiaomi
+ * усыпляет RuStore). Одно изменение показываем один раз — OrderStatusWatch.markShown.
  */
 object Push {
     private const val TAG = "PUSH"
@@ -53,8 +54,8 @@ object Push {
         runCatching { AppServer(ctx).pushToken(token, fcm) }
             .onSuccess { enabled ->
                 ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TOKEN, token).apply()
-                // Сервер шлёт push — свою проверку выключаем, иначе одно изменение придёт дважды
-                if (enabled) OrderStatusWatch.stopPolling(ctx) else OrderStatusWatch.schedule(ctx)
+                // Сервер шлёт push — своя проверка реже, как страховка; дублей нет: общие отметки показанного
+                OrderStatusWatch.schedule(ctx, pushWorks = enabled)
             }
             .onFailure { OrderStatusWatch.schedule(ctx) }
     }
@@ -107,7 +108,10 @@ object Push {
             return
         }
         if (order != null && !items.isNullOrEmpty()) {
-            val changed = items.mapIndexed { i, (title, status) -> PositionStatus("$order#$i", order, title, status) }
+            val all = items.mapIndexed { i, (title, status) -> PositionStatus("$order#$i", order, title, status) }
+            // Своя проверка уже показала это изменение (push опоздал) — второй раз не показываем
+            val changed = OrderStatusWatch.markShown(ctx, all)
+            if (changed.isEmpty()) return
             OrderStatusWatch.addToFeed(ctx, order, changed)
             if (!show) return
             // «Готово к выдаче», «ждёт оплаты», «задерживается» — сервер присылает свой текст (и адрес для маршрута)

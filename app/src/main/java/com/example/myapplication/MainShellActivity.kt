@@ -71,6 +71,10 @@ class MainShellActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         unread = OrderStatusWatch.unreadCount(this)
+        // Push мог не дойти (Xiaomi усыпляет RuStore) — тихо сверяем статусы, не чаще раза в 5 минут
+        if (SessionManager(this).isLoggedIn()) OrderStatusWatch.catchUpOnOpen(this) { n ->
+            if (n > 0) runOnUiThread { unread = OrderStatusWatch.unreadCount(this) }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,7 +85,7 @@ class MainShellActivity : ComponentActivity() {
             startActivity(Intent(this, MainActivity::class.java)); finish(); return
         }
         // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+) — только для вошедших
-        // Статусы заказов: push RuStore через наш сервер; нет push — проверка из приложения раз в 20 минут
+        // Статусы заказов: push RuStore/Google через наш сервер + своя проверка (20 мин без push, 30 — с push)
         if (!guest) com.example.myapplication.push.Push.register(this)
         // Версия из RuStore обновляется через RuStore (у прямой — своё автообновление)
         RuStoreStore.checkUpdate(this)

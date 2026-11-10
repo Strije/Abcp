@@ -17,6 +17,12 @@ import com.example.myapplication.SessionManager
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.TimeUnit
 
 /** Статус одной позиции заказа. key — стабильный ключ позиции между проверками. */
@@ -24,7 +30,9 @@ data class PositionStatus(
     val key: String,
     val order: String,
     val title: String,
-    val status: String
+    val status: String,
+    /** «Бренд номер» — так позицию называет сервер в push; по нему push и своя проверка узнают одно изменение */
+    val code: String = title
 )
 
 /** Позиции всех заказов из ответа orders?format=p (items и positions — массив или объект). */
@@ -43,7 +51,8 @@ fun collectPositionStatuses(root: JsonElement): List<PositionStatus> {
                 key = "$number|$brand|$num|$i",
                 order = number,
                 title = s("description").ifBlank { "$brand $num".trim() },
-                status = status
+                status = status,
+                code = "$brand $num".trim().ifBlank { s("description") }
             )
         }
     }
@@ -52,6 +61,29 @@ fun collectPositionStatuses(root: JsonElement): List<PositionStatus> {
 /** Изменившиеся позиции. Новые (которых не было в прошлый раз) не считаются — их заказал сам человек. */
 fun changedStatuses(previous: Map<String, String>, now: List<PositionStatus>): List<PositionStatus> =
     now.filter { p -> previous[p.key].let { it != null && it != p.status } }
+
+/** Одно и то же изменение для push и для своей проверки: заказ + «бренд номер» + новый статус. */
+fun changeKey(p: PositionStatus): String =
+    listOf(p.order, p.code, p.status).joinToString("|") { it.trim().lowercase().replace(Regex("\\s+"), " ") }
+
+/** Сколько помним показанное изменение: дольше — статус мог честно вернуться (В пути → Отказ → В пути). */
+const val SHOWN_TTL_MS = 14L * 24 * 3600 * 1000
+private const val SHOWN_MAX = 500
+
+/**
+ * Отбирает изменения, которые ещё не показывали (ни push, ни своя проверка), и отмечает их.
+ * Возвращает (новые, обновлённые отметки ключ → время). Отметки старше [SHOWN_TTL_MS] забываются.
+ */
+fun takeUnshown(shown: Map<String, Long>, changed: List<PositionStatus>, now: Long): Pair<List<PositionStatus>, Map<String, Long>> {
+    val marks = shown.filterValues { now - it < SHOWN_TTL_MS }.toMutableMap()
+    val fresh = changed.filter { p ->
+        val k = changeKey(p)
+        if (k in marks) false else { marks[k] = now; true }
+    }
+    val kept = if (marks.size <= SHOWN_MAX) marks
+        else marks.entries.sortedByDescending { it.value }.take(SHOWN_MAX).associate { it.key to it.value }
+    return fresh to kept
+}
 
 /** Запись ленты: когда, какой заказ, какая позиция, новый статус. */
 data class FeedItem(val time: Long, val order: String, val title: String, val status: String)
@@ -62,24 +94,82 @@ object OrderStatusWatch {
     private const val WORK = "order-status-watch"
     private const val PREFS = "order_status_snapshot"
     private const val KEY = "snapshot"
+    private const val SHOWN = "shown"
+    private const val LAST_CHECK = "last_check"
+    /** Снимок сделан этой версией (раньше при работающем push снимок не обновлялся и мог устареть на недели) */
+    private const val FRESH = "snapshot_v2"
     const val CHANNEL = "order_status"
+    /** Не чаще раза в 5 минут — бережём ABCP (открыли-закрыли приложение десять раз подряд — один запрос) */
+    const val MIN_INTERVAL_MS = 5L * 60 * 1000
+    private const val NEWS_ID = 7003
 
-    /** Раз в 20 минут при наличии сети. KEEP — не перезапускать, если уже запланировано. */
-    fun schedule(ctx: Context) {
-        val req = PeriodicWorkRequestBuilder<OrderStatusWorker>(20, TimeUnit.MINUTES)
+    private val mutex = Mutex()   // один запрос orders?format=p за раз
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Своя проверка по расписанию. Push работает — раз в 30 минут, страховка на случай, если push не дошёл
+     * (Xiaomi усыпляет RuStore); push нет — раз в 20 минут. UPDATE — поменять период у уже запланированной.
+     */
+    fun schedule(ctx: Context, pushWorks: Boolean = false) {
+        val req = PeriodicWorkRequestBuilder<OrderStatusWorker>(if (pushWorks) 30L else 20L, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-        WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, req)
+        WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, req)
     }
 
-    /** Пришли push с сервера — своя проверка больше не нужна (снимок статусов оставляем). */
-    fun stopPolling(ctx: Context) {
-        WorkManager.getInstance(ctx).cancelUniqueWork(WORK)
+    /** Отмечает изменения как показанные; возвращает те, что ещё не показывали. Общий для push и проверки. */
+    @Synchronized
+    fun markShown(ctx: Context, changed: List<PositionStatus>): List<PositionStatus> {
+        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val shown = runCatching {
+            Gson().fromJson<Map<String, Long>>(p.getString(SHOWN, null) ?: "{}", object : TypeToken<Map<String, Long>>() {}.type)
+        }.getOrNull().orEmpty()
+        val (fresh, kept) = takeUnshown(shown, changed, System.currentTimeMillis())
+        p.edit().putString(SHOWN, Gson().toJson(kept)).apply()
+        return fresh
+    }
+
+    /**
+     * Сверка с ABCP: изменения с прошлой проверки, которых ещё не показывали (уже записаны в ленту).
+     * null — не проверяли (рано, не вошли, нет сети). Первый раз — только запоминаем снимок.
+     */
+    suspend fun check(ctx: Context): Map<String, List<PositionStatus>>? = mutex.withLock {
+        val app = ctx.applicationContext
+        val session = SessionManager(app)
+        if (!session.isLoggedIn()) return@withLock null
+        val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val t = System.currentTimeMillis()
+        if (t - p.getLong(LAST_CHECK, 0) in 0 until MIN_INTERVAL_MS) return@withLock null
+        p.edit().putLong(LAST_CHECK, t).apply()  // и при ошибке: не долбить ABCP повторами
+
+        val resp = runCatching { ApiClient.create().ordersWithPositions(session.login(), session.passMd5()) }.getOrNull()
+        val body = resp?.takeIf { it.isSuccessful }?.body() ?: return@withLock null
+        val now = collectPositionStatuses(body)
+        val previous = load(app).takeIf { p.getBoolean(FRESH, false) }
+        save(app, now)
+        p.edit().putBoolean(FRESH, true).apply()
+        // Первый раз — только запоминаем, чтобы не завалить уведомлениями по старым заказам
+        if (previous == null) return@withLock emptyMap()
+
+        val fresh = markShown(app, changedStatuses(previous, now))
+        fresh.groupBy { it.order }.onEach { (order, list) -> addToFeed(app, order, list) }
+    }
+
+    /** Открыли приложение: тихо подтянуть, что пропустили (push не дошёл), и показать одно уведомление. */
+    fun catchUpOnOpen(ctx: Context, onDone: (Int) -> Unit = {}) {
+        val app = ctx.applicationContext
+        scope.launch {
+            val news = runCatching { check(app) }.getOrNull()
+            if (!news.isNullOrEmpty()) showNewsNotification(app, news.values.flatten())
+            onDone(news?.values?.sumOf { it.size } ?: 0)
+        }
     }
 
     /** При выходе из аккаунта: не следить и забыть статусы прошлого клиента. */
     fun stop(ctx: Context) {
         WorkManager.getInstance(ctx).cancelUniqueWork(WORK)
+        // Новости прошлого клиента новому не нужны
+        runCatching { NotificationManagerCompat.from(ctx).cancel(NEWS_ID) }
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
     }
 
@@ -106,6 +196,30 @@ object OrderStatusWatch {
         return runCatching {
             Gson().fromJson<List<FeedItem>>(json, object : TypeToken<List<FeedItem>>() {}.type)
         }.getOrNull().orEmpty()
+    }
+
+    /** «Есть новости по заказам» — одно на все изменения, нажатие открывает ленту. */
+    private fun showNewsNotification(ctx: Context, changed: List<PositionStatus>) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        ensureChannel(ctx)
+        val open = PendingIntent.getActivity(
+            ctx, NEWS_ID,
+            Intent(ctx, NotificationsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val lines = changed.take(8).joinToString("\n") { "№ ${it.order}: ${it.title} — ${it.status}" } +
+            (if (changed.size > 8) "\n…и ещё ${changed.size - 8}" else "")
+        val n = NotificationCompat.Builder(ctx, CHANNEL)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Есть новости по заказам")
+            .setContentText(if (changed.size == 1) "№ ${changed[0].order}: ${changed[0].status}" else "Изменились статусы: ${changed.size} поз.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(lines))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        runCatching { NotificationManagerCompat.from(ctx).notify(NEWS_ID, n) }
     }
 
     internal fun addToFeed(ctx: Context, order: String, changed: List<PositionStatus>) {
@@ -135,26 +249,9 @@ object OrderStatusWatch {
 
 class OrderStatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
+    // Без retry: не дошли до ABCP — следующая проверка по расписанию, лишних запросов не надо
     override suspend fun doWork(): Result {
-        val session = SessionManager(applicationContext)
-        if (!session.isLoggedIn()) return Result.success()
-
-        val resp = runCatching {
-            ApiClient.create().ordersWithPositions(session.login(), session.passMd5())
-        }.getOrNull() ?: return Result.retry()
-        if (!resp.isSuccessful) return Result.success() // неверный пароль и т.п. — повтор не поможет
-        val body = resp.body() ?: return Result.success()
-
-        val now = collectPositionStatuses(body)
-        val previous = OrderStatusWatch.load(applicationContext)
-        OrderStatusWatch.save(applicationContext, now)
-        // Первый запуск — только запоминаем, чтобы не завалить уведомлениями по старым заказам
-        if (previous == null) return Result.success()
-
-        changedStatuses(previous, now).groupBy { it.order }.forEach { (order, list) ->
-            OrderStatusWatch.addToFeed(applicationContext, order, list)
-            notify(order, list)
-        }
+        OrderStatusWatch.check(applicationContext)?.forEach { (order, list) -> notify(order, list) }
         return Result.success()
     }
     private fun notify(order: String, changed: List<PositionStatus>) = showOrderNotification(applicationContext, order, changed)
