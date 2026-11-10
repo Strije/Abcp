@@ -134,6 +134,13 @@ class OffersActivity : ComponentActivity() {
                 val analogGroups = grouped(analogs.filter { !onlyConfirmed || it.confirm >= 2 })
 
                 val snackbar = remember { SnackbarHostState() }
+                // Список уже на экране, а «Показать все варианты» не загрузились — иначе полоска просто пропадёт молча
+                LaunchedEffect(error) {
+                    val e = error
+                    if (e != null && offers.isNotEmpty()) {
+                        if (snackbar.showSnackbar(e, actionLabel = "Повторить", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) reload++
+                    }
+                }
                 Scaffold(
                     snackbarHost = { SnackbarHost(snackbar) },
                     topBar = {
