@@ -47,6 +47,39 @@ fun autoPickBrand(found: List<BrandHit>, preferred: String?): BrandHit? {
 
 private fun brandKey(b: String) = b.uppercase().filter { it.isLetterOrDigit() }
 
+/** «Фильтр масляный ан. MAHLE OC90» — этот бренд сам называет себя аналогом чужого номера. */
+private val ANALOG = Regex("(?i)(^|[^а-яa-z])(ан\.|аналог|analog|замена)")
+
+/** Сколько других брендов в списке упоминают этот бренд в описании («ан. MAHLE OC90» → MAHLE хозяин номера). */
+internal fun brandMentions(h: BrandHit, found: List<BrandHit>): Int {
+    val k = brandKey(h.brand)
+    if (k.length < 3) return 0
+    return found.count { it !== h && brandKey(it.description).contains(k) }
+}
+
+/**
+ * Кого проверять (до 4, каждый — запрос выдачи): брендов по номеру бывает несколько десятков по алфавиту, и все
+ * «в наличии». Аналоги (по своему описанию) — не кандидаты; первыми — кого чаще упоминают другие, потом в наличии.
+ */
+internal fun brandCandidates(found: List<BrandHit>): List<BrandHit> =
+    found.filter { !ANALOG.containsMatchIn(it.description) }
+        .sortedWith(compareByDescending<BrandHit> { brandMentions(it, found) }.thenByDescending { it.available })
+        .take(4)
+
+/**
+ * Выбор по числу поставщиков: бренд, на который ссылаются другие («хозяин» номера), — если его дают от 2 поставщиков;
+ * иначе лидер от 2 поставщиков и вдвое больше второго; иначе null.
+ */
+internal fun pickDominant(found: List<BrandHit>, counts: List<Pair<BrandHit, Int>>): BrandHit? {
+    counts.filter { it.second >= 2 && brandMentions(it.first, found) > 0 }
+        .maxWithOrNull(compareBy<Pair<BrandHit, Int>> { brandMentions(it.first, found) }.thenBy { it.second })
+        ?.let { return it.first }
+    val sorted = counts.sortedByDescending { it.second }
+    val (top, n) = sorted.firstOrNull() ?: return null
+    val second = sorted.getOrNull(1)?.second ?: 0
+    return if (n >= 2 && n >= second * 2) top else null
+}
+
 data class Offer(
     val brand: String,
     val number: String,
@@ -209,13 +242,12 @@ class AbcpShop(private val session: SessionManager) {
     }
 
     /**
-     * Брендов по номеру несколько, а однозначного нет: какой из них дают большинство поставщиков
-     * (OC90 → MAHLE, а не редкие однофамильцы). Смотрим выдачу до 4 брендов (сначала в наличии) и
-     * считаем разных поставщиков именно этого бренда и номера. Лидер — от 2 поставщиков и вдвое больше
-     * второго; иначе null — клиент выбирает сам.
+     * Брендов по номеру несколько, а однозначного нет: какой из них «хозяин» номера, которого дают большинство
+     * поставщиков (OC90 → MAHLE, а не A1 stock / ABSEL). Кандидаты — [brandCandidates]; по каждому считаем разных
+     * поставщиков именно этого бренда и номера, выбор — [pickDominant]. null — клиент выбирает сам.
      */
     suspend fun dominantBrand(found: List<BrandHit>): BrandHit? = kotlinx.coroutines.coroutineScope {
-        val counts = found.sortedByDescending { it.available }.take(4).map { h ->
+        val counts = brandCandidates(found).map { h ->
             async {
                 val fix = cleanNumber(h.number)
                 val n = runCatching { offers(h.number, h.brand) }.getOrDefault(emptyList())
@@ -223,10 +255,8 @@ class AbcpShop(private val session: SessionManager) {
                     .map(::offerProvider).toSet().size
                 h to n
             }
-        }.awaitAll().sortedByDescending { it.second }
-        val (top, n) = counts.firstOrNull() ?: return@coroutineScope null
-        val second = counts.getOrNull(1)?.second ?: 0
-        if (n >= 2 && n >= second * 2) top else null
+        }.awaitAll()
+        pickDominant(found, counts)
     }
 
     /** id статусов, которые в ABCP отмечены как конечные (выдано, отказ, возврат…) */
