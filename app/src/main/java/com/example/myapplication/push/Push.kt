@@ -99,11 +99,11 @@ object Push {
             runCatching { Gson().fromJson<List<List<String>>>(it, object : TypeToken<List<List<String>>>() {}.type) }.getOrNull()
         }
         if (data["type"] == "chat") {
-            com.example.myapplication.abcp.showChatNotification(ctx, data["title"] ?: "Менеджер ответил", data["body"].orEmpty())
+            com.example.myapplication.abcp.showChatNotification(ctx, data["title"] ?: "Менеджер ответил", data["body"].orEmpty(), data["link"])
             return
         }
         if (data["type"] == "promo") {
-            showPromoNotification(ctx, data["title"] ?: "Автодруг92", data["body"].orEmpty())
+            showPromoNotification(ctx, data["title"] ?: "Автодруг92", data["body"].orEmpty(), data["link"])
             return
         }
         if (order != null && !items.isNullOrEmpty()) {
@@ -115,10 +115,11 @@ object Push {
                 ctx, order, changed,
                 customTitle = data["title"].takeIf { data["kind"] != null },
                 customText = data["body"].takeIf { data["kind"] != null },
-                routeAddress = data["address"]?.takeIf { data["kind"] == "ready" && it.isNotBlank() }
+                routeAddress = data["address"]?.takeIf { data["kind"] == "ready" && it.isNotBlank() },
+                link = data["link"]
             )
         } else if (show) {
-            showOrderNotification(ctx, order, emptyList(), data["title"] ?: "Автодруг92", data["body"].orEmpty())
+            showOrderNotification(ctx, order, emptyList(), data["title"] ?: "Автодруг92", data["body"].orEmpty(), link = data["link"])
         }
     }
 }

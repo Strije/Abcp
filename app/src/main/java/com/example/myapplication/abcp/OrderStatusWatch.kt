@@ -165,18 +165,20 @@ fun showOrderNotification(
     ctx: Context, order: String?, changed: List<PositionStatus>,
     customTitle: String? = null, customText: String? = null,
     /** Адрес магазина — кнопка «Маршрут» в уведомлении «готово к выдаче» */
-    routeAddress: String? = null
+    routeAddress: String? = null,
+    /** Ссылка из push (avtodrug92://… или https://) — нажатие открывает её вместо заказа */
+    link: String? = null
 ) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) return
     OrderStatusWatch.ensureChannel(ctx)
 
-    val intent = if (order != null)
+    val intent = linkIntent(ctx, link) ?: if (order != null)
         Intent(ctx, OrderDetailsActivity::class.java).putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, order)
     else Intent(ctx, com.example.myapplication.MainActivity::class.java)
     val open = PendingIntent.getActivity(
-        ctx, (order ?: "push").hashCode(),
+        ctx, (order ?: "push").hashCode() + (link?.hashCode() ?: 0),
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
@@ -211,7 +213,7 @@ fun showOrderNotification(
 }
 
 /** Акции из рассылки — отдельный канал «Акции и новости»: его можно выключить, не теряя статусы заказов. */
-fun showPromoNotification(ctx: Context, title: String, text: String) {
+fun showPromoNotification(ctx: Context, title: String, text: String, link: String? = null) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) return
@@ -220,9 +222,10 @@ fun showPromoNotification(ctx: Context, title: String, text: String) {
         ch.description = "Скидки и новости магазина"
         ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
+    // Своя ссылка у каждой рассылки: requestCode от ссылки, иначе новая рассылка подменит ссылку у прошлой
     val open = PendingIntent.getActivity(
-        ctx, 7001,
-        Intent(ctx, com.example.myapplication.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        ctx, 7001 + (link?.hashCode() ?: 0),
+        linkIntent(ctx, link) ?: Intent(ctx, com.example.myapplication.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
     val n = NotificationCompat.Builder(ctx, PROMO_CHANNEL)
@@ -238,6 +241,10 @@ fun showPromoNotification(ctx: Context, title: String, text: String) {
 
 private const val PROMO_CHANNEL = "promo"
 
+/** Нажатие на уведомление со ссылкой из push; ссылка не наша / битая — null (откроется экран по умолчанию). */
+private fun linkIntent(ctx: Context, link: String?): Intent? =
+    link?.takeIf { com.example.myapplication.DeepLink.parse(it) != null }?.let { com.example.myapplication.DeepLink.intent(ctx, it) }
+
 /** Каналы создаём при запуске: готовые уведомления от RuStore (рассылки, чат) приходят сразу в них. */
 fun ensureNotificationChannels(ctx: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -250,7 +257,7 @@ fun ensureNotificationChannels(ctx: Context) {
 }
 
 /** Ответ менеджера в чате — отдельный канал «Чат с магазином», нажатие открывает чат. */
-fun showChatNotification(ctx: Context, title: String, text: String) {
+fun showChatNotification(ctx: Context, title: String, text: String, link: String? = null) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) return
@@ -260,8 +267,8 @@ fun showChatNotification(ctx: Context, title: String, text: String) {
         ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
     val open = PendingIntent.getActivity(
-        ctx, 7002,
-        Intent(ctx, com.example.myapplication.ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        ctx, 7002 + (link?.hashCode() ?: 0),
+        linkIntent(ctx, link) ?: Intent(ctx, com.example.myapplication.ChatActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
     val n = NotificationCompat.Builder(ctx, "chat")
