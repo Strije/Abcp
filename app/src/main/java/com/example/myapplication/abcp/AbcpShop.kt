@@ -4,6 +4,8 @@ import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import retrofit2.Response
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -164,6 +166,27 @@ class AbcpShop(private val session: SessionManager) {
         )
             .mapNotNull { it.toOffer() }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
+
+    /**
+     * Брендов по номеру несколько, а однозначного нет: какой из них дают большинство поставщиков
+     * (OC90 → MAHLE, а не редкие однофамильцы). Смотрим выдачу до 4 брендов (сначала в наличии) и
+     * считаем разных поставщиков именно этого бренда и номера. Лидер — от 2 поставщиков и вдвое больше
+     * второго; иначе null — клиент выбирает сам.
+     */
+    suspend fun dominantBrand(found: List<BrandHit>): BrandHit? = kotlinx.coroutines.coroutineScope {
+        val counts = found.sortedByDescending { it.available }.take(4).map { h ->
+            async {
+                val fix = cleanNumber(h.number)
+                val n = runCatching { offers(h.number, h.brand) }.getOrDefault(emptyList())
+                    .filter { offerBrandKey(it.brand) == offerBrandKey(h.brand) && it.numberFix.equals(fix, true) }
+                    .map(::offerProvider).toSet().size
+                h to n
+            }
+        }.awaitAll().sortedByDescending { it.second }
+        val (top, n) = counts.firstOrNull() ?: return@coroutineScope null
+        val second = counts.getOrNull(1)?.second ?: 0
+        if (n >= 2 && n >= second * 2) top else null
+    }
 
     /** id статусов, которые в ABCP отмечены как конечные (выдано, отказ, возврат…) */
     suspend fun finalStatusIds(): Set<String> {

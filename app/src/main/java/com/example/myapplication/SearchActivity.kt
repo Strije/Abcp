@@ -32,6 +32,7 @@ import com.example.myapplication.abcp.CartIconButton
 import com.example.myapplication.abcp.OffersActivity
 import com.example.myapplication.abcp.autoPickBrand
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Поиск по артикулу: номер → список брендов → карточка с ценами. */
@@ -66,6 +67,9 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var history by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
+    // Ищем бренд, который дают большинство поставщиков; клиент нажал бренд сам — отменяем
+    var picking by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun stopPicking() { picking?.cancel(); picking = null }
 
     LaunchedEffect(Unit) { if (!shop.isGuest) history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
 
@@ -105,6 +109,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     fun search() {
         val n = query.trim()
         if (n.isBlank()) return
+        stopPicking()
         keyboard?.hide()
         focus.clearFocus()
         tips = emptyList()
@@ -117,7 +122,18 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 brands = found
                 // Выбор бренда пропускаем, когда он однозначен (один, известен заранее, единственный в наличии)
                 com.example.myapplication.Analytics.event("search", mapOf("number" to n, "found" to found.size, "guest" to shop.isGuest))
-                autoPickBrand(found, preferredBrand)?.let { openOffers(ctx, it) }
+                val auto = autoPickBrand(found, preferredBrand)
+                if (auto != null) openOffers(ctx, auto)
+                else if (found.size > 1) picking = scope.launch {
+                    try {
+                        val best = shop.dominantBrand(found)
+                        // Клиент успел нажать бренд сам — ничего не открываем поверх
+                        if (best != null && isActive) {
+                            com.example.myapplication.Analytics.event("brand_autopick", mapOf("brand" to best.brand))
+                            openOffers(ctx, best)
+                        }
+                    } finally { if (picking == coroutineContext[kotlinx.coroutines.Job]) picking = null }
+                }
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Поиск → бренды", e)
                 error = e.message ?: "Не удалось выполнить поиск. Проверьте интернет."
@@ -147,7 +163,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
         ) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it; brands = null },
+                onValueChange = { query = it; brands = null; stopPicking() },
                 label = { Text("Артикул или OEM-номер") },
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null) },
@@ -194,8 +210,12 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 brands != null && brands!!.isEmpty() ->
                     Text("По номеру «${query.trim()}» ничего не найдено. Проверьте номер или спросите менеджера в чате.")
                 brands != null -> {
+                    if (picking != null) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                        Text("Смотрим, какой производитель чаще у поставщиков…", style = MaterialTheme.typography.bodySmall)
+                    }
                     Text("Выберите производителя", style = MaterialTheme.typography.titleSmall)
-                    HitList(brands!!) { openOffers(ctx, it) }
+                    HitList(brands!!) { stopPicking(); openOffers(ctx, it) }
                 }
                 tips.isNotEmpty() -> HitList(tips) { openOffers(ctx, it) }
                 query.isBlank() && history.isNotEmpty() -> {
