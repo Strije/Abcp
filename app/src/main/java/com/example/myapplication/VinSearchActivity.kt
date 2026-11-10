@@ -59,6 +59,12 @@ class VinSearchActivity : ComponentActivity() {
                     }
                 }
 
+                // Что уже искали: кнопка «Найти» нужна, только пока номер новый (машина найдена — она лишняя и путает)
+                var searchedFor by remember { mutableStateOf("") }
+                fun inGarage(q: String) = com.example.myapplication.abcp.garageKey(
+                    com.example.myapplication.laximo.normalizeRuPlate(q) ?: q
+                ) in garageKeys
+
                 fun onSearchClick() {
                     val vin = vinText.trim()
                     if (vin.isBlank()) {
@@ -78,8 +84,9 @@ class VinSearchActivity : ComponentActivity() {
                                 repo.findVehicleAny(vin)
                             }
                             results = list
-                            // Машина нашлась одна — сразу к подбору. Карточка остаётся позади:
-                            // «назад» — к ней, там «В мой гараж» и характеристики
+                            searchedFor = vin
+                            // Машина нашлась одна — сразу к подбору. Её ещё нет в гараже — карточка остаётся позади
+                            // («назад» — к ней, там «В мой гараж»); уже в гараже — карточка не нужна, «назад» — откуда пришли
                             if (list.size == 1) {
                                 val r = list.first()
                                 startActivity(
@@ -88,7 +95,7 @@ class VinSearchActivity : ComponentActivity() {
                                         .putExtra("brand", r.brand ?: "").putExtra("name", r.name ?: "")
                                         .apply { if (quickQuery.isNotBlank()) putExtra("query", quickQuery) }
                                 )
-                                if (quickQuery.isNotBlank()) finish()
+                                if (quickQuery.isNotBlank() || (!guest && inGarage(vin))) finish()
                             }
                             com.example.myapplication.Analytics.event("vehicle_search", mapOf(
                                 "kind" to when {
@@ -214,7 +221,7 @@ class VinSearchActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall
                         )
 
-                        Button(
+                        if (loading || results.isEmpty() || vinText.trim() != searchedFor) Button(
                             onClick = { onSearchClick() },
                             enabled = !loading,
                             modifier = Modifier.fillMaxWidth()
@@ -312,6 +319,18 @@ class VinSearchActivity : ComponentActivity() {
                                                         Text(if (more) "Свернуть" else "Все характеристики (${attrs.size})")
                                                     }
                                                 }
+                                                // Явная кнопка: по карточке не видно, что на неё можно нажать (телефон 10.11)
+                                                Spacer(Modifier.height(8.dp))
+                                                Button(
+                                                    onClick = {
+                                                        startActivity(
+                                                            Intent(ctx, QuickGroupsActivity::class.java)
+                                                                .putExtra("catalog", r.catalog).putExtra("vehicleId", r.vehicleId).putExtra("ssd", r.ssd)
+                                                                .putExtra("brand", r.brand ?: "").putExtra("name", r.name ?: "")
+                                                        )
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) { Text("Подобрать запчасти →") }
                                             }
                                         }
                                     }
