@@ -214,8 +214,11 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 }
                 error != null -> ErrorState(error!!, onRetry = { search() })
-                brands != null && brands!!.isEmpty() ->
-                    Text("По номеру «${query.trim()}» ничего не найдено. Проверьте номер или спросите менеджера в чате.")
+                brands != null && brands!!.isEmpty() -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("По номеру «${query.trim()}» ничего не найдено. Проверьте номер или спросите менеджера — подберём.")
+                    // Тупик без кнопки: чат был только на главной (телефон 10.11)
+                    Button(onClick = { ctx.startActivity(Intent(ctx, ChatActivity::class.java)) }) { Text("Спросить менеджера") }
+                }
                 brands != null -> {
                     if (picking != null) {
                         LinearProgressIndicator(Modifier.fillMaxWidth())
