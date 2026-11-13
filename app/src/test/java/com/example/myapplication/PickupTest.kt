@@ -62,8 +62,10 @@ class PickupTest {
         assertEquals("ориентировочно сегодня после 15:00", p.text)
         assertEquals("2026-11-13", p.date)
         assertEquals(15, p.hour)
-        // Не успевает к привозу — завтрашним
-        assertEquals("ориентировочно завтра после 15:00", pickupEstimate(nov(13, 14), 2, schedule).text)
+        // Привоз уже прошёл, а срок сегодня — к ближайшему часу после прибытия
+        assertEquals("ориентировочно сегодня после 16:00", pickupEstimate(nov(13, 14), 2, schedule).text)
+        // Срок сегодня, но к закрытию — уже завтра с открытия
+        assertEquals("ориентировочно завтра после 9:00", pickupEstimate(nov(13, 17), 2, schedule).text)
     }
 
     @Test
@@ -81,6 +83,14 @@ class PickupTest {
     }
 
     @Test
+    fun dayMatchesAbcpDeadlineEvenIfHoursLandAfterArrival() {
+        // Телефон 13.11: в корзине «16 нояб.», а расчёт по минутам давал 17-е — день должен совпадать со сроком ABCP
+        val p = pickupEstimate(nov(13, 13, 27), 76, schedule)
+        assertEquals("ориентировочно 16 нояб. (пн) после 15:00", p.text)
+        assertEquals("2026-11-16", p.date)
+    }
+
+    @Test
     fun closedDate() {
         val closed = schedule.copy(closed = setOf("2026-11-14"))
         // Привоз выпал на закрытый день — на следующий рабочий с открытия
@@ -94,8 +104,8 @@ class PickupTest {
     fun noArrivalsMeansFromOpening() {
         val none = schedule.copy(arrivals = emptyList())
         assertEquals("ориентировочно сегодня после 9:00", pickupEstimate(nov(13, 1), 2, none).text)
-        // Товар придёт уже после открытия — на следующий день
-        assertEquals("ориентировочно завтра после 9:00", pickupEstimate(nov(13, 10), 2, none).text)
+        // Товар придёт уже после открытия — к ближайшему часу
+        assertEquals("ориентировочно сегодня после 12:00", pickupEstimate(nov(13, 10), 2, none).text)
     }
 
     @Test

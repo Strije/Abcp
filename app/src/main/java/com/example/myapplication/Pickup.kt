@@ -95,34 +95,23 @@ fun pickupEstimate(nowMillis: Long, deliveryHours: Int, schedule: Schedule): Pic
 
     val arrive = shopCal(nowMillis + deliveryHours * 3_600_000L)
     val arriveMin = arrive.minuteOfDay()
+    // День выдачи — тот же, что ABCP показывает сроком («16 нояб.»): часы у него грубые, и раньше расчёт по
+    // минутам уводил выдачу на день позже, чем написано в корзине (телефон 13.11). Время — последний привоз этого дня.
     val arrivals = schedule.arrivals.sorted()
-    var day: Calendar? = null
-    var time = 0
-    if (arrivals.isEmpty()) {
-        // Времени привоза в настройках нет — считаем, что товар на месте к открытию
-        for (i in 0..60) {
-            val d = arrive.plusDays(i)
-            val h = schedule.hoursOn(d) ?: continue
-            if (i > 0 || h.open >= arriveMin) {
-                day = d
-                time = h.open
-                break
-            }
-        }
+    val sameDay = dayNumber(arrive) == dayNumber(now)
+    val hours = schedule.hoursOn(arrive)
+    var t = arrivals.lastOrNull() ?: (hours?.open ?: 0)
+    // Срок сегодня, а привоз уже прошёл (или его нет в настройках) — к ближайшему часу после прибытия
+    if (sameDay && t < arriveMin) t = (arriveMin + 59) / 60 * 60
+    var day: Calendar?
+    var time: Int
+    if (hours == null || t >= hours.close || (sameDay && hours.close - t <= 30)) {
+        // Выходной или к закрытию — забирать со следующего рабочего дня
+        day = schedule.nextWorkingDay(arrive)
+        time = day?.let { schedule.hoursOn(it) }?.open ?: 0
     } else {
-        // Ближайший привоз не раньше прибытия товара: сегодня или завтра первым рейсом
-        val same = arrivals.firstOrNull { it >= arriveMin }
-        val d = if (same != null) arrive else arrive.plusDays(1)
-        val t = same ?: arrivals.first()
-        val h = schedule.hoursOn(d)
-        if (h == null || t >= h.close) {
-            // Привезли в выходной или к закрытию — забирать со следующего рабочего дня
-            day = schedule.nextWorkingDay(d)
-            time = day?.let { schedule.hoursOn(it) }?.open ?: 0
-        } else {
-            day = d
-            time = maxOf(t, h.open)
-        }
+        day = arrive
+        time = maxOf(t, hours.open)
     }
     val at = day ?: return unknown
     val dayText = when ((dayNumber(at) - dayNumber(now)).toInt()) {
