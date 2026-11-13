@@ -23,6 +23,7 @@ class App : Application() {
             override fun onActivityDestroyed(a: android.app.Activity) {}
         })
         com.example.myapplication.server.ServerAddress.init(this) // адрес сервера можно сменить страницей avtodrug92.ru/api
+        AppConfig.init(this) // контакты, часы, объявление, переключатели — с сервера, без выпуска версии
         runCatching { com.example.myapplication.abcp.ensureNotificationChannels(this) }
         // RuStore Push SDK требует инициализации именно здесь. Нет ID проекта — работаем без push.
         if (BuildConfig.RUSTORE_PROJECT_ID.isNotBlank()) {

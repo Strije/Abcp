@@ -23,7 +23,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.myapplication.AppConfig
 import com.example.myapplication.SessionManager
+import com.example.myapplication.defaultShipmentDate
+import com.example.myapplication.pickupEstimate
+import com.example.myapplication.shipmentDateLabel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,6 +68,12 @@ class CheckoutActivity : ComponentActivity() {
                 var showItems by remember { mutableStateOf(false) }
                 // Сообщение, которое переживает перечитывание корзины (например, «изменились цены»)
                 var notice by remember { mutableStateOf<String?>(null) }
+                // Когда заказ можно забрать: считаем по самой долгой позиции корзины (0 часов — всё в магазине)
+                fun estimate(items: List<BasketItem>) = pickupEstimate(
+                    System.currentTimeMillis(),
+                    items.maxOfOrNull { maxOf(it.deadlineHours, it.deadlineHoursMax) } ?: 0,
+                    AppConfig.schedule
+                )
                 fun ecomItems() = basket.map { com.example.myapplication.Analytics.Item(it.brand, it.number, it.description, it.price, it.quantity) }
 
                 LaunchedEffect(reload) {
@@ -88,7 +98,9 @@ class CheckoutActivity : ComponentActivity() {
                         method = keep(method, o.shipmentMethods)
                         office = keep(office, o.offices)
                         address = keep(address, o.addresses)
-                        date = date?.takeIf { d -> o.dates.any { it.date == d } } ?: o.dates.firstOrNull()?.date
+                        // Дата по умолчанию — первая, к которой заказ уже приедет в магазин
+                        date = date?.takeIf { d -> o.dates.any { it.date == d } }
+                            ?: defaultShipmentDate(o.dates.map { it.date }, estimate(basket).date)
                         if (first) pickup = o.addresses.isEmpty() || o.offices.isNotEmpty()
                         opts = o
                     } catch (e: CancellationException) {
@@ -106,7 +118,7 @@ class CheckoutActivity : ComponentActivity() {
                     o == null -> "…"
                     o.payments.isNotEmpty() && payment == null -> "Выберите способ оплаты"
                     o.shipmentMethods.isNotEmpty() && method == null -> "Выберите способ доставки"
-                    pickup && o.offices.isNotEmpty() && office == null -> "Выберите офис самовывоза"
+                    pickup && o.offices.isNotEmpty() && office == null -> "Выберите, где забрать"
                     !pickup && address == null -> "Выберите адрес доставки"
                     o.dates.isNotEmpty() && date == null -> "Выберите дату"
                     else -> null
@@ -179,6 +191,8 @@ class CheckoutActivity : ComponentActivity() {
                             ) {
                                 val total = basket.sumOf { it.price * it.quantity }
                                 Text("${basket.size} поз. на ${formatRub(total)}", style = MaterialTheme.typography.titleMedium)
+                                val ready = remember(basket) { estimate(basket) }
+                                Text("Когда забрать: ${ready.text}")
                                 // Что заказываем — свёрнуто; позиции с замечанием ABCP (нет в наличии, цена) видны сразу
                                 notice?.let {
                                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
@@ -210,10 +224,13 @@ class CheckoutActivity : ComponentActivity() {
                                         FilterChip(!pickup, { pickup = false }, { Text("Доставка") })
                                     }
                                 }
-                                if (pickup) Choice("Офис самовывоза", o.offices, office) { office = it }
+                                // Вместо «Первый офис/Второй офис» из ABCP — адрес магазина из настроек
+                                if (pickup) Choice(
+                                    "Где забрать", o.offices.map { IdName(it.id, AppConfig.officeName(it.id) ?: it.name) }, office
+                                ) { office = it }
                                 else Choice("Адрес доставки", o.addresses, address) { address = it }
 
-                                Choice("Дата отгрузки", o.dates.map { IdName(it.date, it.name) }, date) { date = it }
+                                DateChoice(o.dates, date, ready.date) { date = it }
 
                                 OutlinedTextField(
                                     value = comment,
@@ -254,6 +271,8 @@ class CheckoutActivity : ComponentActivity() {
                                                 // и отменяет эту корутину — заказ не должен из-за этого выпасть из отчётов
                                                 done = ArrayList(numbers)
                                                 com.example.myapplication.RuStoreStore.onOrderPlaced(this@CheckoutActivity)
+                                                // Появился активный заказ — фоновая сверка статусов снова в обычном ритме
+                                                OrderStatusWatch.onOrderPlaced(applicationContext)
                                                 // Пометка для статистики — в фоне, на оформление не влияет
                                                 val app = applicationContext
                                                 kotlinx.coroutines.GlobalScope.launch {
@@ -331,6 +350,27 @@ class CheckoutActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+/**
+ * Когда клиент приедет за заказом: даты отгрузки ABCP с понятными подписями. В ABCP уходит исходная дата.
+ * Сначала четыре ближайшие (и выбранная, если она дальше), остальные — по кнопке «Другая дата».
+ */
+@Composable
+private fun DateChoice(dates: List<ShipmentDate>, selected: String?, pickupDate: String, onSelect: (String) -> Unit) {
+    if (dates.isEmpty()) return
+    var all by rememberSaveable { mutableStateOf(false) }
+    val now = remember { System.currentTimeMillis() }
+    val count = if (all) dates.size else minOf(dates.size, maxOf(4, dates.indexOfFirst { it.date == selected } + 1))
+    val options = dates.take(count).map { d ->
+        val label = shipmentDateLabel(d.date, now)
+        // Раньше расчётной выдачи приезжать незачем, но выбрать можно: расчёт ориентировочный
+        IdName(d.date, if (label == null) d.name else if (d.date < pickupDate) "$label (заказ ещё не приедет)" else label)
+    }
+    Column {
+        Choice("Когда приедете", options, selected, onSelect)
+        if (count < dates.size) TextButton(onClick = { all = true }) { Text("Другая дата") }
     }
 }
 

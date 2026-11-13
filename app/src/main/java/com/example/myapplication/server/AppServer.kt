@@ -94,8 +94,14 @@ class AppServer(ctx: Context) {
             )
         }
 
-    suspend fun chatSend(text: String): Long =
-        post("/v1/chat/send", Gson().toJson(mapOf("text" to text))).asJsonObject["id"].asLong
+    /** clientId — метка сообщения от приложения: по ней сервер не создаст дубль при повторной отправке. */
+    suspend fun chatSend(text: String, clientId: String? = null): Long {
+        val body = JsonObject().apply {
+            addProperty("text", text)
+            if (clientId != null) addProperty("client_id", clientId)
+        }
+        return post("/v1/chat/send", body.toString()).asJsonObject["id"].asLong
+    }
 
     // ---------- push RuStore ----------
 
@@ -157,6 +163,14 @@ class AppServer(ctx: Context) {
     /** Какой бренд открыть по номеру: сервер голосует по всем поставщикам с синонимами ABCP и уровнем фирм. */
     suspend fun brandChoice(number: String) =
         publicGet("/v1/brand-choice?number=${java.net.URLEncoder.encode(number, "UTF-8")}").asJsonObject
+
+    /** Настройки приложения (контакты, часы, объявление) — сырой текст ответа, разбирает AppConfig. Без входа. */
+    suspend fun appConfig(): String = withContext(Dispatchers.IO) {
+        if (!enabled) throw ServerException("Сервер не настроен")
+        val (code, text) = execute(Request.Builder().url("$base/v1/app-config").get().build())
+        if (code !in 200..299) throw ServerException(detail(text) ?: "Ошибка сервера ($code)", code)
+        text
+    }
 
     private suspend fun publicGet(path: String) = withContext(Dispatchers.IO) {
         if (!enabled) throw ServerException("Сервер не настроен")

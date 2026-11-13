@@ -30,6 +30,9 @@ android {
 
         // Наш сервер (server/): баланс, оплата, картинки. Тестовый — на VPS в NL, к выпуску переедет в РФ.
         buildConfigField("String", "SERVER_URL", "\"${localProperties.getProperty("SERVER_URL", "https://109.73.199.217")}\"")
+        // Открытый ключ сервера (ECDSA P-256, не секрет): на новый адрес со страницы avtodrug92.ru/api приложение
+        // перейдёт, только если тот подпишет случайную строку парным закрытым ключом (server/ServerAddress.kt)
+        buildConfigField("String", "SERVER_KEY", "\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErhfRfw2/IX9sB/sU4BZ3j0OZrYCsjDtJ6rfoCXyX5eRvEabPWdVR1kARfyZ6Vnw6PpLs6G3rzVImn3QsH8CMAA==\"")
 
         // ID проекта push в Консоли RuStore — не секрет (он зашивается в любое приложение с push)
         // AppMetrica (Яндекс): вылеты и ошибки. Ключ приложения — не секрет. Пусто — ничего не отправляем.

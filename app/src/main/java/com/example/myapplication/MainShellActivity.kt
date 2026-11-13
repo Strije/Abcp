@@ -73,6 +73,7 @@ class MainShellActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         unread = OrderStatusWatch.unreadCount(this)
+        AppConfig.refresh() // настройки с сервера — не чаще раза в полчаса
         // Push мог не дойти (Xiaomi усыпляет RuStore) — тихо сверяем статусы, не чаще раза в 5 минут
         if (SessionManager(this).isLoggedIn()) OrderStatusWatch.catchUpOnOpen(this) { n ->
             if (n > 0) runOnUiThread { unread = OrderStatusWatch.unreadCount(this) }
@@ -89,9 +90,12 @@ class MainShellActivity : ComponentActivity() {
         // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+) — только для вошедших
         // Статусы заказов: push RuStore/Google через наш сервер + своя проверка (20 мин без push, 30 — с push)
         if (!guest) com.example.myapplication.push.Push.register(this)
+        // Вышли без сети — токен на сервере остался: дотираем, иначе гостю придут уведомления прежнего клиента
+        else com.example.myapplication.push.Push.retryUnregister(this)
         // Версия из RuStore обновляется через RuStore (у прямой — своё автообновление)
         RuStoreStore.checkUpdate(this)
-        if (!guest && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        // В обучении нажали «Начать без уведомлений» — не переспрашиваем сразу (включить можно в профиле)
+        if (!guest && !Tips.notificationsDeclined(this) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -285,7 +289,9 @@ private fun HomeScreen(
             if (!guest) IconButton(onClick = { showProfile = true }) { Icon(Icons.Default.AccountCircle, "Профиль") }
         }
 
-        VpnWarningCard()
+        // Версия старее, чем требует сервер, — просим обновиться (минимальная версия приходит в настройках)
+        if (BuildConfig.VERSION_CODE < AppConfig.minVersion) UpdateRequiredCard(onCheckUpdate)
+        if (AppConfig.flag("vpn_warning")) VpnWarningCard()
         if (!guest) ApiAccessCard()
 
         // Одно поле на всё: артикул, VIN, номер кузова или госномер
@@ -300,6 +306,10 @@ private fun HomeScreen(
             keyboardActions = KeyboardActions(onSearch = { smartSearch(ctx, query) }),
             modifier = Modifier.fillMaxWidth()
         )
+
+        // Объявление магазина из настроек сервера («31 декабря работаем до 15:00»)
+        val noticeText = AppConfig.noticeText
+        if (noticeText.isNotBlank()) NoticeCard(noticeText, AppConfig.noticeLink)
 
         // Новости и акции — страницы сайта news1…news4 (что положено на сайт, то и видно)
         NewsCarousel()
@@ -403,6 +413,60 @@ private fun HomeScreen(
             },
             dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Отмена") } }
         )
+    }
+}
+
+/** Версия ниже минимальной из настроек сервера: часть функций в ней может уже не работать. */
+@Composable
+private fun UpdateRequiredCard(onCheckUpdate: suspend () -> String?) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Обновите приложение", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                AppConfig.updateText.ifBlank { "Вышла новая версия — в этой часть функций может не работать." },
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Button(enabled = !checking, onClick = {
+                Analytics.event("update_required_tap")
+                if (BuildConfig.SELF_UPDATE) {
+                    // Прямая версия: та же проверка, что «Проверить обновления» в профиле, — откроет окно обновления
+                    checking = true
+                    scope.launch {
+                        val message = onCheckUpdate()
+                        checking = false
+                        if (message != null) android.widget.Toast.makeText(ctx, message, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    // Версия из RuStore: страница приложения (откроется в RuStore, без него — в браузере)
+                    com.example.myapplication.ui.openExternal(
+                        ctx, Intent(Intent.ACTION_VIEW, Uri.parse("https://www.rustore.ru/catalog/app/" + BuildConfig.APPLICATION_ID))
+                    )
+                }
+            }) { Text(if (checking) "Проверяем…" else "Обновить") }
+        }
+    }
+}
+
+/** Объявление магазина; со ссылкой — открывает её по нажатию. */
+@Composable
+private fun NoticeCard(text: String, link: String) {
+    val ctx = LocalContext.current
+    val open = Modifier.clickable {
+        Analytics.event("notice_tap")
+        com.example.myapplication.ui.openExternal(ctx, Intent(Intent.ACTION_VIEW, Uri.parse(link)))
+    }
+    Card(
+        Modifier.fillMaxWidth().then(if (link.isNotBlank()) open else Modifier),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Text(text, Modifier.padding(14.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
     }
 }
 
