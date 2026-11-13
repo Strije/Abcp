@@ -45,77 +45,81 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AvtodrugTheme {
-                var showOnboarding by remember { mutableStateOf(!Tips.onboardingDone(this@MainActivity)) }
-                if (showOnboarding) {
-                    Surface { OnboardingScreen(onFinish = { showOnboarding = false }) }
-                    return@AvtodrugTheme
-                }
-                var checkingAutoLogin by remember { mutableStateOf(true) }
-                var autoLoginError by remember { mutableStateOf<String?>(null) }
-                var inFlight by remember { mutableStateOf(false) }
+                // Фон темы под всем содержимым: без него в тёмной теме светлый текст оказывался на белом окне
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    var showOnboarding by remember { mutableStateOf(!Tips.onboardingDone(this@MainActivity)) }
+                    if (showOnboarding) {
+                        Surface { OnboardingScreen(onFinish = { showOnboarding = false }) }
+                        return@Surface
+                    }
+                    var checkingAutoLogin by remember { mutableStateOf(true) }
+                    var autoLoginError by remember { mutableStateOf<String?>(null) }
+                    var inFlight by remember { mutableStateOf(false) }
 
-                fun goToCabinet(user: UserInfoDto?) {
-                    val json = user?.let { Gson().toJson(it) } ?: session.userJson()
-                    if (user != null && json != null) session.saveUser(json)
-                    startActivity(
-                        Intent(this@MainActivity, MainShellActivity::class.java)
-                            .putExtra(MainShellActivity.EXTRA_USER_JSON, json)
-                    )
-                    finish()
-                }
+                    fun goToCabinet(user: UserInfoDto?) {
+                        val json = user?.let { Gson().toJson(it) } ?: session.userJson()
+                        if (user != null && json != null) session.saveUser(json)
+                        startActivity(
+                            Intent(this@MainActivity, MainShellActivity::class.java)
+                                .putExtra(MainShellActivity.EXTRA_USER_JSON, json)
+                        )
+                        finish()
+                    }
 
-                // Автологин. Профиль с прошлого раза есть — открываемся сразу, пароль главный экран проверит сам.
-                LaunchedEffect(Unit) {
-                    if (session.isLoggedIn() && session.userJson() != null) {
-                        goToCabinet(null)
-                    } else if (session.isLoggedIn() && !inFlight) {
-                        inFlight = true
-                        try {
-                            val resp = performRequestWithRetry {
-                                api.userInfo(
-                                    userlogin = session.login(),
-                                    userpsw = session.passMd5()
-                                )
-                            }
-
-                            val user = resp.body()
-                            if (resp.isSuccessful && user != null) {
-                                goToCabinet(user)
-                            } else {
-                                val raw = resp.errorBody()?.string()
-                                // Выходим только при настоящем «неверный пароль»; сбой ABCP — не повод
-                                if (com.example.myapplication.abcp.abcpErrorCode(raw) == 102) {
-                                    session.clear()
-                                    autoLoginError = prettifyAbcpError(raw, resp.code())
-                                    checkingAutoLogin = false
-                                } else {
-                                    goToCabinet(null)
-                                }
-                            }
-                        } catch (_: Exception) {
-                            // Нет интернета — это не повод выходить из аккаунта
+                    // Автологин. Профиль с прошлого раза есть — открываемся сразу, пароль главный экран проверит сам.
+                    LaunchedEffect(Unit) {
+                        if (session.isLoggedIn() && session.userJson() != null) {
                             goToCabinet(null)
-                        } finally {
-                            inFlight = false
+                        } else if (session.isLoggedIn() && !inFlight) {
+                            inFlight = true
+                            try {
+                                val resp = performRequestWithRetry {
+                                    api.userInfo(
+                                        userlogin = session.login(),
+                                        userpsw = session.passMd5()
+                                    )
+                                }
+
+                                val user = resp.body()
+                                if (resp.isSuccessful && user != null) {
+                                    goToCabinet(user)
+                                } else {
+                                    val raw = resp.errorBody()?.string()
+                                    // Выходим только при настоящем «неверный пароль»; сбой ABCP — не повод
+                                    if (com.example.myapplication.abcp.abcpErrorCode(raw) == 102) {
+                                        // Пароль сменился — тот же полный выход, что и кнопкой «Выйти»
+                                        clearClientData(this@MainActivity)
+                                        autoLoginError = prettifyAbcpError(raw, resp.code())
+                                        checkingAutoLogin = false
+                                    } else {
+                                        goToCabinet(null)
+                                    }
+                                }
+                            } catch (_: Exception) {
+                                // Нет интернета — это не повод выходить из аккаунта
+                                goToCabinet(null)
+                            } finally {
+                                inFlight = false
+                            }
+                        } else {
+                            checkingAutoLogin = false
+                        }
+                    }
+
+                    if (checkingAutoLogin) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
                         }
                     } else {
-                        checkingAutoLogin = false
+                        LoginScreen(
+                            api = api,
+                            session = session,
+                            initialError = autoLoginError,
+                            onSuccess = { user ->
+                                goToCabinet(user)
+                            }
+                        )
                     }
-                }
-
-                if (checkingAutoLogin) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                } else {
-                    LoginScreen(
-                        api = api,
-                        session = session,
-                        initialError = autoLoginError,
-                        onSuccess = { user ->
-                            goToCabinet(user)
-                        }
-                    )
                 }
             }
         }
@@ -144,7 +148,7 @@ fun LoginScreen(
         val p = password.trim()
         if (loading) return
         if (l.isEmpty() || p.isEmpty()) {
-            error = "Введите логин и пароль"
+            error = "Введите телефон или email и пароль"
             return
         }
         focus.clearFocus()
@@ -163,7 +167,7 @@ fun LoginScreen(
                     error = prettifyAbcpError(resp.errorBody()?.string())
                 }
             } catch (_: Exception) {
-                error = "Не удалось подключиться к серверу. Проверьте интернет."
+                error = "Не удалось подключиться к серверу. Проверьте интернет." + Vpn.hint()
             } finally {
                 loading = false
             }
@@ -192,10 +196,12 @@ fun LoginScreen(
         OutlinedTextField(
             value = login,
             onValueChange = { login = it },
-            label = { Text("Логин") },
+            label = { Text("Телефон или email") },
             singleLine = true,
             enabled = !loading,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardOptions = KeyboardOptions(
+                autoCorrectEnabled = false, keyboardType = KeyboardType.Email, imeAction = ImeAction.Next
+            ),
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -264,6 +270,8 @@ fun LoginScreen(
                 ctx.startActivity(
                     android.content.Intent(ctx, MainShellActivity::class.java).putExtra(MainShellActivity.EXTRA_GUEST, true)
                 )
+                // Экран входа под главной не оставляем: «Войти» из гостя откроет его заново
+                (ctx as? android.app.Activity)?.finish()
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("Смотреть каталог без входа") }

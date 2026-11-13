@@ -97,9 +97,12 @@ object Push {
         data["mid"]?.let { if (!firstTime(ctx, it)) return }
         val order = data["order"]
         val items = data["items"]?.let {
-            runCatching { Gson().fromJson<List<List<String>>>(it, object : TypeToken<List<List<String>>>() {}.type) }.getOrNull()
+            runCatching { Gson().fromJson<List<List<String?>?>>(it, object : TypeToken<List<List<String?>?>>() {}.type) }.getOrNull()
         }
+        // Вышли из аккаунта, а push прежнего клиента ещё пришёл — заказы и чат не показываем
+        val loggedIn = SessionManager(ctx).isLoggedIn()
         if (data["type"] == "chat") {
+            if (!loggedIn) return
             com.example.myapplication.abcp.showChatNotification(ctx, data["title"] ?: "Менеджер ответил", data["body"].orEmpty(), data["link"])
             return
         }
@@ -107,8 +110,14 @@ object Push {
             showPromoNotification(ctx, data["title"] ?: "Автодруг92", data["body"].orEmpty(), data["link"])
             return
         }
-        if (order != null && !items.isNullOrEmpty()) {
-            val all = items.mapIndexed { i, (title, status) -> PositionStatus("$order#$i", order, title, status) }
+        if (!loggedIn) return
+        // Строка короче пары «название, статус» — пропускаем (номера остальных позиций не сдвигаются)
+        val all = if (order == null) emptyList<PositionStatus>() else items.orEmpty().mapIndexedNotNull { i, row ->
+            val title = row?.getOrNull(0) ?: return@mapIndexedNotNull null
+            val status = row?.getOrNull(1) ?: return@mapIndexedNotNull null
+            PositionStatus("$order#$i", order, title, status)
+        }
+        if (order != null && all.isNotEmpty()) {
             // Своя проверка уже показала это изменение (push опоздал) — второй раз не показываем
             val changed = OrderStatusWatch.markShown(ctx, all)
             if (changed.isEmpty()) return

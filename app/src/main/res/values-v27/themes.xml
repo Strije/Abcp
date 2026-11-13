@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Android 8.1+: светлая панель навигации с тёмными кнопками (раньше 8.1 такого флага нет) -->
+    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F5F6F9</item>
+        <item name="android:statusBarColor">#F5F6F9</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#F5F6F9</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

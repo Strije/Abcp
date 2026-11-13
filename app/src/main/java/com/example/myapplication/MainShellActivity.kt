@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import com.example.myapplication.abcp.CartScreen
 import com.example.myapplication.abcp.CartState
 import com.example.myapplication.abcp.GarageCar
@@ -101,13 +103,7 @@ class MainShellActivity : ComponentActivity() {
         }
 
         fun logout(message: String? = null) {
-            Analytics.client(null)
-            com.example.myapplication.push.Push.unregister(this)
-            OrderStatusWatch.stop(this)
-            AppServer.clearCache()
-            MemoryCache.clear()
-            ApiAccess.reset()
-            session.clear()
+            clearClientData(this)
             message?.let { android.widget.Toast.makeText(this, it, android.widget.Toast.LENGTH_LONG).show() }
             startActivity(Intent(this, MainActivity::class.java))
             finish()
@@ -126,13 +122,17 @@ class MainShellActivity : ComponentActivity() {
                     when {
                         resp.isSuccessful && fresh != null -> { user = fresh; session.saveUser(Gson().toJson(fresh)) }
                         // 102 — неверный логин/пароль (103 «нет прав» сюда не относится — это заявка на доступ)
-                        com.example.myapplication.abcp.abcpErrorCode(resp.errorBody()?.string()) == 102 ->
+                        com.example.myapplication.abcp.abcpErrorCode(resp.errorBody()?.string()) == 102 -> {
                             logout("Пароль изменился — войдите заново")
+                            return@LaunchedEffect // сессии уже нет — права не проверяем
+                        }
                     }
                     // Вход прошёл — проверяем, включены ли клиенту права на поиск/корзину/заказы
                     ApiAccess.check(this@MainShellActivity)
                 }
                 var tab by rememberSaveable { mutableStateOf(HomeTab.Home) }
+                // «Назад» с любой вкладки — сначала на Главную, а не сразу из приложения
+                BackHandler(enabled = tab != HomeTab.Home) { tab = HomeTab.Home }
                 LaunchedEffect(tab) { Analytics.screen("Главная/" + tab.name) }
                 LaunchedEffect(user?.id) { if (!guest) Analytics.client(user?.id) }
                 // Каждая вкладка помнит своё (введённый номер, прокрутку) при переключении
@@ -205,6 +205,32 @@ class MainShellActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Выход из аккаунта — одно место на все случаи (кнопка «Выйти», «пароль изменился» здесь и на экране входа):
+ * на телефоне не должно остаться ничего от прежнего клиента.
+ */
+fun clearClientData(ctx: Context) {
+    val app = ctx.applicationContext
+    Analytics.client(null)
+    com.example.myapplication.push.Push.unregister(app)
+    OrderStatusWatch.stop(app)
+    AppServer.clearCache()
+    MemoryCache.clear()
+    ApiAccess.reset()
+    CartState.count = 0
+    AbcpShop.guestPrices = false
+    // Уведомления о заказах и чате прежнего клиента
+    runCatching { NotificationManagerCompat.from(app).cancelAll() }
+    // Избранная машина гаража
+    app.getSharedPreferences("garage_fav", Context.MODE_PRIVATE).edit().clear().apply()
+    // Переписка веб-чата (cookie и хранилище страницы); нет WebView на устройстве — пропускаем
+    runCatching {
+        android.webkit.CookieManager.getInstance().removeAllCookies(null)
+        android.webkit.WebStorage.getInstance().deleteAllData()
+    }
+    SessionManager(app).clear()
+}
+
 // ---------------- Главная: плитки («бенто») ----------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -222,8 +248,9 @@ private fun HomeScreen(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var showProfile by remember { mutableStateOf(false) }
+    var confirmLogout by remember { mutableStateOf(false) }
     val server = remember { AppServer(ctx) }
     var finance by remember { mutableStateOf<Finance?>(null) }
     var showTopup by remember { mutableStateOf(false) }
@@ -340,22 +367,42 @@ private fun HomeScreen(
 
     if (showProfile) {
         ModalBottomSheet(onDismissRequest = { showProfile = false }) {
-            Column(Modifier.fillMaxWidth().padding(20.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp).padding(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(user?.name ?: "Профиль", style = MaterialTheme.typography.titleLarge)
                 user?.mobile?.let { Text("Телефон: $it") }
                 user?.email?.let { Text("Email: $it") }
                 user?.organization?.takeIf { it.isNotBlank() }?.let { Text("Организация: $it") }
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
                 TextButton(onClick = { ctx.startActivity(Intent(ctx, OnboardingActivity::class.java)) }) { Text("Как пользоваться") }
                 TextButton(onClick = { ctx.startActivity(Intent(ctx, com.example.myapplication.push.NotificationSetupActivity::class.java)) }) {
                     Text("Уведомления приходят вовремя?")
                 }
+                TextButton(onClick = {
+                    com.example.myapplication.ui.openExternal(ctx, Intent(Intent.ACTION_VIEW, Uri.parse(DATA_PROTECTION_URL)))
+                }) { Text("Политика обработки данных") }
                 AppVersionRow(onCheckUpdate)
                 Text("Значки поставщиков: Font Awesome Free (CC BY 4.0, SIL OFL 1.1)",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                Spacer(Modifier.height(8.dp))
+                // В самом конце и с подтверждением — чтобы не выйти случайным нажатием
+                OutlinedButton(onClick = { confirmLogout = true }, modifier = Modifier.fillMaxWidth()) { Text("Выйти") }
             }
         }
+    }
+
+    if (confirmLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("Выйти из аккаунта?") },
+            text = { Text("Чтобы войти снова, понадобится пароль.") },
+            confirmButton = {
+                TextButton(onClick = { confirmLogout = false; showProfile = false; onLogout() }) { Text("Выйти") }
+            },
+            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Отмена") } }
+        )
     }
 }
 

@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Светлая тема: фон окна и строка состояния под цвет фона приложения (ui/theme/Theme.kt), значки тёмные -->
+    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F5F6F9</item>
+        <item name="android:statusBarColor">#F5F6F9</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>
