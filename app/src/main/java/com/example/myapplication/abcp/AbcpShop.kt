@@ -4,8 +4,14 @@ import com.example.myapplication.SessionManager
 import com.example.myapplication.performRequestWithRetry
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import retrofit2.Response
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
@@ -20,8 +26,22 @@ data class RepeatSource(val brand: String, val number: String, val qty: Int, val
     val title get() = "$brand $number".trim()
 }
 
-/** Что нашлось сейчас: лучшее предложение (или null — нет в продаже) и количество с учётом упаковки. */
-data class RepeatLine(val source: RepeatSource, val offer: Offer?, val qty: Int)
+/**
+ * Что нашлось сейчас: лучшее предложение (или null — нет в продаже) и количество с учётом упаковки.
+ * checkFailed — выдачу получить не удалось (сеть): это не «нет в продаже».
+ */
+data class RepeatLine(val source: RepeatSource, val offer: Offer?, val qty: Int, val checkFailed: Boolean = false)
+
+/** Строка «Повторить заказ» по выдаче: found = null — выдачу получить не удалось. */
+internal fun repeatLine(src: RepeatSource, found: List<Offer>?): RepeatLine {
+    val fix = cleanNumber(src.number)
+    // Бренд в заказе и в выдаче пишут по-разному (MANN-FILTER / MANN) — сравниваем нормализованные
+    val best = found.orEmpty()
+        .filter { offerBrandKey(it.brand) == offerBrandKey(src.brand) && it.numberFix.equals(fix, true) }
+        .minWithOrNull(compareBy<Offer> { !it.inStore }.thenBy { it.deliveryHours }.thenBy { it.price })
+    val qty = best?.let { val pack = it.packing.coerceAtLeast(1); ((src.qty.coerceAtLeast(1) + pack - 1) / pack) * pack } ?: src.qty
+    return RepeatLine(src, best, qty, checkFailed = found == null)
+}
 
 /** Итог голосования по брендам номера: кого открыть сразу (или null) и у скольких поставщиков каждый проверенный. */
 data class BrandVotes(val pick: BrandHit?, val suppliers: Map<String, Int>)
@@ -181,6 +201,27 @@ data class OrderChoice(
 
 open class AbcpException(message: String) : Exception(message)
 
+/** Нет связи или таймаут: запрос мог дойти до ABCP, а мог и нет — в отличие от отказа самого ABCP. */
+class AbcpNetworkError(message: String) : AbcpException(message)
+
+/** Меняли количество (удалить + добавить), а вернуть позицию в корзину не вышло. Экран показывает это диалогом. */
+class BasketPositionLost(message: String) : AbcpException(message)
+
+/** Корзины, которые надо очистить и собрать заново: только те, где лежат удаляемые позиции. Остальные не трогаем. */
+internal fun basketsToRebuild(all: List<BasketItem>, drop: Set<BasketItem>): Map<String?, List<BasketItem>> {
+    val ids = drop.map { it.basketId }.toSet()
+    return all.filter { it.basketId in ids }.groupBy { it.basketId }
+}
+
+/** Сколько штук этой позиции лежит в корзине (itemKey у ABCP не уникален — сверяем ещё бренд и номер). */
+internal fun basketQuantity(content: List<BasketItem>, b: BasketItem): Int = content.filter {
+    it.basketId == b.basketId && it.itemKey == b.itemKey && it.supplierCode == b.supplierCode &&
+        cleanNumber(it.number) == cleanNumber(b.number) && offerBrandKey(it.brand) == offerBrandKey(b.brand)
+}.sumOf { it.quantity }
+
+/** Разбор ответа не удался (ABCP прислал другой вид данных) — это не «нет интернета». */
+internal fun isParseError(e: Throwable): Boolean = e is com.google.gson.JsonParseException || e is IllegalStateException
+
 /** 103: клиенту ещё не включены права на API (включает менеджер по заявке). */
 class NoApiAccess(message: String) : AbcpException(message)
 
@@ -336,17 +377,33 @@ class AbcpShop(private val session: SessionManager) {
         items(call { api.basketContent(login, psw, b?.id) })
             .mapNotNull { it.toBasketItem()?.copy(basketId = b?.id, basketName = b?.name) }
 
+    /** Одна корзина по её id (null — основная) — для сверки после сбоя. */
+    private suspend fun basketContentById(basketId: String?): List<BasketItem> =
+        items(call { api.basketContent(login, psw, basketId) }).mapNotNull { it.toBasketItem()?.copy(basketId = basketId) }
+
     /**
      * «Повторить заказ», шаг 1 — только подбор, в корзину ничего не кладём: для каждой позиции то же
      * предложение по бренду и номеру, лучшее сейчас (в магазине → быстрее → дешевле), количество — с учётом упаковки.
      * Цены и сроки — сегодняшние; клиент видит их рядом со старой ценой и сам решает, что добавить.
      */
-    suspend fun findRepeat(positions: List<RepeatSource>): List<RepeatLine> = positions.map { src ->
-        val best = runCatching { offers(src.number, src.brand) }.getOrDefault(emptyList())
-            .filter { it.brand.equals(src.brand, true) && it.numberFix.equals(cleanNumber(src.number), true) }
-            .minWithOrNull(compareBy<Offer> { !it.inStore }.thenBy { it.deliveryHours }.thenBy { it.price })
-        val qty = best?.let { val pack = it.packing.coerceAtLeast(1); ((src.qty.coerceAtLeast(1) + pack - 1) / pack) * pack } ?: src.qty
-        RepeatLine(src, best, qty)
+    suspend fun findRepeat(positions: List<RepeatSource>): List<RepeatLine> = coroutineScope {
+        // Заказ на 30 позиций по одной ждать долго, а все разом — упрёмся в ограничения ABCP
+        val gate = Semaphore(4)
+        positions.map { src ->
+            async {
+                gate.withPermit {
+                    val found = try {
+                        offers(src.number, src.brand)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Сбой связи — не «нет в продаже»: строка получит checkFailed
+                        null
+                    }
+                    repeatLine(src, found)
+                }
+            }
+        }.awaitAll()
     }
 
     /** Шаг 2 — отмеченные строки в корзину. Возвращает, что не добавилось. */
@@ -367,11 +424,59 @@ class AbcpShop(private val session: SessionManager) {
             newQty == b.quantity -> Unit
             newQty > b.quantity -> setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, newQty - b.quantity, b.basketId)
             newQty <= 0 -> removeFromBasket(b)
-            else -> {
-                removeFromBasket(b)
-                setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, newQty, b.basketId)
+            // Между удалением и добавлением уходить нельзя: уйдёт клиент с экрана — позиция пропадёт
+            else -> withContext(NonCancellable) {
+                try {
+                    removeFromBasket(b)
+                } catch (e: AbcpNetworkError) {
+                    // Ответ на удаление потерялся: позиция на месте — ничего не изменилось, отдаём ошибку;
+                    // пропала — удаление прошло, возвращаем её с новым количеством
+                    val content = try {
+                        basketContentById(b.basketId)
+                    } catch (c: Exception) {
+                        throw e
+                    }
+                    if (basketQuantity(content, b) > 0) throw e
+                }
+                val title = "${b.brand} ${b.number}".trim()
+                when (addChecked(b, newQty)) {
+                    true -> Unit
+                    false -> throw BasketPositionLost(
+                        "Не удалось изменить количество: позиция «$title» убрана из корзины. Добавьте её заново."
+                    )
+                    null -> throw BasketPositionLost(
+                        "Не удалось изменить количество: связь прервалась. Проверьте корзину — позиция «$title» " +
+                            "могла пропасть, тогда добавьте её заново."
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * Добавить позицию с проверкой. Запрос упал — ответ мог потеряться, а позиция лечь в корзину, и слепой повтор
+     * задвоил бы количество. Поэтому перечитываем корзину и повторяем (один раз), только если позиции там нет.
+     * [already] — сколько таких же штук уже лежит. true — в корзине, false — нет, null — проверить не удалось.
+     */
+    private suspend fun addChecked(b: BasketItem, qty: Int, already: Int = 0): Boolean? {
+        repeat(2) {
+            try {
+                setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, qty, b.basketId)
+                return true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val content = try {
+                    basketContentById(b.basketId)
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (c: Exception) {
+                    return null
+                }
+                if (basketQuantity(content, b) > already) return true
+            }
+        }
+        return false
     }
 
     /**
@@ -399,22 +504,45 @@ class AbcpShop(private val session: SessionManager) {
     }
 
     /**
-     * Очистить корзину (basket/clear) и положить обратно всё, кроме [drop]. Возвращает то, что вернуть
-     * не удалось (позиция тем временем устарела сама). Для позиций, которые ABCP не удаляет поштучно.
+     * Очистить корзину (basket/clear) и положить обратно всё, кроме [drop]. Трогаем только корзины, где есть
+     * позиции из [drop]. Возвращает то, что вернуть не удалось (устарело само или подвела связь).
+     * Для позиций, которые ABCP не удаляет поштучно.
      */
-    suspend fun rebuildBasket(all: List<BasketItem>, drop: Set<BasketItem>): List<String> {
-        val failed = mutableListOf<String>()
-        all.groupBy { it.basketId }.forEach { (basketId, items) ->
-            val r = call(retry = false) {
+    suspend fun rebuildBasket(all: List<BasketItem>, drop: Set<BasketItem>): List<String> =
+        // Прерывать нельзя: корзина уже очищена, уход с экрана на полпути оставил бы клиента без товаров
+        withContext(NonCancellable) {
+            val failed = mutableListOf<String>()
+            try {
+                basketsToRebuild(all, drop).forEach { (basketId, items) ->
+                    clearBasket(basketId)
+                    val restored = mutableListOf<BasketItem>()
+                    items.filter { it !in drop }.forEach { b ->
+                        if (addChecked(b, b.quantity, basketQuantity(restored, b)) == true) {
+                            restored.add(b)
+                        } else {
+                            failed.add("${b.brand} ${b.number}".trim())
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Упали на следующей корзине — не теряем список того, что не вернулось в предыдущей
+                if (failed.isEmpty()) throw e
+                throw AbcpException((e.message ?: "Не удалось очистить корзину") + "\nНе удалось вернуть в корзину: ${failed.joinToString()}")
+            }
+            failed
+        }
+
+    private suspend fun clearBasket(basketId: String?) {
+        val r = try {
+            call(retry = false) {
                 api.basketClear(auth() + (basketId?.let { mapOf("basketId" to it) } ?: emptyMap()))
             }.asJsonObjectOrNull()
-            if (r?.str("status") == "0") throw AbcpException(cleanAbcpMessage(r.str("errorMessage")) ?: "Не удалось очистить корзину")
-            items.filter { it !in drop }.forEach { b ->
-                runCatching { setBasketQuantity(b.brand, b.number, b.itemKey, b.supplierCode, b.quantity, basketId) }
-                    .onFailure { failed += "${b.brand} ${b.number}".trim() }
-            }
+        } catch (e: AbcpNetworkError) {
+            // Ответ потерялся, а корзина могла очиститься: пуста — продолжаем возвращать позиции, нет — ничего не тронуто
+            if (basketContentById(basketId).isNotEmpty()) throw e
+            return
         }
-        return failed
+        if (r?.str("status") == "0") throw AbcpException(cleanAbcpMessage(r.str("errorMessage")) ?: "Не удалось очистить корзину")
     }
 
     private suspend fun setBasketQuantity(
@@ -497,7 +625,7 @@ class AbcpShop(private val session: SessionManager) {
         val resp = try {
             if (retry) performRequestWithRetry { request() } else request()
         } catch (e: java.io.IOException) {
-            throw AbcpException(networkErrorText(e))
+            throw AbcpNetworkError(networkErrorText(e))
         }
         if (!resp.isSuccessful) {
             val raw = resp.errorBody()?.string()

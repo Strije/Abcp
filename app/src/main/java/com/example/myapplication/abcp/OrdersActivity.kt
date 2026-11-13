@@ -27,6 +27,7 @@ import com.example.myapplication.ui.EmptyState
 import com.example.myapplication.ui.OnResume
 import com.example.myapplication.ui.RefreshableContent
 import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 class OrdersActivity : ComponentActivity() {
@@ -66,8 +67,17 @@ fun OrdersScreen() {
             // Если справочник статусов не загрузился — все заказы окажутся в «Активных», это безопасно
             finalIds = runCatching { AbcpShop(session).finalStatusIds() }.getOrDefault(finalIds)
             MemoryCache.finalStatusIds = finalIds
-        } catch (_: Exception) {
-            error = "Не удалось загрузить заказы. Проверьте интернет."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            com.example.myapplication.Analytics.error("Заказы → список", e)
+            // У клиента без заказов ABCP может прислать пустой список не тем видом ([] вместо {}) — разбор падает.
+            // Это не «нет интернета»: показываем «заказов нет»
+            if (isParseError(e)) {
+                if (orders == null) orders = emptyList()
+            } else {
+                error = "Не удалось загрузить заказы. Проверьте интернет."
+            }
         } finally {
             loading = false
         }
@@ -94,7 +104,8 @@ fun OrdersScreen() {
                 Tab(tab == 1, { tab = 1 }, text = { Text("Завершённые (${done.size})") })
             }
             RefreshableContent(hasData = orders != null, loading = loading, error = error, onRefresh = { reload++ }) {
-                if (shown.isEmpty()) EmptyState(if (tab == 0) "Активных заказов нет" else "Завершённых заказов нет")
+                if (list.isEmpty()) EmptyState("Заказов пока нет")
+                else if (shown.isEmpty()) EmptyState(if (tab == 0) "Активных заказов нет" else "Завершённых заказов нет")
                 else LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(12.dp),
@@ -148,7 +159,7 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
                     }
                     if (onPay != null) {
                         Spacer(Modifier.width(12.dp))
-                        Button(onClick = onPay) { Text("Оплатить") }
+                        Button(onClick = onPay, enabled = !payInProgress) { Text("Оплатить") }
                     }
                 }
             }
@@ -156,19 +167,28 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
     }
 }
 
+/** Ссылка на оплату запрашивается — кнопки «Оплатить» (в списке и в заказе) заблокированы от повторных нажатий. */
+internal var payInProgress by mutableStateOf(false)
+
 /** Ссылку на оплату даёт наш сервер (cp/payment/token доступен только API-админу), открываем в браузере. */
 fun payOrder(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineScope, server: AppServer, number: String) {
+    if (payInProgress) return
+    payInProgress = true
     com.example.myapplication.Analytics.event("pay_order")
     android.widget.Toast.makeText(ctx, "Открываем оплату…", android.widget.Toast.LENGTH_SHORT).show()
     scope.launch {
         try {
             val url = server.payLink(number)
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+            // Браузера может не быть — openExternal скажет об этом по-русски
+            com.example.myapplication.ui.openExternal(ctx, Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             com.example.myapplication.Analytics.error("Заказы → оплата", e)
             android.widget.Toast.makeText(ctx, e.message ?: "Не удалось получить ссылку на оплату", android.widget.Toast.LENGTH_LONG).show()
         }
-    }
+        // Не finally: экран могут закрыть раньше, чем корутина стартует, и общий флаг остался бы поднятым навсегда
+    }.invokeOnCompletion { payInProgress = false }
 }
 
 /**

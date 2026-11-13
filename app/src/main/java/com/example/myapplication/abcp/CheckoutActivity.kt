@@ -9,14 +9,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.SessionManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /** Оформление: оплата, самовывоз/доставка, офис, дата, комментарий → basket/order. */
@@ -35,7 +44,14 @@ class CheckoutActivity : ComponentActivity() {
                 var error by remember { mutableStateOf<String?>(null) }
                 var basket by remember { mutableStateOf<List<BasketItem>>(emptyList()) }
                 var opts by remember { mutableStateOf<CheckoutOptions?>(null) }
-                var done by remember { mutableStateOf<List<String>?>(null) }
+                // Номера оформленных заказов; пустой список — заказ, скорее всего, создан, но номер не дошёл (сеть).
+                // Переживает смерть процесса: иначе после возврата клиент видел бы оформление пустой корзины
+                var done by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
+                // Сколько позиций осталось в корзине после оформления (ABCP взял в заказ не всё)
+                var leftover by rememberSaveable { mutableIntStateOf(0) }
+                var emptyBasket by remember { mutableStateOf(false) }
+                val keyboard = LocalSoftwareKeyboardController.current
+                val focus = LocalFocusManager.current
 
                 var payment by remember { mutableStateOf<String?>(null) }
                 var method by remember { mutableStateOf<String?>(null) }
@@ -51,10 +67,17 @@ class CheckoutActivity : ComponentActivity() {
                 fun ecomItems() = basket.map { com.example.myapplication.Analytics.Item(it.brand, it.number, it.description, it.price, it.quantity) }
 
                 LaunchedEffect(reload) {
+                    // Заказ уже оформлен (экран восстановлен системой) — корзину и варианты не грузим
+                    if (done != null) {
+                        loading = false
+                        return@LaunchedEffect
+                    }
                     loading = true
                     error = null
                     try {
                         basket = shop.basket()
+                        emptyBasket = basket.isEmpty()
+                        if (emptyBasket) return@LaunchedEffect
                         val o = shop.checkoutOptions(basket)
                         // Перечитали после «изменились цены» — выбор клиента сохраняем, если вариант ещё есть.
                         // Иначе: вариант один — выбираем его сами
@@ -68,6 +91,8 @@ class CheckoutActivity : ComponentActivity() {
                         date = date?.takeIf { d -> o.dates.any { it.date == d } } ?: o.dates.firstOrNull()?.date
                         if (first) pickup = o.addresses.isEmpty() || o.offices.isNotEmpty()
                         opts = o
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         com.example.myapplication.Analytics.error("Оформление → варианты доставки", e)
                         error = e.message ?: "Ошибка загрузки"
@@ -105,10 +130,39 @@ class CheckoutActivity : ComponentActivity() {
                                 Modifier.align(Alignment.Center).padding(24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text("Заказ оформлен", style = MaterialTheme.typography.headlineSmall)
-                                Text("№ " + done!!.joinToString(", "))
+                                val numbers = done.orEmpty()
+                                if (numbers.isEmpty()) {
+                                    // Связь оборвалась на подтверждении, а корзина после этого пуста
+                                    Text(
+                                        "Заказ, скорее всего, оформлен — проверьте в «Моих заказах»",
+                                        style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center
+                                    )
+                                } else {
+                                    Text("Заказ оформлен", style = MaterialTheme.typography.headlineSmall)
+                                    Text("№ " + numbers.joinToString(", "))
+                                }
+                                if (leftover > 0) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "В заказ не попали $leftover поз. — они остались в корзине",
+                                        color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center
+                                    )
+                                }
                                 Spacer(Modifier.height(16.dp))
                                 com.example.myapplication.push.BatteryHintCard(Modifier.padding(bottom = 16.dp))
+                                Button(onClick = {
+                                    startActivity(Intent(this@CheckoutActivity, OrdersActivity::class.java))
+                                    finish()
+                                }) { Text("Мои заказы") }
+                            }
+                            emptyBasket -> Column(
+                                Modifier.align(Alignment.Center).padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Корзина пуста", style = MaterialTheme.typography.headlineSmall)
+                                Spacer(Modifier.height(8.dp))
+                                Text("Если вы только что оформляли заказ, он в «Моих заказах».", textAlign = TextAlign.Center)
+                                Spacer(Modifier.height(16.dp))
                                 Button(onClick = {
                                     startActivity(Intent(this@CheckoutActivity, OrdersActivity::class.java))
                                     finish()
@@ -119,7 +173,8 @@ class CheckoutActivity : ComponentActivity() {
                                 onRetry = { reload++ }
                             )
                             else -> Column(
-                                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                                // imePadding до прокрутки: иначе клавиатура закрывает комментарий и кнопку
+                                Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 val total = basket.sumOf { it.price * it.quantity }
@@ -164,6 +219,11 @@ class CheckoutActivity : ComponentActivity() {
                                     value = comment,
                                     onValueChange = { comment = it },
                                     label = { Text("Комментарий к заказу") },
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = {
+                                        keyboard?.hide()
+                                        focus.clearFocus()
+                                    }),
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
@@ -173,33 +233,81 @@ class CheckoutActivity : ComponentActivity() {
                                     enabled = missing == null && !sending,
                                     modifier = Modifier.fillMaxWidth(),
                                     onClick = {
+                                        // Второе нажатие, пока летит первое, создало бы второй заказ
+                                        if (sending) return@Button
                                         sending = true
                                         error = null
+                                        val choice = OrderChoice(
+                                            paymentId = payment,
+                                            shipmentMethodId = method,
+                                            addressId = if (pickup) "0" else address.orEmpty(),
+                                            officeId = if (pickup) office else null,
+                                            date = date,
+                                            comment = comment
+                                        )
+                                        val sent = basket
+                                        val sentItems = ecomItems()
                                         scope.launch {
                                             try {
-                                                done = shop.placeOrder(
-                                                    OrderChoice(
-                                                        paymentId = payment,
-                                                        shipmentMethodId = method,
-                                                        addressId = if (pickup) "0" else address.orEmpty(),
-                                                        officeId = if (pickup) office else null,
-                                                        date = date,
-                                                        comment = comment
-                                                    ),
-                                                    basketIds = basket.map { it.basketId }
-                                                )
-                                                CartState.refresh(shop)
+                                                val numbers = shop.placeOrder(choice, basketIds = sent.map { it.basketId })
+                                                // Статистику отправляем сразу, до любых ожиданий: «Мои заказы» закрывает экран
+                                                // и отменяет эту корутину — заказ не должен из-за этого выпасть из отчётов
+                                                done = ArrayList(numbers)
                                                 com.example.myapplication.RuStoreStore.onOrderPlaced(this@CheckoutActivity)
                                                 // Пометка для статистики — в фоне, на оформление не влияет
-                                                val numbers = done.orEmpty()
                                                 val app = applicationContext
                                                 kotlinx.coroutines.GlobalScope.launch {
                                                     numbers.forEach { n ->
                                                         runCatching { com.example.myapplication.server.AppServer(app).markOrderFromApp(n) }
                                                     }
                                                 }
-                                                com.example.myapplication.Analytics.event("order_placed", mapOf("positions" to basket.size))
-                                                com.example.myapplication.Analytics.purchase(numbers.joinToString(","), ecomItems())
+                                                com.example.myapplication.Analytics.event("order_placed", mapOf("positions" to sent.size))
+                                                com.example.myapplication.Analytics.purchase(numbers.joinToString(","), sentItems)
+                                                // Корзину перечитываем последней и там, где закрытие экрана её не отменит.
+                                                // Что-то осталось — ABCP взял в заказ не всё, говорим об этом
+                                                kotlinx.coroutines.GlobalScope.launch(Dispatchers.Main) {
+                                                    runCatching { shop.basket() }.onSuccess {
+                                                        MemoryCache.basket = it
+                                                        CartState.count = it.size
+                                                        leftover = it.size
+                                                        if (it.isNotEmpty()) com.example.myapplication.Analytics.event(
+                                                            "order_partial", mapOf("left" to it.size)
+                                                        )
+                                                    }
+                                                }
+                                            } catch (e: CancellationException) {
+                                                throw e
+                                            } catch (e: AbcpNetworkError) {
+                                                com.example.myapplication.Analytics.error("Оформление → подтвердить заказ", e)
+                                                // Ответ не дошёл, а заказ мог создаться: повтор вслепую — второй заказ. Сверяемся по корзине
+                                                val now = try {
+                                                    shop.basket()
+                                                } catch (c: CancellationException) {
+                                                    throw c
+                                                } catch (c: Exception) {
+                                                    null
+                                                }
+                                                when {
+                                                    now == null -> {
+                                                        error = (e.message ?: "Связь прервалась.") +
+                                                            "\nЗаказ мог оформиться — прежде чем повторять, проверьте «Мои заказы»."
+                                                    }
+                                                    now.isEmpty() -> {
+                                                        MemoryCache.basket = now
+                                                        CartState.count = 0
+                                                        com.example.myapplication.Analytics.event("order_placed_unconfirmed", mapOf("positions" to sent.size))
+                                                        done = ArrayList()
+                                                    }
+                                                    now.size < sent.size -> {
+                                                        basket = now
+                                                        CartState.count = now.size
+                                                        error = "Связь прервалась. Часть позиций, похоже, уже ушла в заказ — проверьте «Мои заказы». " +
+                                                            "В корзине осталось ${now.size} поз."
+                                                    }
+                                                    else -> {
+                                                        error = e.message ?: "Заказ не оформлен"
+                                                    }
+                                                }
                                             } catch (e: Exception) {
                                                 com.example.myapplication.Analytics.error("Оформление → подтвердить заказ", e)
                                                 if (isBasketChanged(e.message)) {

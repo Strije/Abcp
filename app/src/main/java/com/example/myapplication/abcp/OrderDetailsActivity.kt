@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import com.example.myapplication.OrderPositionDto
 import com.example.myapplication.OrderDetailsDto
@@ -56,6 +57,8 @@ class OrderDetailsActivity : ComponentActivity() {
                 var toCancel by remember { mutableStateOf<OrderPositionDto?>(null) }
                 var repeating by remember { mutableStateOf(false) }
                 var repeatLines by remember { mutableStateOf<List<RepeatLine>?>(null) }
+                // Выбранные позиции кладутся в корзину — второй раз «Повторить заказ» нажать нельзя (задвоит)
+                var adding by remember { mutableStateOf(false) }
 
                 LaunchedEffect(orderNumber, reload) {
                     loading = true
@@ -71,7 +74,10 @@ class OrderDetailsActivity : ComponentActivity() {
                             error = prettifyAbcpError(resp.errorBody()?.string())
                         }
                         finalIds = runCatching { shop.finalStatusIds() }.getOrDefault(emptySet())
-                    } catch (_: Exception) {
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        com.example.myapplication.Analytics.error("Заказ → загрузка", e)
                         error = "Не удалось загрузить заказ. Проверьте интернет."
                     } finally {
                         loading = false
@@ -99,18 +105,24 @@ class OrderDetailsActivity : ComponentActivity() {
                                     { payOrder(ctx, scope, server, orderNumber) }
                                 } else null,
                                 repeating = repeating,
+                                adding = adding,
                                 onRepeat = {
-                                    repeating = true
-                                    scope.launch {
-                                        val list = details?.positions.orEmpty().filter { !it.number.isNullOrBlank() }.map {
-                                            RepeatSource(
-                                                it.brand.orEmpty(), it.number.orEmpty(),
-                                                (it.quantity ?: it.quantityOrdered)?.let(::parseAbcpNumber)?.toInt() ?: 1,
-                                                (it.priceInSiteCurrency ?: it.price)?.let(::parseAbcpNumber) ?: 0.0
-                                            )
+                                    if (!repeating && !adding) {
+                                        repeating = true
+                                        scope.launch {
+                                            try {
+                                                val list = details?.positions.orEmpty().filter { !it.number.isNullOrBlank() }.map {
+                                                    RepeatSource(
+                                                        it.brand.orEmpty(), it.number.orEmpty(),
+                                                        (it.quantity ?: it.quantityOrdered)?.let(::parseAbcpNumber)?.toInt() ?: 1,
+                                                        (it.priceInSiteCurrency ?: it.price)?.let(::parseAbcpNumber) ?: 0.0
+                                                    )
+                                                }
+                                                repeatLines = shop.findRepeat(list)
+                                            } finally {
+                                                repeating = false
+                                            }
                                         }
-                                        repeatLines = shop.findRepeat(list)
-                                        repeating = false
                                     }
                                 },
                                 onBuyAgain = { p ->
@@ -130,16 +142,21 @@ class OrderDetailsActivity : ComponentActivity() {
                         onDismiss = { repeatLines = null },
                         onConfirm = { chosen ->
                             repeatLines = null
+                            adding = true
                             scope.launch {
-                                val failed = shop.addRepeat(chosen)
-                                CartState.refresh(shop)
-                                com.example.myapplication.Analytics.event("repeat_order", mapOf("positions" to chosen.size))
-                                android.widget.Toast.makeText(
-                                    ctx,
-                                    if (failed.isEmpty()) "Добавлено в корзину: ${chosen.size}" else "Не добавилось: ${failed.joinToString()}",
-                                    android.widget.Toast.LENGTH_LONG
-                                ).show()
-                                if (failed.size < chosen.size) ctx.startActivity(android.content.Intent(ctx, CartActivity::class.java))
+                                try {
+                                    val failed = shop.addRepeat(chosen)
+                                    CartState.refresh(shop)
+                                    com.example.myapplication.Analytics.event("repeat_order", mapOf("positions" to chosen.size))
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        if (failed.isEmpty()) "Добавлено в корзину: ${chosen.size}" else "Не добавилось: ${failed.joinToString()}",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                    if (failed.size < chosen.size) ctx.startActivity(android.content.Intent(ctx, CartActivity::class.java))
+                                } finally {
+                                    adding = false
+                                }
                             }
                         }
                     )
@@ -163,6 +180,8 @@ class OrderDetailsActivity : ComponentActivity() {
                                         val msg = shop.cancelPosition(p.positionId!!)
                                         android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
                                         reload++
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         com.example.myapplication.Analytics.error("Заказ → отмена позиции", e)
                                         android.widget.Toast.makeText(ctx, e.message ?: "Не удалось", android.widget.Toast.LENGTH_LONG).show()
@@ -206,6 +225,7 @@ private fun OrderDetailsContent(
     onCancel: (OrderPositionDto) -> Unit,
     onPay: (() -> Unit)?,
     repeating: Boolean,
+    adding: Boolean,
     onRepeat: () -> Unit,
     onBuyAgain: (OrderPositionDto) -> Unit
 ) {
@@ -236,7 +256,7 @@ private fun OrderDetailsContent(
                             }
                             if (onPay != null) {
                                 Spacer(Modifier.width(12.dp))
-                                Button(onClick = onPay) { Text("Оплатить") }
+                                Button(onClick = onPay, enabled = !payInProgress) { Text("Оплатить") }
                             }
                         }
                     }
@@ -245,8 +265,18 @@ private fun OrderDetailsContent(
         }
         item {
             // Для СТО и таксопарков: тот же набор — в корзину одним нажатием
-            if (positions.isNotEmpty()) OutlinedButton(onClick = onRepeat, enabled = !repeating, modifier = Modifier.fillMaxWidth()) {
-                Text(if (repeating) "Ищем актуальные предложения…" else "Повторить заказ")
+            if (positions.isNotEmpty()) OutlinedButton(onClick = onRepeat, enabled = !repeating && !adding, modifier = Modifier.fillMaxWidth()) {
+                if (repeating || adding) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    when {
+                        adding -> "Добавляем в корзину…"
+                        repeating -> "Ищем актуальные предложения…"
+                        else -> "Повторить заказ"
+                    }
+                )
             }
         }
         item { Text("Позиции (${positions.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
@@ -311,7 +341,11 @@ private fun RepeatOrderDialog(lines: List<RepeatLine>, onDismiss: () -> Unit, on
                         Column(Modifier.weight(1f).padding(top = 12.dp)) {
                             Text("${l.source.title} × ${l.qty}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                             if (o == null) {
-                                Text("Сейчас нет в продаже", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                // Сбой связи — не «нет в продаже»: говорим как есть
+                                Text(
+                                    if (l.checkFailed) "Не удалось проверить наличие — попробуйте позже" else "Сейчас нет в продаже",
+                                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall
+                                )
                             } else {
                                 val old = l.source.oldPrice
                                 val diff = if (old > 0) o.price - old else 0.0
