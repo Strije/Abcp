@@ -58,6 +58,12 @@ class AppServer(ctx: Context) {
     /** Ссылка на оплату заказа (сервер проверит, что заказ свой и не оплачен). */
     suspend fun payLink(order: String): String = get("/v1/orders/$order/pay").asJsonObject["url"].asString
 
+    /**
+     * История смены статусов заказа — текст ответа, разбирает parseOrderHistory.
+     * На сервере без этого метода — 404 (ServerException): карточка заказа работает и без истории.
+     */
+    suspend fun orderHistory(number: String): String = get("/v1/orders/$number/history").toString()
+
     suspend fun topupLink(amount: Double): String =
         get("/v1/topup?amount=${"%.2f".format(java.util.Locale.US, amount)}").asJsonObject["url"].asString
 

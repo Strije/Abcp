@@ -5,17 +5,27 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -63,6 +73,28 @@ class OrderDetailsActivity : ComponentActivity() {
                 var adding by remember { mutableStateOf(false) }
                 // Запрос на отмену позиции уже ушёл — второй раз, пока нет ответа, не отправляем
                 var cancelling by remember { mutableStateOf(false) }
+                // История смены статусов — с нашего сервера, отдельно от заказа: карточка её не ждёт
+                var history by remember { mutableStateOf<OrderHistory?>(null) }
+                var historyLoading by remember { mutableStateOf(false) }
+                // Открытый лист «что значит статус»: по позиции или по заказу целиком
+                var statusSheet by remember { mutableStateOf<StatusSheetTarget?>(null) }
+
+                LaunchedEffect(orderNumber, reload) {
+                    if (!server.enabled) return@LaunchedEffect
+                    val started = reload
+                    historyLoading = true
+                    try {
+                        // Не разобралось — оставляем прошлую историю
+                        parseOrderHistory(server.orderHistory(orderNumber))?.let { history = it }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // 404 (на сервере метода ещё нет), нет сети — карточка работает и без истории
+                    } finally {
+                        // Отменённый запрос не должен гасить признак загрузки у следующего
+                        if (started == reload) historyLoading = false
+                    }
+                }
 
                 LaunchedEffect(orderNumber, reload) {
                     loading = true
@@ -106,6 +138,8 @@ class OrderDetailsActivity : ComponentActivity() {
                                 details = details!!,
                                 // Заказ на экране, а обновить не вышло — говорим об этом, не пряча его
                                 error = error,
+                                history = history,
+                                onStatus = { p -> statusSheet = StatusSheetTarget(p) },
                                 cancelling = cancelling,
                                 // Отказаться можно, только пока позицию не взяли в работу (статус «Ожидает обработки»);
                                 // дальше деталь уже заказана у поставщика — только через менеджера
@@ -146,6 +180,23 @@ class OrderDetailsActivity : ComponentActivity() {
                                     )
                                 }
                             )
+                    }
+                }
+
+                statusSheet?.let { target ->
+                    details?.let { d ->
+                        // Заказ могли обновить, пока лист открыт — показываем позицию в свежем виде
+                        val fresh = target.position?.let { old ->
+                            d.positions.orEmpty().firstOrNull { !it.positionId.isNullOrBlank() && it.positionId == old.positionId } ?: old
+                        }
+                        StatusSheet(
+                            details = d, position = fresh, history = history, historyLoading = historyLoading,
+                            onDismiss = { statusSheet = null },
+                            onChat = {
+                                statusSheet = null
+                                com.example.myapplication.ui.openChat(ctx)
+                            }
+                        )
                     }
                 }
 
@@ -243,6 +294,8 @@ private fun parseOrderDetailsResponse(body: JsonElement?, gson: Gson): OrderDeta
 private fun OrderDetailsContent(
     details: OrderDetailsDto,
     error: String?,
+    history: OrderHistory?,
+    onStatus: (OrderPositionDto?) -> Unit,
     cancelling: Boolean,
     canCancel: (OrderPositionDto) -> Boolean,
     onCancel: (OrderPositionDto) -> Unit,
@@ -253,6 +306,9 @@ private fun OrderDetailsContent(
     onBuyAgain: (OrderPositionDto) -> Unit
 ) {
     val positions = details.positions.orEmpty()
+    val serverStatuses = history?.statuses
+    val stage = remember(details, serverStatuses) { orderStage(orderStatuses(details), serverStatuses) }
+    val stages = history?.stages ?: DEFAULT_STAGES
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
@@ -262,8 +318,42 @@ private fun OrderDetailsContent(
         item {
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    details.status?.let { StatusChip(it, details.statusColor) }
-                    Text("от ${formatAbcpDate(details.date)}", style = MaterialTheme.typography.bodySmall)
+                    val lead = statusInfo(stage.lead ?: details.status, serverStatuses)
+                    // Нажатие — что значит статус и как он менялся
+                    StatusButton(
+                        details.status?.takeIf { it.isNotBlank() } ?: stage.lead ?: "Заказ в работе", details.statusColor
+                    ) { onStatus(null) }
+                    if (stage.stage == 0) {
+                        // Весь заказ в отказе или возврате — шкала этапов ни к чему
+                        Text(
+                            lead.hint.ifBlank { "Заказ отменён. Если это ошибка — напишите нам в чат." },
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        StageScale(stage.stage, stages.size)
+                        // Подписи под точками на узком экране наезжали бы друг на друга — пишем только текущий этап
+                        Text(
+                            "Этап ${stage.stage} из ${stages.size}: ${stages.getOrNull(stage.stage - 1).orEmpty()}",
+                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold
+                        )
+                        if (lead.hint.isNotBlank()) Text(
+                            lead.hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    orderWarnings(stage).forEach { w ->
+                        Text(
+                            w, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                    // Когда приедет всё: самая поздняя дата среди позиций, которые ещё едут
+                    if (stage.active > 1) orderExpectedAt(details, serverStatuses)?.let { at ->
+                        InfoLine(if (isPastDay(at)) "Весь заказ ожидался" else "Весь заказ ожидается", dayText(at), bold = true)
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    details.date?.takeIf { it.isNotBlank() }?.let { InfoLine("Оформлен", formatAbcpDate(it)) }
                     // Адрес магазина из настроек вместо «Первый офис» (как на оформлении)
                     // Номера офиса в ответе может не быть — тогда по названию ABCP: «Первый офис» — первый магазин в настройках
                     val officeRaw = details.deliveryOffice?.takeIf { it.isNotBlank() }
@@ -276,22 +366,32 @@ private fun OrderDetailsContent(
                             else -> null
                         } ?: officeRaw
                     val addr = details.deliveryAddress?.takeIf { it.isNotBlank() }
-                    (office ?: addr)?.let { Text(if (office != null) "Самовывоз: $it" else "Доставка: $it") }
+                    (office ?: addr)?.let { InfoLine(if (office != null) "Где забрать" else "Доставка", it) }
+                    // Дата, которую клиент сам выбрал при оформлении. У завершённого заказа она уже ни о чём
+                    if (stage.stage in 1 until stages.size) details.shipmentDate?.trim()?.take(10)
+                        ?.let { com.example.myapplication.shipmentDateLabel(it, System.currentTimeMillis()) }
+                        ?.let { InfoLine(if (office != null) "Вы планировали приехать" else "Вы выбрали дату", it) }
+                    details.paymentType?.takeIf { it.isNotBlank() }?.let { InfoLine("Оплата", it) }
+                    details.comment?.takeIf { it.isNotBlank() }?.let { InfoLine("Ваш комментарий", it) }
                     Row(verticalAlignment = Alignment.Bottom) {
+                        val sum = parseAbcpNumber(details.sum)
+                        val debt = parseAbcpNumber(details.debt)
                         Column(Modifier.weight(1f)) {
                             Text("Сумма", style = MaterialTheme.typography.bodySmall)
-                            Text(details.sum?.let { formatRub(parseAbcpNumber(it)) }.orEmpty(), fontWeight = FontWeight.Bold)
+                            Text(details.sum?.let { formatRub(sum) }.orEmpty(), fontWeight = FontWeight.Bold)
                         }
-                        val debt = parseAbcpNumber(details.debt)
                         if (debt > 0) {
                             Column(horizontalAlignment = Alignment.End) {
-                                Text("Долг", style = MaterialTheme.typography.bodySmall)
+                                Text("К оплате", style = MaterialTheme.typography.bodySmall)
                                 Text(formatRub(debt), color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                             }
                             if (onPay != null) {
                                 Spacer(Modifier.width(12.dp))
                                 Button(onClick = onPay, enabled = !payInProgress) { Text("Оплатить") }
                             }
+                        } else if (!details.debt.isNullOrBlank() && sum > 0 && stage.stage != 0) {
+                            // Долг 0 пишем, только если ABCP его прислал: без поля «Оплачен» было бы догадкой
+                            Text("Оплачен", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -328,10 +428,34 @@ private fun OrderDetailsContent(
                     val qty = p.quantity ?: p.quantityOrdered ?: "-"
                     val price = (p.priceInSiteCurrency ?: p.price)?.let(::parseAbcpNumber)?.takeIf { it > 0 }
                     Text("$qty шт." + (price?.let { " × ${formatRub(it)}" } ?: ""))
-                    p.status?.let { StatusChip(it, p.statusColor) }
-                    // В заказе из нескольких позиций у каждой свой срок — без него не понять, что и когда приедет
-                    if (p.status?.let(::isClosedStatus) != true) expectedText(details.date, p.deadline, p.deadlineMax)?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // Поставщик подтвердил меньше, чем заказано. Ноль не считаем: до подтверждения там может быть пусто
+                    val confirmed = wholeQuantity(p.quantity)
+                    val ordered = wholeQuantity(p.quantityOrdered)
+                    if (confirmed != null && ordered != null && confirmed in 1 until ordered) Text(
+                        "Подтверждено $confirmed из $ordered шт.",
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium
+                    )
+                    val info = statusInfo(p.status, serverStatuses)
+                    p.status?.takeIf { it.isNotBlank() }?.let { s ->
+                        // Нажатие — что значит статус и как он менялся
+                        StatusButton(s, p.statusColor) { onStatus(p) }
+                        statusDateText(p.statusDate).takeIf { it.isNotEmpty() }?.let {
+                            Text("с $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    // В заказе из нескольких позиций у каждой свой срок — без него не понять, что и когда приедет.
+                    // Деталь уже в магазине, выдана или отказана — срок больше не нужен
+                    if (p.status?.let(::isClosedStatus) != true && info.kind != KIND_STOP && info.kind != KIND_DONE && info.stage < 4) {
+                        expectedText(details.date, p.deadline, p.deadlineMax)?.let {
+                            val late = expectedRange(details.date, p.deadline, p.deadlineMax)?.let { r -> isPastDay(r.to) } == true
+                            Text(
+                                if (late) it.replace("Ожидается", "Ожидалась") else it,
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    p.comment?.takeIf { it.isNotBlank() }?.let {
+                        Text("Ваш комментарий: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     p.commentAnswer?.takeIf { it.isNotBlank() }?.let {
                         Text("Ответ менеджера: $it", style = MaterialTheme.typography.bodySmall)
@@ -415,12 +539,206 @@ private fun RepeatOrderDialog(lines: List<RepeatLine>, onDismiss: () -> Unit, on
 internal fun expectedText(orderDate: String?, deadline: String?, deadlineMax: String?): String? {
     val hours = deadline?.trim()?.toDoubleOrNull()?.toInt() ?: return null
     if (hours <= 0) return "В наличии в магазине"
-    val start = runCatching {
-        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).parse(orderDate.orEmpty().trim())
-    }.getOrNull()?.time ?: return null
+    val r = expectedRange(orderDate, deadline, deadlineMax) ?: return null
     val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-    val from = formatAbcpDate(day.format(java.util.Date(start + hours * 3_600_000L)), start)
-    val max = deadlineMax?.trim()?.toDoubleOrNull()?.toInt() ?: 0
-    val to = if (max > hours) formatAbcpDate(day.format(java.util.Date(start + max * 3_600_000L)), start) else from
+    val from = formatAbcpDate(day.format(java.util.Date(r.from)), r.start)
+    val to = formatAbcpDate(day.format(java.util.Date(r.to)), r.start)
     return if (to == from) "Ожидается $from" else "Ожидается $from – $to"
+}
+
+// ---------- статусы, этапы и сроки в карточке ----------
+
+/** Чей статус открыт в листе: позиции или (position = null) заказа целиком. */
+private class StatusSheetTarget(val position: OrderPositionDto?)
+
+/** Статусы позиций; позиций в ответе нет — общий статус заказа. */
+private fun orderStatuses(details: OrderDetailsDto): List<String> =
+    details.positions.orEmpty().mapNotNull { it.status?.takeIf { s -> s.isNotBlank() } }
+        .ifEmpty { listOfNotNull(details.status?.takeIf { it.isNotBlank() }) }
+
+/** Когда приедет последняя из позиций, которые ещё едут (миллисекунды). null — сроков нет или ждать уже нечего. */
+private fun orderExpectedAt(details: OrderDetailsDto, serverStatuses: Map<String, StatusInfo>?): Long? =
+    details.positions.orEmpty().mapNotNull { p ->
+        val info = statusInfo(p.status, serverStatuses)
+        if (info.kind == KIND_STOP || info.kind == KIND_DONE || info.stage >= 4) null
+        else expectedRange(details.date, p.deadline, p.deadlineMax)?.to
+    }.maxOrNull()
+
+private fun dayText(millis: Long): String =
+    formatAbcpDate(java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(millis)))
+
+/** День уже прошёл — срок сорван, «ожидается» писать нельзя. */
+private fun isPastDay(millis: Long, now: Long = System.currentTimeMillis()): Boolean {
+    val today = java.util.Calendar.getInstance().apply {
+        timeInMillis = now
+        set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    return millis < today
+}
+
+/** «2», «2.00» → 2; пусто или не число — null. */
+private fun wholeQuantity(s: String?): Int? =
+    s?.filterNot { it == ' ' || it == ' ' }?.replace(',', '.')?.toDoubleOrNull()?.toInt()
+
+/** Дата смены статуса для человека; ABCP вместо пустой даты может прислать нули. */
+private fun statusDateText(raw: String?): String {
+    val s = raw?.trim().orEmpty()
+    return if (s.isEmpty() || s.startsWith("0000")) "" else formatAbcpDate(s)
+}
+
+/** Шаги позиции от нового к старому: статус и когда поставлен. Истории нет — только текущий статус. */
+private fun positionSteps(p: OrderPositionDto, history: OrderHistory?): List<Pair<String, String>> {
+    val known = p.positionId?.let { history?.steps?.get(it) }.orEmpty()
+    val out = known.asReversed().map { it.status to formatUnixTime(it.ts) }.toMutableList()
+    val current = p.status?.trim().orEmpty()
+    // Сервер мог ещё не узнать о последней смене — текущий статус из ABCP ставим первым
+    if (current.isNotEmpty() && !known.lastOrNull()?.status.equals(current, ignoreCase = true)) {
+        out.add(0, current to statusDateText(p.statusDate))
+    }
+    return out
+}
+
+/** Строка «подпись: значение» одним текстом — при крупном шрифте переносится, а не наезжает. */
+@Composable
+private fun InfoLine(label: String, value: String, bold: Boolean = false) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Text(
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = muted)) { append("$label: ") }
+            if (bold) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(value) } else append(value)
+        },
+        style = MaterialTheme.typography.bodyMedium
+    )
+}
+
+/** Плашка статуса, на которую можно нажать: область не меньше 48dp и «›» — видно, что за ней что-то есть. */
+@Composable
+private fun StatusButton(text: String, hex: String?, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClickLabel = "Что значит статус и история", role = Role.Button, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Длинный статус переносится внутри плашки, а «›» остаётся на экране
+        Box(Modifier.weight(1f, fill = false)) { StatusChip(text, hex) }
+        Text(
+            "›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp)
+        )
+    }
+}
+
+/** Шкала этапов: точки, соединённые линией. Пройденные и текущий — цветом, текущий крупнее. */
+@Composable
+private fun StageScale(stage: Int, count: Int) {
+    val on = MaterialTheme.colorScheme.primary
+    val off = MaterialTheme.colorScheme.outline
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (i in 1..count) {
+            if (i > 1) Box(Modifier.weight(1f).height(3.dp).background(if (i <= stage) on else off))
+            Box(Modifier.size(if (i == stage) 18.dp else 12.dp).background(if (i <= stage) on else off, CircleShape))
+        }
+    }
+}
+
+/** Шаг истории: точка, статус и время. Первый (текущий) выделен. */
+@Composable
+private fun StepRow(status: String, time: String, current: Boolean) {
+    Row(verticalAlignment = Alignment.Top) {
+        Box(
+            Modifier.padding(top = 6.dp).size(8.dp)
+                .background(if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, CircleShape)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(status, style = MaterialTheme.typography.bodyMedium, fontWeight = if (current) FontWeight.Bold else FontWeight.Normal)
+            if (time.isNotEmpty()) Text(time, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * Лист «что значит статус»: название, подсказка, история смены. position = null — по заказу целиком
+ * (история по всем позициям). Истории с сервера нет — показываем то, что знает ABCP: текущий статус и его дату.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StatusSheet(
+    details: OrderDetailsDto,
+    position: OrderPositionDto?,
+    history: OrderHistory?,
+    historyLoading: Boolean,
+    onDismiss: () -> Unit,
+    onChat: () -> Unit
+) {
+    val serverStatuses = history?.statuses
+    val positions = details.positions.orEmpty()
+    val shown = if (position != null) listOf(position) else positions
+    val stage = orderStage(orderStatuses(details), serverStatuses)
+    val stages = history?.stages ?: DEFAULT_STAGES
+    val name = if (position != null) position.status.orEmpty()
+        else details.status?.takeIf { it.isNotBlank() } ?: stage.lead ?: "Заказ в работе"
+    val info = statusInfo(if (position != null) position.status else stage.lead ?: details.status, serverStatuses)
+    // Менеджер нужен, когда от клиента что-то ждут или что-то пошло не так
+    val needChat = if (position != null) info.kind == KIND_ACTION || info.kind == KIND_WARN || info.kind == KIND_STOP
+        else stage.stage == 0 || orderWarnings(stage).isNotEmpty()
+    // Полная история есть, если сервер прислал шаги хотя бы по одной из показанных позиций
+    val hasSteps = shown.any { p -> !p.positionId?.let { history?.steps?.get(it) }.isNullOrEmpty() }
+    val created = history?.created?.takeIf { it > 0 }?.let { formatUnixTime(it) }
+        ?: details.date?.takeIf { it.isNotBlank() }?.let { formatAbcpDate(it) }.orEmpty()
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding()
+                .padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                if (position != null) "Статус позиции" else "Статус заказа",
+                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (position != null) {
+                val title = "${position.brand.orEmpty()} ${position.number.orEmpty()}".trim()
+                if (title.isNotEmpty()) Text(title, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (position == null && stage.stage != 0) Text(
+                "Этап ${stage.stage} из ${stages.size}: ${stages.getOrNull(stage.stage - 1).orEmpty()}",
+                style = MaterialTheme.typography.titleSmall
+            )
+            if (info.hint.isNotBlank()) Text(
+                info.hint, style = MaterialTheme.typography.bodyMedium,
+                color = if (info.kind == KIND_STOP) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+            if (position == null) orderWarnings(stage).forEach { w ->
+                Text(w, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            }
+            if (needChat) Button(onClick = onChat, modifier = Modifier.fillMaxWidth()) { Text("Написать менеджеру") }
+
+            HorizontalDivider()
+            Text("История", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            shown.forEach { p ->
+                if (position == null) {
+                    // В истории заказа шаги сгруппированы по позициям
+                    val title = "${p.brand.orEmpty()} ${p.number.orEmpty()}".trim()
+                    if (title.isNotEmpty()) Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 4.dp))
+                }
+                positionSteps(p, history).forEachIndexed { i, (status, time) -> StepRow(status, time, current = i == 0) }
+            }
+            StepRow("Заказ оформлен", created, current = false)
+            when {
+                hasSteps -> {}
+                historyLoading -> Text(
+                    "Загружаем историю…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                else -> Text(
+                    "Полная история статусов появится у новых заказов.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
 }

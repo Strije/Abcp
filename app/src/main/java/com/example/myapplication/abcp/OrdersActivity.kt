@@ -145,6 +145,16 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
             }
             Spacer(Modifier.height(8.dp))
             order.status?.let { StatusChip(it, order.statusColor) }
+            // Из списка должно быть видно, что от клиента что-то нужно или с заказом что-то не так.
+            // Пометку, которая слово в слово повторяет статус, не пишем
+            statusNote(order.status)?.takeIf { !it.equals(order.status?.trim(), ignoreCase = true) }?.let { note ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    note, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
+                    color = if (statusInfo(order.status).kind == KIND_ACTION) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
