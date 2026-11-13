@@ -163,8 +163,8 @@ class ChatActivity : ComponentActivity() {
                 ) { padding ->
                     if (native == null) Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                         CircularProgressIndicator()
-                    } else if (native == true) NativeChat(Modifier.padding(padding).imePadding())
-                    else Box(Modifier.padding(padding).imePadding().fillMaxSize()) {
+                    } else if (native == true) NativeChat(Modifier.padding(padding).consumeWindowInsets(padding).imePadding())
+                    else Box(Modifier.padding(padding).consumeWindowInsets(padding).imePadding().fillMaxSize()) {
                         AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                         if (loading && !failed) LinearProgressIndicator(progress = { pageProgress }, modifier = Modifier.fillMaxWidth())
                         if (failed) Surface(Modifier.fillMaxSize()) {
@@ -244,6 +244,12 @@ class ChatActivity : ComponentActivity() {
 
     private fun line(name: String, value: String) =
         JSONObject().put("NAME", name).put("VALUE", value).put("DISPLAY", "LINE")
+
+    override fun onResume() {
+        super.onResume()
+        // Чат открыт — уведомление «Менеджер ответил» снимаем (7002 — id из showChatNotification в abcp/OrderStatusWatch.kt)
+        runCatching { androidx.core.app.NotificationManagerCompat.from(this).cancel(7002) }
+    }
 
     override fun onPause() {
         super.onPause()
