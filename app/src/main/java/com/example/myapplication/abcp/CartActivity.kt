@@ -48,6 +48,9 @@ fun CartScreen(reloadKey: Int) {
     val scope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Ошибка — обрыв связи: такую пробуем перечитать сами, когда сеть вернётся
+    var networkError by remember { mutableStateOf(false) }
+    var autoRetries by remember { mutableIntStateOf(0) }
     var basket by remember { mutableStateOf(MemoryCache.basket) }
     // Позиция, которую сейчас меняем (у неё крутится индикатор). Пока идёт любой запрос, заблокированы все
     // «−/+», «Удалить» и «Оформить»: второе изменение поверх первого считалось бы от старого количества
@@ -67,13 +70,25 @@ fun CartScreen(reloadKey: Int) {
         error = null
         try {
             basket = shop.basket().also { MemoryCache.basket = it; CartState.count = it.size }
+            networkError = false
+            autoRetries = 0
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             com.example.myapplication.Analytics.error("Корзина → загрузка", e)
-            error = e.message ?: "Не удалось загрузить корзину"
+            networkError = e is AbcpNetworkError
+            error = com.example.myapplication.ui.userMessage(e, "Не удалось загрузить корзину. Попробуйте ещё раз.")
         } finally {
             loading = false
+        }
+    }
+
+    // Связь пропала — пока висит ошибка, раз в 5 секунд пробуем перечитать сами (не больше 6 раз подряд)
+    LaunchedEffect(error, loading) {
+        if (error != null && networkError && !loading && autoRetries < 6) {
+            kotlinx.coroutines.delay(5000)
+            autoRetries++
+            localReload++
         }
     }
 
@@ -96,7 +111,7 @@ fun CartScreen(reloadKey: Int) {
                 problem = e.message
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Корзина → изменение", e)
-                Toast.makeText(ctx, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
+                Toast.makeText(ctx, com.example.myapplication.ui.userMessage(e, "Не удалось изменить корзину. Попробуйте ещё раз."), Toast.LENGTH_LONG).show()
             } finally {
                 busy = null
                 // И после ошибки тоже: запрос мог дойти (таймаут), и «+» по старому количеству задвоил бы позицию
@@ -145,7 +160,16 @@ fun CartScreen(reloadKey: Int) {
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                error?.let { e -> item { Text(e, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
+                // Список на экране, а обновить не вышло — говорим об этом и даём повторить
+                error?.let { e ->
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(e, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f))
+                            TextButton(onClick = { autoRetries = 0; localReload++ }, enabled = !loading) { Text("Повторить") }
+                        }
+                    }
+                }
                 val stale = items.filter { !it.errorMessage.isNullOrBlank() }
                 if (stale.isNotEmpty()) item {
                     OutlinedButton(
@@ -248,7 +272,7 @@ fun CartScreen(reloadKey: Int) {
                                 }
                             } catch (e: Exception) {
                                 com.example.myapplication.Analytics.error("Корзина → очистка", e)
-                                problem = e.message ?: "Не удалось очистить корзину"
+                                problem = com.example.myapplication.ui.userMessage(e, "Не удалось очистить корзину. Проверьте её и попробуйте ещё раз.")
                             } finally {
                                 busy = null
                                 rebuilding = false
@@ -287,11 +311,12 @@ fun CartScreen(reloadKey: Int) {
     }
 
     problem?.let { text ->
+        // Закрыли диалог — перечитываем корзину: на экране должно быть то, что в ней на самом деле
         AlertDialog(
-            onDismissRequest = { problem = null },
+            onDismissRequest = { problem = null; localReload++ },
             title = { Text("Корзина") },
             text = { Text(text) },
-            confirmButton = { TextButton(onClick = { problem = null }) { Text("Понятно") } }
+            confirmButton = { TextButton(onClick = { problem = null; localReload++ }) { Text("Понятно") } }
         )
     }
 }

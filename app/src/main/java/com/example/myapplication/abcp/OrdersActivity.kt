@@ -140,8 +140,8 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
     ElevatedCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("№ ${order.number ?: "-"}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                Text(order.date.orEmpty(), style = MaterialTheme.typography.bodySmall)
+                Text(order.number?.let { "№ $it" } ?: "Заказ без номера", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text(formatAbcpDate(order.date), style = MaterialTheme.typography.bodySmall)
             }
             Spacer(Modifier.height(8.dp))
             order.status?.let { StatusChip(it, order.statusColor) }
@@ -185,7 +185,10 @@ fun payOrder(ctx: android.content.Context, scope: kotlinx.coroutines.CoroutineSc
             throw e
         } catch (e: Exception) {
             com.example.myapplication.Analytics.error("Заказы → оплата", e)
-            android.widget.Toast.makeText(ctx, e.message ?: "Не удалось получить ссылку на оплату", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(
+                ctx, com.example.myapplication.ui.userMessage(e, "Не удалось получить ссылку на оплату. Попробуйте ещё раз."),
+                android.widget.Toast.LENGTH_LONG
+            ).show()
         }
         // Не finally: экран могут закрыть раньше, чем корутина стартует, и общий флаг остался бы поднятым навсегда
     }.invokeOnCompletion { payInProgress = false }

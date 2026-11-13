@@ -25,12 +25,17 @@ class NotificationsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val feed = OrderStatusWatch.feed(this)
         OrderStatusWatch.markSeen(this)
         val fmt = SimpleDateFormat("d MMM, HH:mm", Locale("ru"))
 
         setContent {
             AvtodrugTheme {
+                var feed by remember { mutableStateOf(OrderStatusWatch.feed(this@NotificationsActivity)) }
+                // Вернулись на экран (из заказа, из настройки уведомлений) — за это время могли прийти новые
+                com.example.myapplication.ui.OnResume {
+                    feed = OrderStatusWatch.feed(this@NotificationsActivity)
+                    OrderStatusWatch.markSeen(this@NotificationsActivity)
+                }
                 Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Уведомления") }, actions = {
                     // Опаздывают или не приходят — настройка под марку телефона и проверка
                     TextButton(onClick = { startActivity(Intent(this@NotificationsActivity, com.example.myapplication.push.NotificationSetupActivity::class.java)) }) { Text("Настроить") }

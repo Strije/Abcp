@@ -240,7 +240,7 @@ fun LoginScreen(
                     strokeWidth = 2.dp
                 )
                 Spacer(Modifier.width(12.dp))
-                Text("Вход...")
+                Text("Вход…")
             } else {
                 Text("Войти")
             }
@@ -251,7 +251,17 @@ fun LoginScreen(
         val account = androidx.activity.compose.rememberLauncherForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
         ) { r ->
-            r.data?.getStringExtra(AccountActivity.EXTRA_LOGIN)?.takeIf { it.isNotBlank() }?.let { login = it; error = null }
+            val newLogin = r.data?.getStringExtra(AccountActivity.EXTRA_LOGIN)?.takeIf { it.isNotBlank() }
+            if (newLogin != null) {
+                login = newLogin
+                error = null
+                // Только что зарегистрировались: пароль пришёл с экрана регистрации — входим сразу, не заставляя вводить снова
+                val newPassword = r.data?.getStringExtra(AccountActivity.EXTRA_PASSWORD)
+                if (!newPassword.isNullOrEmpty()) {
+                    password = newPassword
+                    submit()
+                }
+            }
         }
         Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = {

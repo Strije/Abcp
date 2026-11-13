@@ -60,6 +60,42 @@ class AbcpShopTest {
         assertTrue(com.example.myapplication.abcp.prettifyAbcpError("<html>502</html>", 502).contains("временно недоступен"))
     }
 
+    @Test
+    fun wholeRublesWithoutKopecks() {
+        val f: (Double) -> String = { com.example.myapplication.abcp.formatRub(it) }
+        assertEquals("820 ₽", f(820.0))
+        assertEquals("1 040 ₽", f(1040.0))
+        assertEquals("820,50 ₽", f(820.5))
+        assertEquals("1 040,05 ₽", f(1040.05))
+        assertEquals("0 ₽", f(0.0))
+    }
+
+    @Test
+    fun abcpDatesForPeople() {
+        val now = java.util.Calendar.getInstance().apply { set(2026, 10, 13, 12, 0, 0) }.timeInMillis
+        val f: (String?) -> String = { com.example.myapplication.abcp.formatAbcpDate(it, now) }
+        assertEquals("10 нояб., 14:23", f("2026-11-10 14:23:05"))
+        assertEquals("10 нояб.", f("2026-11-10"))
+        assertEquals("10 нояб. 2025", f("2025-11-10"))
+        assertEquals("3 мая 2025, 09:05", f("2025-05-03 09:05:00"))
+        // Нераспознанное — как есть
+        assertEquals("10.11.2026", f("10.11.2026"))
+        assertEquals("вчера", f("вчера"))
+        assertEquals("", f(null))
+    }
+
+    @Test
+    fun userMessageHidesRawErrors() {
+        val um: (Throwable) -> String = { com.example.myapplication.ui.userMessage(it, "Запасной текст") }
+        assertEquals("Нет связи с магазином", um(com.example.myapplication.abcp.AbcpException("Нет связи с магазином")))
+        assertEquals("Позиция устарела", um(com.example.myapplication.abcp.BasketRejected("Позиция устарела")))
+        assertEquals("Сервер не ответил", um(com.example.myapplication.server.ServerException("Сервер не ответил")))
+        assertEquals("Запасной текст", um(NullPointerException("Attempt to invoke virtual method")))
+        assertEquals("Запасной текст", um(com.google.gson.JsonSyntaxException("Expected BEGIN_OBJECT but was STRING")))
+        assertEquals("Запасной текст", um(com.example.myapplication.abcp.AbcpException("")))
+        assertTrue(com.example.myapplication.ui.userMessage(IllegalStateException("boom")).contains("менеджеру"))
+    }
+
     private fun offer(brand: String, number: String, provider: String, own: String? = null) =
         com.example.myapplication.abcp.Offer(brand, number, number, "", 100.0, 1, 1, if (own != null) 0 else 48, 0, "s$provider", "k", "", false,
             deadlineLabel = own, distributorId = provider)

@@ -115,7 +115,7 @@ class OffersActivity : ComponentActivity() {
                         )
                     } catch (e: Exception) {
                         com.example.myapplication.Analytics.error("Выдача → загрузка предложений", e)
-                        error = e.message ?: "Не удалось загрузить предложения. Проверьте интернет."
+                        error = com.example.myapplication.ui.userMessage(e, "Не удалось загрузить предложения. Проверьте интернет и попробуйте ещё раз.")
                     } finally {
                         loading = false
                     }
@@ -129,10 +129,15 @@ class OffersActivity : ComponentActivity() {
                     }
                 }
 
-                val fix = cleanNumber(number)
-                val (own, analogs) = offers.partition {
-                    // Бренд — через синонимы: в списке «MANN-FILTER», в предложении «MANN» — это тот же номер, а не аналог
-                    it.numberFix.equals(fix, ignoreCase = true) && offerBrandKey(it.brand) == offerBrandKey(brand)
+                // Разбор на группы — в remember: в выдаче сотни строк, а экран перерисовывается часто
+                // (полоска загрузки, шторка, диалоги) — пересчитываем, только когда меняются данные или фильтры
+                val (own, analogs) = remember(offers) {
+                    val fix = cleanNumber(number)
+                    val brandKey = offerBrandKey(brand)
+                    offers.partition {
+                        // Бренд — через синонимы: в списке «MANN-FILTER», в предложении «MANN» — это тот же номер, а не аналог
+                        it.numberFix.equals(fix, ignoreCase = true) && offerBrandKey(it.brand) == brandKey
+                    }
                 }
                 val cmp = sort.comparator()
                 // Одна выдача: искомый номер закреплён сверху, ниже аналоги. Сортировка и фильтры — на весь список.
@@ -141,8 +146,10 @@ class OffersActivity : ComponentActivity() {
                     .groupBy { "${it.brand}|${it.numberFix}" }
                     .values.map { it.sortedWith(cmp) }
                     .sortedWith { a, b -> cmp.compare(a.first(), b.first()) }
-                val ownGroups = grouped(own)
-                val analogGroups = grouped(analogs.filter { !onlyConfirmed || it.confirm >= 2 })
+                val ownGroups = remember(own, sort, term, onlyWarranty, warranties) { grouped(own) }
+                val analogGroups = remember(analogs, sort, term, onlyWarranty, warranties, onlyConfirmed) {
+                    grouped(analogs.filter { !onlyConfirmed || it.confirm >= 2 })
+                }
 
                 val snackbar = remember { SnackbarHostState() }
                 // Список уже на экране, а «Показать все варианты» не загрузились — иначе полоска просто пропадёт молча
@@ -232,7 +239,15 @@ class OffersActivity : ComponentActivity() {
                         }
                         when {
                             loading && offers.isEmpty() -> com.example.myapplication.ui.WaitingState(first = "Загружаем цены…")
-                            error != null && offers.isEmpty() -> com.example.myapplication.ui.ErrorState(error!!, onRetry = { reload++ })
+                            error != null && offers.isEmpty() -> {
+                                // Текст советует написать менеджеру — даём кнопку рядом
+                                val toChat = "менеджер" in error!!
+                                com.example.myapplication.ui.ErrorState(
+                                    error!!, onRetry = { reload++ },
+                                    action = if (toChat) "Спросить менеджера" else null,
+                                    onAction = if (toChat) { { com.example.myapplication.ui.openChat(this@OffersActivity) } } else null
+                                )
+                            }
                             ownGroups.isEmpty() && analogGroups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text(
                                     when {
@@ -262,7 +277,12 @@ class OffersActivity : ComponentActivity() {
                                     }
                                 } else if (own.isNotEmpty() || term != null) {
                                     item(key = "h_own_empty") {
-                                        Text("По самому номеру ${if (term != null) "с условием «${term!!.title}» " else ""}предложений нет",
+                                        Text(
+                                            when {
+                                                term != null -> "По самому номеру с условием «${term!!.title}» предложений нет"
+                                                onlyWarranty -> "С гарантией по самому номеру предложений нет"
+                                                else -> "По самому номеру предложений нет"
+                                            },
                                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(top = 8.dp))
                                     }
@@ -381,7 +401,7 @@ class OffersActivity : ComponentActivity() {
                                     com.example.myapplication.Analytics.error("Выдача → в корзину", e)
                                     // ABCP ответил отказом — товара в корзине точно нет. Иначе (обрыв, таймаут) запрос мог дойти
                                     val refused = e is BasketRejected || e is NoApiAccess
-                                    cartProblem = (e.message ?: "Не удалось добавить в корзину.") to refused
+                                    cartProblem = com.example.myapplication.ui.userMessage(e, "Не удалось добавить в корзину.") to refused
                                 } finally {
                                     adding = false
                                 }
@@ -460,14 +480,15 @@ private fun ArticleCard(
                         Text(
                             head.number, style = MaterialTheme.typography.titleMedium,
                             textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
-                            modifier = Modifier.clickable { onNumber(head) }
+                            // Область нажатия — не меньше 48dp по высоте, текст остаётся по центру
+                            modifier = Modifier.clickable { onNumber(head) }.heightIn(min = 48.dp).wrapContentHeight()
                         )
                         Text("  ${head.brand}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         // ★ — частая замена (у 2+ поставщиков); подробности по нажатию
                         val n = list.maxOf { it.confirm }
                         if (n >= 2) Text(" ★", color = Color(0xFFF2B01E), style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.clickable { onStars(n) })
+                            modifier = Modifier.clickable { onStars(n) }.sizeIn(minWidth = 48.dp, minHeight = 48.dp).wrapContentSize())
                     }
                     warranty?.let { w -> WarrantyBadge(w) { onWarranty(w) } }
                     if (head.description.isNotBlank()) {
@@ -514,7 +535,7 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(o.deliveryText(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
                 color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            SupplierIcons(o)
+            SupplierIcons(o, ink)
         }
         Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ink)
         Text(
@@ -541,17 +562,18 @@ private val FA_GLYPHS = mapOf(
     "reply" to "\uf3e5",                     // возврат по согласованию / невозможен
 )
 
-private fun faColor(c: String?): Color = when (c) {
+/** fallback — цвет значка без своего цвета: цвет текста строки, иначе в тёмной теме тёмное на тёмном. */
+private fun faColor(c: String?, fallback: Color): Color = when (c) {
     "red" -> Color(0xFFE53935)
     "blue" -> Color(0xFF1E6FD9)
     "yellow", "orange" -> Color(0xFFF59E0B)
     "green" -> Color(0xFF2E7D32)
-    else -> Color(0xFF1B1B1B)
+    else -> fallback
 }
 
 /** Значки поставщика, как на сайте (Font Awesome из supplierDescription). Подписи — в шторке «В корзину». */
 @Composable
-private fun SupplierIcons(o: Offer) {
+private fun SupplierIcons(o: Offer, ink: Color) {
     val list = buildList {
         addAll(o.badges)
         if (o.noReturn && o.badges.none { it.icon == "reply" }) add(SupplierBadge("Возврат невозможен", BadgeKind.Bad, "reply", "red"))
@@ -562,9 +584,9 @@ private fun SupplierIcons(o: Offer) {
         list.forEach { b ->
             val glyph = b.icon?.let { FA_GLYPHS[it] }
             if (glyph != null) {
-                Text(glyph, fontFamily = FontAwesome, color = faColor(b.color), fontSize = 16.sp)
+                Text(glyph, fontFamily = FontAwesome, color = faColor(b.color, ink), fontSize = 16.sp)
             } else {
-                Text(if (b.text == "Б/у") "Б/у" else "•", color = faColor(if (b.kind == BadgeKind.Bad) "red" else b.color),
+                Text(if (b.text == "Б/у") "Б/у" else "•", color = faColor(if (b.kind == BadgeKind.Bad) "red" else b.color, ink),
                     fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
             }
         }
@@ -591,7 +613,7 @@ private fun Badges(o: Offer) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 b.icon?.let { FA_GLYPHS[it] }?.let { g ->
-                    Text(g, fontFamily = FontAwesome, color = faColor(b.color), fontSize = 12.sp)
+                    Text(g, fontFamily = FontAwesome, color = faColor(b.color, MaterialTheme.colorScheme.onSurface), fontSize = 12.sp)
                     Spacer(Modifier.width(4.dp))
                 }
                 Text(b.text, style = MaterialTheme.typography.labelSmall, color = c, maxLines = 1)
@@ -664,12 +686,12 @@ private fun AddToCartSheet(offer: Offer, onImage: (List<String>) -> Unit, onDism
             offer.probability?.let { p ->
                 Text("Вероятность поставки $p%" + (offer.probabilityText?.let { " — $it" } ?: ""), style = MaterialTheme.typography.bodySmall)
             }
-            offer.updatedAt?.let { Text("Прайс обновлён: $it", style = MaterialTheme.typography.bodySmall) }
+            offer.updatedAt?.let { Text("Прайс обновлён: ${formatAbcpDate(it)}", style = MaterialTheme.typography.bodySmall) }
             if (offer.badges.isNotEmpty() || offer.noReturn || offer.isUsed) Badges(offer)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalButton(onClick = { qty = (qty - step).coerceAtLeast(step) }) { Text("−") }
+                FilledTonalButton(onClick = { qty = (qty - step).coerceAtLeast(step) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("−") }
                 Text("$qty шт.", Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.titleLarge)
-                FilledTonalButton(onClick = { if (qty + step <= max) qty += step }) { Text("+") }
+                FilledTonalButton(onClick = { if (qty + step <= max) qty += step }, modifier = Modifier.heightIn(min = 48.dp)) { Text("+") }
             }
             Button(onClick = { onConfirm(qty) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("В корзину · ${formatRub(offer.price * qty)}")
@@ -720,7 +742,7 @@ private fun PhotoSearchButton(brand: String, number: String) {
     val q = android.net.Uri.encode("$brand $number".trim())
     fun open(url: String) = com.example.myapplication.ui.openExternal(ctx, android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
     Box {
-        FilledTonalIconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Text("📷") }
+        FilledTonalIconButton(onClick = { menu = true }, modifier = Modifier.size(48.dp)) { Text("📷") }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Фото в Яндексе") }, onClick = { menu = false; open("https://yandex.ru/images/search?text=$q") })
             DropdownMenuItem(text = { Text("Фото в Google") }, onClick = { menu = false; open("https://www.google.com/search?tbm=isch&q=$q") })

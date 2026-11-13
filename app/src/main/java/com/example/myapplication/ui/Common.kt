@@ -17,17 +17,52 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
-/** Ошибка загрузки с кнопкой «Повторить» — вместо голого красного текста. */
+/**
+ * Ошибка загрузки с кнопкой «Повторить» — вместо голого красного текста.
+ * action/onAction — второе действие рядом (например, «Спросить менеджера»).
+ */
 @Composable
-fun ErrorState(message: String, modifier: Modifier = Modifier, onRetry: (() -> Unit)? = null) {
+fun ErrorState(
+    message: String,
+    modifier: Modifier = Modifier,
+    onRetry: (() -> Unit)? = null,
+    action: String? = null,
+    onAction: (() -> Unit)? = null
+) {
     Column(
         modifier.fillMaxWidth().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(message, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-        if (onRetry != null) OutlinedButton(onClick = onRetry) { Text("Повторить") }
+        val second = action != null && onAction != null
+        if (onRetry != null || second) Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (onRetry != null) OutlinedButton(onClick = onRetry) { Text("Повторить") }
+            if (action != null && onAction != null) TextButton(onClick = onAction) { Text(action) }
+        }
     }
+}
+
+/**
+ * Текст ошибки для человека. У исключений приложения (ABCP, наш сервер, Laximo) message уже написан по-русски —
+ * отдаём его; у остальных (NullPointerException, разбор JSON…) там сырой английский текст — показываем [fallback].
+ */
+fun userMessage(e: Throwable, fallback: String = "Что-то пошло не так. Попробуйте ещё раз или напишите менеджеру."): String {
+    val own = when (e) {
+        // У Laximo в message — код ошибки, человеческий текст в pretty
+        is com.example.myapplication.laximo.LaximoApiException -> e.pretty
+        is com.example.myapplication.abcp.AbcpException,
+        is com.example.myapplication.server.ServerException -> e.message
+        else -> null
+    }
+    return own?.takeIf { it.isNotBlank() } ?: fallback
+}
+
+/** Открыть чат с менеджером — для кнопки «Спросить менеджера» рядом с ошибкой. */
+fun openChat(ctx: android.content.Context) {
+    ctx.startActivity(android.content.Intent(ctx, com.example.myapplication.ChatActivity::class.java))
 }
 
 /**

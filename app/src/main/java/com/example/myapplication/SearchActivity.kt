@@ -33,6 +33,7 @@ import com.example.myapplication.abcp.BrandHit
 import com.example.myapplication.abcp.CartIconButton
 import com.example.myapplication.abcp.OffersActivity
 import com.example.myapplication.abcp.autoPickBrand
+import com.example.myapplication.laximo.normalizeRuPlate
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -63,7 +64,6 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     var query by rememberSaveable { mutableStateOf(prefillNumber) }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
-    var tips by remember { mutableStateOf<List<BrandHit>>(emptyList()) }
     var brands by remember { mutableStateOf<List<BrandHit>?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -86,6 +86,8 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     // «Фото упаковки»: штрихкоды и напечатанный текст → варианты артикула на выбор
     var scanMenu by remember { mutableStateOf(false) }
     var scanning by remember { mutableStateOf(false) }
+    // Ошибка распознавания фото — отдельно от ошибки поиска: «Повторить» у неё снова открывает меню камеры
+    var scanError by remember { mutableStateOf<String?>(null) }
     var candidates by remember { mutableStateOf<List<String>?>(null) }
     val photoUri = remember {
         val f = java.io.File(ctx.cacheDir, "scan/label.jpg").apply { parentFile?.mkdirs() }
@@ -94,16 +96,17 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     fun recognizeLabel(uri: android.net.Uri) {
         scanning = true
         error = null
+        scanError = null
         scope.launch {
             try {
                 val text = recognizeText(ctx, uri)
                 val found = extractArticleCandidates(text, scanBarcodes(ctx, uri))
                 com.example.myapplication.Analytics.event("label_scan", mapOf("found" to found.size))
-                if (found.isEmpty()) error = "На фото не нашлось номера. Снимите этикетку ближе и ровнее, при хорошем свете."
+                if (found.isEmpty()) scanError = "На фото не нашлось номера. Снимите этикетку ближе и ровнее, при хорошем свете."
                 else candidates = found
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Поиск → фото упаковки", e)
-                error = "Не удалось распознать фото. Попробуйте ещё раз."
+                scanError = "Не удалось распознать фото. Попробуйте ещё раз."
             } finally {
                 scanning = false
             }
@@ -116,14 +119,21 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
         androidx.activity.result.contract.ActivityResultContracts.GetContent()
     ) { uri -> uri?.let { recognizeLabel(it) } }
 
-    fun search() {
+    // typed — номер набрал сам человек (а не пришёл из заказа или с фото упаковки)
+    fun search(typed: Boolean = true) {
         val n = query.trim()
         if (n.isBlank()) return
         stopPicking()
         stopSearch()
         keyboard?.hide()
         focus.clearFocus()
-        tips = emptyList()
+        scanError = null
+        // VIN или госномер в поле артикула — не ищем как номер детали, а открываем подбор по машине.
+        // То же условие, что в smartSearch (MainShellActivity.kt), но без номера кузова: он похож на артикул с дефисом
+        if (typed && (normalizeRuPlate(n) != null || looksLikeVin(n))) {
+            ctx.startActivity(Intent(ctx, VinSearchActivity::class.java).putExtra("prefillVin", n))
+            return
+        }
         loading = true
         error = null
         searching = scope.launch {
@@ -144,8 +154,9 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                         val votes = shop.dominantBrand(found)
                         suppliers = votes.suppliers
                         val best = votes.pick
-                        // Клиент успел нажать бренд сам — ничего не открываем поверх
-                        if (best != null && isActive && onScreen()) {
+                        // Клиент успел нажать бренд сам — ничего не открываем поверх.
+                        // Автовыбор можно выключить с сервера: тогда только подписи «у N поставщиков», выбирает человек
+                        if (best != null && isActive && onScreen() && AppConfig.flag("brand_autopick")) {
                             com.example.myapplication.Analytics.event("brand_autopick", mapOf("brand" to best.brand))
                             openOffers(ctx, best, picked = true)
                         }
@@ -155,7 +166,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 throw e // отменили сами (новый поиск, ✕, уход с экрана) — не ошибка
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Поиск → бренды", e)
-                error = e.message ?: "Не удалось выполнить поиск. Проверьте интернет."
+                error = com.example.myapplication.ui.userMessage(e, "Не удалось выполнить поиск. Проверьте интернет и попробуйте ещё раз.")
             } finally {
                 // Только свой: отменённый поиск не должен гасить индикатор нового
                 if (searching == me) { searching = null; loading = false }
@@ -166,7 +177,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     // Один раз: система выгрузила приложение в фоне (бюджетные телефоны) — при возврате «назад» с выдачи экран
     // создаётся заново и без этой отметки снова искал бы и снова бросал в ту же выдачу
     var autoSearched by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(Unit) { if (prefillNumber.isNotBlank() && !autoSearched) { autoSearched = true; search() } }
+    LaunchedEffect(Unit) { if (prefillNumber.isNotBlank() && !autoSearched) { autoSearched = true; search(typed = false) } }
 
     // Подсказки при вводе (search/tips) отключены: на тарифе ABCP их 100 в сутки на весь магазин —
     // сгорели бы за полчаса. Вместо них — «Вы искали» и выбор бренда (search/brands, 150 тыс. в сутки).
@@ -186,12 +197,12 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
         ) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it; brands = null; error = null; stopPicking(); stopSearch() },
+                onValueChange = { query = it; brands = null; error = null; scanError = null; stopPicking(); stopSearch() },
                 label = { Text("Артикул или OEM-номер") },
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = {
-                    if (query.isNotEmpty()) IconButton(onClick = { query = ""; brands = null; error = null; stopPicking(); stopSearch() }) {
+                    if (query.isNotEmpty()) IconButton(onClick = { query = ""; brands = null; error = null; scanError = null; stopPicking(); stopSearch() }) {
                         Icon(Icons.Default.Close, "Очистить")
                     } else Box {
                         IconButton(onClick = { scanMenu = true }, enabled = !scanning) {
@@ -209,7 +220,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
             )
 
             // Клавишу «Поиск» на клавиатуре находят не все (особенно после вставки номера из буфера)
-            if (query.isNotBlank() && brands == null && !loading && error == null) {
+            if (query.isNotBlank() && brands == null && !loading && error == null && scanError == null) {
                 Button(onClick = { search() }, modifier = Modifier.fillMaxWidth()) { Text("Найти") }
             }
 
@@ -221,7 +232,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                     text = {
                         Column {
                             list.forEach { c ->
-                                TextButton(onClick = { candidates = null; query = c.replace(" ", ""); search() }) { Text(c) }
+                                TextButton(onClick = { candidates = null; query = c.replace(" ", ""); search(typed = false) }) { Text(c) }
                             }
                         }
                     },
@@ -232,7 +243,18 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
 
             when {
                 loading -> WaitingState(first = "Ищем номер…", onCancel = { stopSearch() })
-                error != null -> ErrorState(error!!, onRetry = { search() })
+                error != null -> {
+                    // Текст советует написать менеджеру — даём кнопку рядом
+                    val toChat = "менеджер" in error!!
+                    ErrorState(
+                        error!!, onRetry = { search() },
+                        action = if (toChat) "Спросить менеджера" else null,
+                        onAction = if (toChat) { { com.example.myapplication.ui.openChat(ctx) } } else null
+                    )
+                }
+                // Фото не распозналось: повтор — снова выбор «сфотографировать / из галереи», а не пустой поиск.
+                // Меню живёт в кнопке 📷, а она видна только при пустом поле
+                scanError != null -> ErrorState(scanError!!, onRetry = { scanError = null; query = ""; scanMenu = true })
                 brands != null && brands!!.isEmpty() -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("По номеру «${query.trim()}» ничего не найдено. Проверьте номер или спросите менеджера — подберём.")
                     // Тупик без кнопки: чат был только на главной (телефон 10.11)
@@ -241,7 +263,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 brands != null -> {
                     if (picking != null) {
                         LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Text("Смотрим, какой производитель чаще у поставщиков…", style = MaterialTheme.typography.bodySmall)
+                        Text("Смотрим, какого производителя чаще предлагают…", style = MaterialTheme.typography.bodySmall)
                     }
                     Text("Выберите производителя", style = MaterialTheme.typography.titleSmall)
                     // Проверенные бренды — наверх по числу поставщиков (самый ходовой первым), остальные — как пришли
@@ -250,7 +272,6 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                     ).map { it.value }
                     HitList(ordered, suppliers) { stopPicking(); openOffers(ctx, it) }
                 }
-                tips.isNotEmpty() -> HitList(tips) { openOffers(ctx, it) }
                 query.isBlank() && history.isNotEmpty() -> {
                     Text("Вы искали", style = MaterialTheme.typography.titleSmall)
                     HitList(history) { openOffers(ctx, it) }

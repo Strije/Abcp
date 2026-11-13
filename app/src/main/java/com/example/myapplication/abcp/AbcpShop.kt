@@ -249,9 +249,6 @@ class AbcpShop(private val session: SessionManager) {
     private val login get() = session.login()
     private val psw get() = session.passMd5()
 
-    suspend fun tips(query: String): List<BrandHit> =
-        items(call { api.searchTips(login, psw, query) }).mapNotNull { it.toBrandHit() }
-
     /** Гость — не вошёл в аккаунт: поиск идёт через наш сервер с ценами гостевого профиля */
     val isGuest: Boolean get() = !session.isLoggedIn()
     private val server by lazy { com.example.myapplication.server.AppServer(session.context) }
@@ -280,6 +277,8 @@ class AbcpShop(private val session: SessionManager) {
             }
         )
             .mapNotNull { it.toOffer() }
+            // Цена 0 или меньше — ошибка прайса поставщика, заказать такое нельзя
+            .filter { it.price > 0 }
             .sortedWith(compareBy<Offer> { it.price }.thenBy { it.deliveryHours })
     }
 
@@ -442,11 +441,12 @@ class AbcpShop(private val session: SessionManager) {
                 when (addChecked(b, newQty)) {
                     true -> Unit
                     false -> throw BasketPositionLost(
-                        "Не удалось изменить количество: позиция «$title» убрана из корзины. Добавьте её заново."
+                        "Изменить количество не получилось, и позиции «$title» сейчас нет в корзине. " +
+                            "Сейчас обновим корзину — добавьте позицию заново."
                     )
                     null -> throw BasketPositionLost(
-                        "Не удалось изменить количество: связь прервалась. Проверьте корзину — позиция «$title» " +
-                            "могла пропасть, тогда добавьте её заново."
+                        "Связь прервалась, и мы не успели проверить корзину. Сейчас обновим её — " +
+                            "если позиции «$title» нет, добавьте её заново."
                     )
                 }
             }
@@ -527,7 +527,7 @@ class AbcpShop(private val session: SessionManager) {
             } catch (e: Exception) {
                 // Упали на следующей корзине — не теряем список того, что не вернулось в предыдущей
                 if (failed.isEmpty()) throw e
-                throw AbcpException((e.message ?: "Не удалось очистить корзину") + "\nНе удалось вернуть в корзину: ${failed.joinToString()}")
+                throw AbcpException(com.example.myapplication.ui.userMessage(e, "Не удалось очистить корзину") + "\nНе удалось вернуть в корзину: ${failed.joinToString()}")
             }
             failed
         }
@@ -834,8 +834,33 @@ private fun parseImages(o: JsonObject): List<String> {
 fun cleanNumber(s: String): String = s.uppercase().filter { it.isLetterOrDigit() }
 
 private val rub = DecimalFormat("#,##0.00", DecimalFormatSymbols(Locale("ru")).apply { groupingSeparator = ' ' })
+private val rubWhole = DecimalFormat("#,##0", DecimalFormatSymbols(Locale("ru")).apply { groupingSeparator = ' ' })
 
-fun formatRub(v: Double): String = rub.format(v) + " ₽"
+/** Целые суммы — без копеек («820 ₽»), дробные — с копейками («820,50 ₽»). */
+fun formatRub(v: Double): String {
+    val kopecks = Math.round(v * 100)
+    return (if (kopecks % 100 == 0L) rubWhole.format(kopecks / 100) else rub.format(v)) + " ₽"
+}
+
+private val MONTHS_SHORT = listOf("янв.", "февр.", "мар.", "апр.", "мая", "июн.", "июл.", "авг.", "сент.", "окт.", "нояб.", "дек.")
+private val ABCP_DATE = Regex("^(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{2}):(\\d{2})(?::\\d{2})?)?$")
+
+/**
+ * Дата ABCP для человека: «2026-11-10 14:23:05» → «10 нояб., 14:23», «2026-11-10» → «10 нояб.».
+ * Год — только если не текущий («10 нояб. 2025»). Нераспознанное возвращаем как есть. now — для тестов.
+ */
+fun formatAbcpDate(raw: String?, now: Long = System.currentTimeMillis()): String {
+    val s = raw?.trim().orEmpty()
+    val m = ABCP_DATE.find(s) ?: return s
+    val year = m.groupValues[1].toInt()
+    val month = m.groupValues[2].toInt()
+    val day = m.groupValues[3].toInt()
+    if (month !in 1..12 || day !in 1..31) return s
+    val thisYear = Calendar.getInstance().apply { timeInMillis = now }.get(Calendar.YEAR)
+    val date = "$day ${MONTHS_SHORT[month - 1]}" + if (year != thisYear) " $year" else ""
+    val time = if (m.groupValues[4].isNotEmpty()) ", ${m.groupValues[4]}:${m.groupValues[5]}" else ""
+    return date + time
+}
 
 /** Срок предложения: подпись магазина (deadlineReplace) важнее часов. */
 fun Offer.deliveryText(): String = deadlineLabel ?: formatDelivery(deliveryHours, deliveryHoursMax)

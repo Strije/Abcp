@@ -32,9 +32,12 @@ class AccountActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val server = AppServer(this)
 
-        // Вернуться ко входу с подставленным логином
-        fun toLogin(login: String?) {
-            setResult(RESULT_OK, android.content.Intent().putExtra(EXTRA_LOGIN, login.orEmpty()))
+        // Вернуться ко входу с подставленным логином. password — только сразу после регистрации: экран входа
+        // подставит его и войдёт сам. Передаём лишь в результате внутри приложения, нигде не сохраняем и не пишем в лог
+        fun toLogin(login: String?, password: String? = null) {
+            val data = android.content.Intent().putExtra(EXTRA_LOGIN, login.orEmpty())
+            if (!password.isNullOrEmpty()) data.putExtra(EXTRA_PASSWORD, password)
+            setResult(RESULT_OK, data)
             finish()
         }
 
@@ -48,10 +51,10 @@ class AccountActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         if (restoreMode) RestoreForm(
-                            server, prefill, onDone = ::toLogin,
+                            server, prefill, onDone = { toLogin(it) },
                             onRegister = { prefill = it; restoreMode = false }
                         ) else RegisterForm(
-                            server, prefill, onDone = ::toLogin,
+                            server, prefill, onDone = { login, password -> toLogin(login, password) },
                             onRestore = { prefill = it; restoreMode = true }
                         )
                     }
@@ -64,6 +67,8 @@ class AccountActivity : ComponentActivity() {
         const val EXTRA_RESTORE = "extra_restore"
         /** Телефон/email: на вход — подставить в форму, на выход — в поле логина */
         const val EXTRA_LOGIN = "extra_login"
+        /** Только на выход и только после регистрации без подтверждения: пароль, с которым экран входа войдёт сам */
+        const val EXTRA_PASSWORD = "extra_password"
     }
 }
 
@@ -90,7 +95,7 @@ fun normalizeMobile(input: String): String? {
 }
 
 @Composable
-private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -> Unit, onRestore: (String) -> Unit) {
+private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?, String?) -> Unit, onRestore: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     val focus = LocalFocusManager.current
@@ -129,12 +134,14 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
                 needsActivation = server.register(name.trim(), surname.trim(), mobile, email.trim(), p, office)
                 com.example.myapplication.Analytics.event("register", mapOf("office" to office))
                 done = true
+                // Подтверждать нечего — не заставляем вводить пароль второй раз: экран входа войдёт сам
+                if (!needsActivation) onDone(mobile, p)
             } catch (e: com.example.myapplication.server.ServerException) {
                 exists = e.code == 409
                 error = e.message ?: "Регистрация не прошла"
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Регистрация", e)
-                error = e.message ?: "Регистрация не прошла"
+                error = com.example.myapplication.ui.userMessage(e, "Регистрация не прошла. Попробуйте ещё раз или напишите менеджеру.")
             } finally {
                 busy = false
             }
@@ -147,9 +154,13 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
             Text("Мы отправили код подтверждения — подтвердите номер или почту, затем войдите.")
         } else {
             Text("Готово! Аккаунт создан.", style = MaterialTheme.typography.titleMedium)
-            Text("Войдите с номером телефона и паролем, который вы указали.")
+            Text("Сейчас войдём с номером телефона и паролем, который вы указали.")
         }
-        Button(onClick = { onDone(normalizeMobile(phone)) }, modifier = Modifier.fillMaxWidth()) { Text("Ко входу") }
+        // Обычно сюда не доходим (ко входу уходим сами); кнопка — на случай, если экран восстановлен системой
+        Button(
+            onClick = { onDone(normalizeMobile(phone), if (needsActivation) null else pass.trim()) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (needsActivation) "Ко входу" else "Войти") }
         return
     }
 
@@ -183,7 +194,7 @@ private fun RegisterForm(server: AppServer, prefill: String, onDone: (String?) -
         // Аккаунт уже есть — вместо дубля предлагаем войти или вспомнить пароль
         val login = normalizeMobile(phone) ?: email.trim()
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = { onDone(login) }, modifier = Modifier.weight(1f)) { Text("Войти") }
+            Button(onClick = { onDone(login, null) }, modifier = Modifier.weight(1f)) { Text("Войти") }
             OutlinedButton(onClick = { onRestore(login) }, modifier = Modifier.weight(1f)) { Text("Напомнить пароль") }
         }
     }
@@ -247,7 +258,7 @@ private fun RestoreForm(server: AppServer, prefill: String, onDone: (String?) ->
                 error = if (notFound) "Такой номер или email у нас не зарегистрирован." else e.message ?: "Не получилось"
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Восстановление пароля", e)
-                error = e.message ?: "Не получилось"
+                error = com.example.myapplication.ui.userMessage(e, "Не получилось. Попробуйте ещё раз или напишите менеджеру.")
             } finally {
                 busy = false
             }

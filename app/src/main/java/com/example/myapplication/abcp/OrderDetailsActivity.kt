@@ -9,6 +9,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,6 +61,8 @@ class OrderDetailsActivity : ComponentActivity() {
                 var repeatLines by remember { mutableStateOf<List<RepeatLine>?>(null) }
                 // Выбранные позиции кладутся в корзину — второй раз «Повторить заказ» нажать нельзя (задвоит)
                 var adding by remember { mutableStateOf(false) }
+                // Запрос на отмену позиции уже ушёл — второй раз, пока нет ответа, не отправляем
+                var cancelling by remember { mutableStateOf(false) }
 
                 LaunchedEffect(orderNumber, reload) {
                     loading = true
@@ -86,7 +90,13 @@ class OrderDetailsActivity : ComponentActivity() {
                 // Вернулись с оплаты — долг и статусы могли измениться
                 com.example.myapplication.ui.OnResume { reload++ }
 
-                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Заказ № $orderNumber") }, actions = { com.example.myapplication.ui.SearchAction() }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text("Заказ № $orderNumber") }, actions = {
+                    // Вопрос по заказу — сразу менеджеру, не возвращаясь на главную
+                    IconButton(onClick = { com.example.myapplication.ui.openChat(ctx) }) {
+                        Icon(Icons.AutoMirrored.Filled.Send, "Написать менеджеру")
+                    }
+                    com.example.myapplication.ui.SearchAction()
+                }) }) { padding ->
                     // Первая загрузка — спиннер, дальше заказ на экране, обновление тихое («потянуть вниз»)
                     com.example.myapplication.ui.RefreshableContent(
                         hasData = details != null, loading = loading, error = error,
@@ -94,6 +104,9 @@ class OrderDetailsActivity : ComponentActivity() {
                     ) {
                             OrderDetailsContent(
                                 details = details!!,
+                                // Заказ на экране, а обновить не вышло — говорим об этом, не пряча его
+                                error = error,
+                                cancelling = cancelling,
                                 // Отказаться можно, только пока позицию не взяли в работу (статус «Ожидает обработки»);
                                 // дальше деталь уже заказана у поставщика — только через менеджера
                                 canCancel = { p ->
@@ -173,8 +186,10 @@ class OrderDetailsActivity : ComponentActivity() {
                             )
                         },
                         confirmButton = {
-                            Button(onClick = {
+                            Button(enabled = !cancelling, onClick = {
                                 toCancel = null
+                                if (cancelling) return@Button
+                                cancelling = true
                                 scope.launch {
                                     try {
                                         val msg = shop.cancelPosition(p.positionId!!)
@@ -184,7 +199,13 @@ class OrderDetailsActivity : ComponentActivity() {
                                         throw e
                                     } catch (e: Exception) {
                                         com.example.myapplication.Analytics.error("Заказ → отмена позиции", e)
-                                        android.widget.Toast.makeText(ctx, e.message ?: "Не удалось", android.widget.Toast.LENGTH_LONG).show()
+                                        android.widget.Toast.makeText(
+                                            ctx,
+                                            com.example.myapplication.ui.userMessage(e, "Не удалось отправить запрос на отмену. Попробуйте ещё раз или напишите менеджеру."),
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
+                                    } finally {
+                                        cancelling = false
                                     }
                                 }
                             }) { Text("Отменить позицию") }
@@ -221,6 +242,8 @@ private fun parseOrderDetailsResponse(body: JsonElement?, gson: Gson): OrderDeta
 @Composable
 private fun OrderDetailsContent(
     details: OrderDetailsDto,
+    error: String?,
+    cancelling: Boolean,
     canCancel: (OrderPositionDto) -> Boolean,
     onCancel: (OrderPositionDto) -> Unit,
     onPay: (() -> Unit)?,
@@ -235,11 +258,12 @@ private fun OrderDetailsContent(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        error?.let { e -> item { Text(e, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
         item {
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     details.status?.let { StatusChip(it, details.statusColor) }
-                    Text("от ${details.date.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                    Text("от ${formatAbcpDate(details.date)}", style = MaterialTheme.typography.bodySmall)
                     val office = details.deliveryOffice?.takeIf { it.isNotBlank() }
                     val addr = details.deliveryAddress?.takeIf { it.isNotBlank() }
                     (office ?: addr)?.let { Text(if (office != null) "Самовывоз: $it" else "Доставка: $it") }
@@ -305,7 +329,7 @@ private fun OrderDetailsContent(
                         }
                         Spacer(Modifier.weight(1f))
                         if (canCancel(p)) {
-                            TextButton(onClick = { onCancel(p) }, contentPadding = PaddingValues(0.dp)) {
+                            TextButton(onClick = { onCancel(p) }, enabled = !cancelling, contentPadding = PaddingValues(0.dp)) {
                                 Text("Отменить позицию", color = MaterialTheme.colorScheme.error)
                             }
                         }
