@@ -111,4 +111,14 @@ class AbcpShopTest {
         // Склады АвтоДруг — один поставщик
         assertEquals(listOf(1, 1), w(listOf(offer("Z", "OF4063", "1", "Хрусталева 111 (самовывоз)"), offer("Z", "OF4063", "2", "ПОР20 (самовывоз)"))).map { it.confirm })
     }
+
+    @Test
+    fun expectedDateOfOrderPosition() {
+        // Заказ 13 ноября в 13:42, срок 76 часов — как в корзине: 16 ноября
+        assertEquals("Ожидается 16 нояб.", com.example.myapplication.abcp.expectedText("2026-11-13 13:42:10", "76", "76"))
+        assertEquals("Ожидается 16 нояб. – 18 нояб.", com.example.myapplication.abcp.expectedText("2026-11-13 13:42:10", "76", "120"))
+        assertEquals("В наличии в магазине", com.example.myapplication.abcp.expectedText("2026-11-13 13:42:10", "0", null))
+        assertEquals(null, com.example.myapplication.abcp.expectedText("2026-11-13 13:42:10", null, null))
+        assertEquals(null, com.example.myapplication.abcp.expectedText("вчера", "24", null))
+    }
 }

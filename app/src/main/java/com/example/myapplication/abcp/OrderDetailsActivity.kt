@@ -264,7 +264,17 @@ private fun OrderDetailsContent(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     details.status?.let { StatusChip(it, details.statusColor) }
                     Text("от ${formatAbcpDate(details.date)}", style = MaterialTheme.typography.bodySmall)
-                    val office = details.deliveryOffice?.takeIf { it.isNotBlank() }
+                    // Адрес магазина из настроек вместо «Первый офис» (как на оформлении)
+                    // Номера офиса в ответе может не быть — тогда по названию ABCP: «Первый офис» — первый магазин в настройках
+                    val officeRaw = details.deliveryOffice?.takeIf { it.isNotBlank() }
+                    val stores = com.example.myapplication.AppConfig.stores
+                    val office = details.deliveryOfficeId?.let { com.example.myapplication.AppConfig.officeName(it) }
+                        ?: when {
+                            officeRaw == null -> null
+                            officeRaw.contains("Первый", ignoreCase = true) -> stores.getOrNull(0)?.address
+                            officeRaw.contains("Второй", ignoreCase = true) -> stores.getOrNull(1)?.address
+                            else -> null
+                        } ?: officeRaw
                     val addr = details.deliveryAddress?.takeIf { it.isNotBlank() }
                     (office ?: addr)?.let { Text(if (office != null) "Самовывоз: $it" else "Доставка: $it") }
                     Row(verticalAlignment = Alignment.Bottom) {
@@ -319,6 +329,10 @@ private fun OrderDetailsContent(
                     val price = (p.priceInSiteCurrency ?: p.price)?.let(::parseAbcpNumber)?.takeIf { it > 0 }
                     Text("$qty шт." + (price?.let { " × ${formatRub(it)}" } ?: ""))
                     p.status?.let { StatusChip(it, p.statusColor) }
+                    // В заказе из нескольких позиций у каждой свой срок — без него не понять, что и когда приедет
+                    if (p.status?.let(::isClosedStatus) != true) expectedText(details.date, p.deadline, p.deadlineMax)?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     p.commentAnswer?.takeIf { it.isNotBlank() }?.let {
                         Text("Ответ менеджера: $it", style = MaterialTheme.typography.bodySmall)
                     }
@@ -392,4 +406,21 @@ private fun RepeatOrderDialog(lines: List<RepeatLine>, onDismiss: () -> Unit, on
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } }
     )
+}
+
+/**
+ * Когда ждать позицию заказа: дата заказа + срок поставки в часах (ABCP отдаёт его у каждой позиции).
+ * «16 нояб.» или «16–18 нояб.»; срок 0 — товар был в магазине. Нет даты или срока — ничего не пишем.
+ */
+internal fun expectedText(orderDate: String?, deadline: String?, deadlineMax: String?): String? {
+    val hours = deadline?.trim()?.toDoubleOrNull()?.toInt() ?: return null
+    if (hours <= 0) return "В наличии в магазине"
+    val start = runCatching {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).parse(orderDate.orEmpty().trim())
+    }.getOrNull()?.time ?: return null
+    val day = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+    val from = formatAbcpDate(day.format(java.util.Date(start + hours * 3_600_000L)), start)
+    val max = deadlineMax?.trim()?.toDoubleOrNull()?.toInt() ?: 0
+    val to = if (max > hours) formatAbcpDate(day.format(java.util.Date(start + max * 3_600_000L)), start) else from
+    return if (to == from) "Ожидается $from" else "Ожидается $from – $to"
 }

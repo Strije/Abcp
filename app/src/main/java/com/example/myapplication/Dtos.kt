@@ -68,6 +68,7 @@ data class OrderDetailsDto(
 
     val positionsQuantity: String? = null,
     val deliveryAddress: String? = null,
+    val deliveryOfficeId: String? = null,
     val deliveryOffice: String? = null,
     val paymentType: String? = null,
     val deliveryCost: String? = null,
