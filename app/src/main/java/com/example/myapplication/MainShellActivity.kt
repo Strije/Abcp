@@ -166,7 +166,12 @@ class MainShellActivity : ComponentActivity() {
                                             }
                                         } else Icon(t.icon, t.title)
                                     },
-                                    label = { Text(t.title) }
+                                    // Одна строка без переноса: при крупном шрифте «Главная» ломалась на «Главна-я» (телефон 13.11)
+                                    label = {
+                                        Text(t.title, maxLines = 1, softWrap = false,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+                                            style = MaterialTheme.typography.labelSmall)
+                                    }
                                 )
                             }
                         }

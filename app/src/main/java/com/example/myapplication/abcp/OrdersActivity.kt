@@ -147,7 +147,8 @@ private fun OrderRow(order: OrderDto, onPay: (() -> Unit)? = null, onClick: () -
             order.status?.let { StatusChip(it, order.statusColor) }
             // Из списка должно быть видно, что от клиента что-то нужно или с заказом что-то не так.
             // Пометку, которая слово в слово повторяет статус, не пишем
-            statusNote(order.status)?.takeIf { !it.equals(order.status?.trim(), ignoreCase = true) }?.let { note ->
+            // Пометка не нужна, если она уже написана в самом статусе («Отказ складом (Не подтверждён поставщиком)»)
+            statusNote(order.status)?.takeIf { order.status?.contains(it, ignoreCase = true) != true }?.let { note ->
                 Spacer(Modifier.height(4.dp))
                 Text(
                     note, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,

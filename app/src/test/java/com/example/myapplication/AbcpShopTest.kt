@@ -121,4 +121,12 @@ class AbcpShopTest {
         assertEquals(null, com.example.myapplication.abcp.expectedText("2026-11-13 13:42:10", null, null))
         assertEquals(null, com.example.myapplication.abcp.expectedText("вчера", "24", null))
     }
+
+    @Test
+    fun russianStatusDateIsFormattedToo() {
+        val now = java.util.GregorianCalendar(2026, 10, 13).timeInMillis
+        assertEquals("25 сент.", com.example.myapplication.abcp.formatAbcpDate("25.09.2026", now))
+        assertEquals("25 сент., 17:03", com.example.myapplication.abcp.formatAbcpDate("25.09.2026 17:03:11", now))
+        assertEquals("25 сент. 2025", com.example.myapplication.abcp.formatAbcpDate("25.09.2025", now))
+    }
 }

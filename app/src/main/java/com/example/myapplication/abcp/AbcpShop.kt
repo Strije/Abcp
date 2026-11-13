@@ -904,6 +904,7 @@ fun formatRub(v: Double): String {
 }
 
 private val MONTHS_SHORT = listOf("янв.", "февр.", "мар.", "апр.", "мая", "июн.", "июл.", "авг.", "сент.", "окт.", "нояб.", "дек.")
+private val ABCP_DATE_RU = Regex("^(\\d{2})\\.(\\d{2})\\.(\\d{4})(?:[ T](\\d{2}):(\\d{2})(?::\\d{2})?)?$")
 private val ABCP_DATE = Regex("^(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{2}):(\\d{2})(?::\\d{2})?)?$")
 
 /**
@@ -912,10 +913,12 @@ private val ABCP_DATE = Regex("^(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{2}):(\\d{2
  */
 fun formatAbcpDate(raw: String?, now: Long = System.currentTimeMillis()): String {
     val s = raw?.trim().orEmpty()
-    val m = ABCP_DATE.find(s) ?: return s
-    val year = m.groupValues[1].toInt()
+    // Дату статуса позиции ABCP отдаёт по-русски: «25.09.2026» или «25.09.2026 17:03» (телефон 13.11)
+    val ru = ABCP_DATE_RU.find(s)
+    val m = ABCP_DATE.find(s) ?: ru ?: return s
+    val year = (if (ru != null) m.groupValues[3] else m.groupValues[1]).toInt()
     val month = m.groupValues[2].toInt()
-    val day = m.groupValues[3].toInt()
+    val day = (if (ru != null) m.groupValues[1] else m.groupValues[3]).toInt()
     if (month !in 1..12 || day !in 1..31) return s
     val thisYear = Calendar.getInstance().apply { timeInMillis = now }.get(Calendar.YEAR)
     val date = "$day ${MONTHS_SHORT[month - 1]}" + if (year != thisYear) " $year" else ""
