@@ -264,6 +264,12 @@ fun UnitSchemeWithMap(
 
             // 2. Номера
             if (showNumbers) {
+                // На схемах VAG номера бывают напечатаны вплотную в ряд («8 10 11 13 15 17») — значки обычного размера
+                // слипались в одно пятно (телефон 13.11). Тесным значкам уменьшаем размер; при приближении они расходятся.
+                val badgePx = with(density) { 26.dp.toPx() }
+                val centers = mapItems.filter { !it.code.isNullOrBlank() }.map {
+                    ((it.x1 + it.x2) / 2f * fitScale + offsetX) to ((it.y1 + it.y2) / 2f * fitScale + offsetY)
+                }
                 // Значок на каждой зоне: один номер бывает на схеме в нескольких местах
                 mapItems.forEach { item ->
                     val code = item.code.orEmpty()
@@ -272,13 +278,18 @@ fun UnitSchemeWithMap(
 
                     val cx = (item.x1 + item.x2) / 2f * fitScale + offsetX
                     val cy = (item.y1 + item.y2) / 2f * fitScale + offsetY
+                    // Расстояние до ближайшего соседнего значка (сам значок даёт 0 — его пропускаем)
+                    val near = centers.map { (x, y) -> kotlin.math.hypot(x - cx, y - cy) }.filter { it > 0.5f }.minOrNull()
 
                     NumberBadge(
                         text = code,
                         selected = isSelected,
                         // Читаем scale лениво, в фазе отрисовки — иначе весь список
                         // номеров пересобирался бы заново на каждом кадре пинч-зума.
-                        badgeScale = { (1f / scale).coerceIn(0.6f, 1f) },
+                        badgeScale = {
+                            val crowd = if (near == null) 1f else (near * scale / badgePx).coerceIn(0.55f, 1f)
+                            (1f / scale).coerceIn(0.6f, 1f) * crowd
+                        },
                         // Точка (cx, cy); по центру её ставит сам значок — ширина у него разная
                         modifier = Modifier.offset { IntOffset(cx.roundToInt(), cy.roundToInt()) }
                     )
