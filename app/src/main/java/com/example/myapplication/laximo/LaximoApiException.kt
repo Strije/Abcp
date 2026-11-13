@@ -10,7 +10,7 @@ class LaximoApiException(
         if (!extra.isNullOrBlank()) append(":").append(extra)
     }
 ) {
+    /** Текст для покупателя: без кодов и технических подробностей. */
     val pretty: String
-        get() = rawMessage?.let { prettifyLaximoError(it) }
-            ?: message.orEmpty()
+        get() = if (code != null) laximoCodeText(code, extra) else prettifyLaximoError(rawMessage.orEmpty())
 }

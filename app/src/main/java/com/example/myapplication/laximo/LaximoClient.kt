@@ -55,6 +55,7 @@ private object LaximoErrorParser {
         val code = parts[0]
         val extra = parts.getOrNull(1)
 
-        return LaximoApiException(code = code, extra = extra)
+        // rawMessage — сырой текст для журнала; покупателю показываем pretty
+        return LaximoApiException(code = code, extra = extra, rawMessage = m)
     }
 }

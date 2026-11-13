@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -106,7 +107,11 @@ class CatalogUnitsActivity : ComponentActivity() {
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     items(units) { u ->
-                                        val url = remember(u.imageUrl) { resolveLaximoImageUrl(u.imageUrl, LaximoImageSize.SOURCE) }
+                                        // В списке — уменьшенная картинка; полноразмерная схема нужна только на экране узла
+                                        val url = remember(u.imageUrl) { resolveLaximoImageUrl(u.imageUrl, LaximoImageSize.P250) }
+                                        val fullUrl = remember(u.imageUrl, u.largeImageUrl) {
+                                            resolveLaximoImageUrl(u.largeImageUrl ?: u.imageUrl, LaximoImageSize.SOURCE)
+                                        }
 
                                         ElevatedCard(
                                             modifier = Modifier
@@ -125,8 +130,8 @@ class CatalogUnitsActivity : ComponentActivity() {
                                                     i.putExtra("unitId", u.unitId)
                                                     i.putExtra("unitName", u.name)
 
-                                                    // Лучше передавать уже "починенный" url
-                                                    i.putExtra("imageUrl", url)
+                                                    // Уже "починенный" адрес схемы в исходном размере
+                                                    i.putExtra("imageUrl", fullUrl)
 
                                                     startActivity(i)
                                                 }
@@ -167,12 +172,12 @@ class CatalogUnitsActivity : ComponentActivity() {
                                                         }
                                                     },
                                                     error = {
+                                                        // Картинки нет — нейтральная заглушка
                                                         Box(
-                                                            Modifier.size(72.dp),
-                                                            contentAlignment = Alignment.Center
-                                                        ) {
-                                                            Text("X", style = MaterialTheme.typography.titleMedium)
-                                                        }
+                                                            Modifier
+                                                                .size(72.dp)
+                                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                        )
                                                     }
                                                 )
 
@@ -183,15 +188,13 @@ class CatalogUnitsActivity : ComponentActivity() {
                                                         text = u.name,
                                                         style = MaterialTheme.typography.titleSmall
                                                     )
-                                                    Spacer(Modifier.height(4.dp))
-                                                    Text(
-                                                        text = "Код: ${u.code ?: "—"}",
-                                                        style = MaterialTheme.typography.bodySmall
-                                                    )
-                                                    Text(
-                                                        text = "unitId: ${u.unitId}",
-                                                        style = MaterialTheme.typography.bodySmall
-                                                    )
+                                                    u.code?.takeIf { it.isNotBlank() }?.let { code ->
+                                                        Spacer(Modifier.height(4.dp))
+                                                        Text(
+                                                            text = "Код: $code",
+                                                            style = MaterialTheme.typography.bodySmall
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }

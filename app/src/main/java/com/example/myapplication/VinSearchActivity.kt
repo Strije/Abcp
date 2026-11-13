@@ -21,6 +21,7 @@ import com.example.myapplication.laximo.LaximoRepository
 import com.example.myapplication.laximo.QuickGroupsActivity
 import com.example.myapplication.laximo.model.LaximoVehicleContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -61,24 +62,44 @@ class VinSearchActivity : ComponentActivity() {
 
                 // Что уже искали: кнопка «Найти» нужна, только пока номер новый (машина найдена — она лишняя и путает)
                 var searchedFor by remember { mutableStateOf("") }
+                // Идущий поиск: новый запуск отменяет прежний — иначе открываются два экрана подбора
+                var searchJob by remember { mutableStateOf<Job?>(null) }
+                var searchingFor by remember { mutableStateOf("") }
+                val searchRun = remember { intArrayOf(0) } // номер запуска: отменённый поиск не трогает состояние нового
+                // «В мой гараж» нажали — до ответа кнопка не работает (двойное нажатие создавало две машины)
+                var addingToGarage by remember { mutableStateOf(false) }
                 fun inGarage(q: String) = com.example.myapplication.abcp.garageKey(
                     com.example.myapplication.laximo.normalizeRuPlate(q) ?: q
                 ) in garageKeys
 
                 fun onSearchClick() {
-                    val vin = vinText.trim()
-                    if (vin.isBlank()) {
+                    if (vinText.isBlank()) {
                         error = "Введите VIN, номер кузова или госномер"
                         return
                     }
+                    // Единый вид: без пробелов, заглавными, русские буквы-двойники заменены латинскими
+                    val query = com.example.myapplication.laximo.normalizeVehicleQuery(vinText)
+                    val vin = query.value
+                    // Этот же номер уже ищем («Поиск» на клавиатуре, повтор после фото) — второй раз не запускаем
+                    if (loading && vin == searchingFor) return
 
+                    searchJob?.cancel()
+                    val runNo = ++searchRun[0]
                     keyboard?.hide()
+                    results = emptyList()
+                    if (query.hint != null) {
+                        // В VIN не 17 знаков — запрос не отправляем, сразу подсказка
+                        loading = false
+                        searched = false
+                        error = query.hint
+                        return
+                    }
                     loading = true
                     error = null
-                    results = emptyList()
                     searched = true
+                    searchingFor = vin
 
-                    scope.launch {
+                    searchJob = scope.launch {
                         try {
                             val list = withContext(Dispatchers.IO) {
                                 repo.findVehicleAny(vin)
@@ -105,12 +126,14 @@ class VinSearchActivity : ComponentActivity() {
                                 },
                                 "found" to list.size
                             ))
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e // поиск отменён новым запуском — это не ошибка
                         } catch (e: Exception) {
                             com.example.myapplication.Analytics.error("Подбор → поиск авто", e)
                             Log.e("VIN_SEARCH", "EX", e)
                             error = com.example.myapplication.laximo.laximoUserMessage(e)
                         } finally {
-                            loading = false
+                            if (runNo == searchRun[0]) loading = false
                         }
                     }
                 }
@@ -187,7 +210,18 @@ class VinSearchActivity : ComponentActivity() {
                     ) {
                         OutlinedTextField(
                             value = vinText,
-                            onValueChange = { vinText = it },
+                            onValueChange = {
+                                if (it != vinText) {
+                                    // Номер изменили — прежние результаты и идущий поиск к нему уже не относятся
+                                    searchJob?.cancel()
+                                    searchRun[0]++
+                                    loading = false
+                                    results = emptyList()
+                                    searched = false
+                                    error = null
+                                }
+                                vinText = it
+                            },
                             label = { Text("VIN, номер кузова или госномер") },
                             placeholder = { Text("XTA21099… / SGL5-400683 / А123ВС92") },
                             singleLine = true,
@@ -221,7 +255,7 @@ class VinSearchActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall
                         )
 
-                        if (loading || results.isEmpty() || vinText.trim() != searchedFor) Button(
+                        if (loading || results.isEmpty()) Button(
                             onClick = { onSearchClick() },
                             enabled = !loading,
                             modifier = Modifier.fillMaxWidth()
@@ -271,16 +305,18 @@ class VinSearchActivity : ComponentActivity() {
                                                     style = MaterialTheme.typography.titleMedium
                                                 )
                                                 Spacer(Modifier.height(4.dp))
-                                                Text("Запрос: ${vinText.trim()}", style = MaterialTheme.typography.bodySmall)
-                                                val inGarage = com.example.myapplication.abcp.garageKey(
-                                                    com.example.myapplication.laximo.normalizeRuPlate(vinText.trim()) ?: vinText.trim()
-                                                ) in garageKeys
-                                                if (!guest && inGarage) Text("✓ В гараже", style = MaterialTheme.typography.labelLarge,
+                                                // Номер, по которому машина найдена, — а не то, что сейчас в поле
+                                                Text("Запрос: $searchedFor", style = MaterialTheme.typography.bodySmall)
+                                                val carInGarage = inGarage(searchedFor)
+                                                if (!guest && carInGarage) Text("✓ В гараже", style = MaterialTheme.typography.labelLarge,
                                                     color = com.example.myapplication.ui.theme.DeliveryColors.today, modifier = Modifier.padding(vertical = 8.dp))
-                                                if (!guest && !inGarage) TextButton(
+                                                if (!guest && !carInGarage) TextButton(
                                                     contentPadding = PaddingValues(0.dp),
+                                                    enabled = !addingToGarage,
                                                     onClick = {
-                                                        val q = vinText.trim()
+                                                        if (!addingToGarage) {
+                                                        addingToGarage = true
+                                                        val q = searchedFor
                                                         val kind = when {
                                                             com.example.myapplication.laximo.normalizeRuPlate(q) != null -> "plate"
                                                             looksLikeVin(q) -> "vin"
@@ -295,10 +331,15 @@ class VinSearchActivity : ComponentActivity() {
                                                                 garageKeys = garageKeys + com.example.myapplication.abcp.garageKey(value)
                                                                 com.example.myapplication.abcp.MemoryCache.garage = null
                                                                 android.widget.Toast.makeText(ctx, "Машина добавлена в гараж", android.widget.Toast.LENGTH_SHORT).show()
+                                                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                                                throw e
                                                             } catch (e: Exception) {
                                                                 com.example.myapplication.Analytics.error("Подбор → в гараж", e)
                                                                 android.widget.Toast.makeText(ctx, e.message ?: "Не удалось добавить", android.widget.Toast.LENGTH_LONG).show()
+                                                            } finally {
+                                                                addingToGarage = false
                                                             }
+                                                        }
                                                         }
                                                     }
                                                 ) { Text("＋ В мой гараж") }

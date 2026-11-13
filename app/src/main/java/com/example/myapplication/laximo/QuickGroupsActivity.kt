@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
 import androidx.compose.material.icons.filled.Close
@@ -24,6 +25,8 @@ import com.example.myapplication.laximo.model.LaximoPartsCategory
 import com.example.myapplication.laximo.model.LaximoQuickGroupNode
 import com.example.myapplication.laximo.model.LaximoUnit
 import com.example.myapplication.laximo.model.LaximoVehicleContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,6 +63,11 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
     var categories by remember { mutableStateOf<List<LaximoPartsCategory>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    // Дерево групп: запрос завершился (пусть и пустым ответом) / каталог ответил, что быстрого подбора нет
+    var treeLoaded by remember { mutableStateOf(false) }
+    var treeUnavailable by remember { mutableStateOf(false) }
+    // Загрузка выбранной группы: пока идёт, повторные нажатия не запускают её ещё раз
+    var groupJob by remember { mutableStateOf<Job?>(null) }
 
     var searchQuery by remember { mutableStateOf(initialQuery) }
     var expandedIds by remember { mutableStateOf(emptySet<Long>()) }
@@ -68,17 +76,28 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
     LaunchedEffect(reload) {
         loading = true
         error = null
-        runCatching { repo.listQuickGroup(ctx) }
-            .onSuccess { root = it }
-            .onFailure { error = laximoUserMessage(it) }
-        loading = false
+        treeUnavailable = false
+        try {
+            root = repo.listQuickGroup(ctx)
+            treeLoaded = true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val text = laximoUserMessage(e)
+            // Каталог ответил ошибкой — повторять бесполезно, предложим все узлы; нет связи — «Повторить»
+            if (e is LaximoApiException) treeUnavailable = true else error = text
+        } finally {
+            loading = false
+        }
     }
-    // Системная «Назад» из деталей группы — к дереву групп, а не из подбора
-    androidx.activity.compose.BackHandler(enabled = selectedGroup != null) {
+
+    fun closeGroup() {
         selectedGroup = null
         categories = emptyList()
         error = null
     }
+    // Системная «Назад» из деталей группы — к дереву групп, а не из подбора
+    androidx.activity.compose.BackHandler(enabled = selectedGroup != null) { closeGroup() }
 
     fun openUnit(unit: LaximoUnit) {
         val i = Intent(context, UnitDetailsActivity::class.java).apply {
@@ -92,6 +111,34 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
         context.startActivity(i)
     }
 
+    // «Все узлы»: полный каталог машины по разделам
+    fun openAllUnits() {
+        val i = Intent(context, CatalogCategoriesActivity::class.java).apply {
+            putExtra("catalog", ctx.catalog)
+            putExtra("vehicleId", ctx.vehicleId)
+            putExtra("ssd", ctx.ssd)
+        }
+        context.startActivity(i)
+    }
+
+    fun openGroup(node: LaximoQuickGroupNode, gid: Long) {
+        if (groupJob?.isActive == true) return
+        loading = true
+        error = null
+        groupJob = scope.launch {
+            try {
+                categories = repo.listQuickDetail(ctx, gid, all = true)
+                selectedGroup = node
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = laximoUserMessage(e)
+            } finally {
+                loading = false
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -103,25 +150,17 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
                 },
                 actions = {
                     if (selectedGroup == null) {
-                        TextButton(onClick = {
-                            val i = Intent(context, CatalogCategoriesActivity::class.java).apply {
-                                putExtra("catalog", ctx.catalog)
-                                putExtra("vehicleId", ctx.vehicleId)
-                                putExtra("ssd", ctx.ssd)
-                            }
-                            context.startActivity(i)
-                        }) { Text("Все узлы") }
+                        TextButton(onClick = { openAllUnits() }) { Text("Все узлы") }
                     }
                 },
                 navigationIcon = {
                     // Без выбранного раздела — обычная стрелка (с 10.11 подбор открывается сразу, минуя карточку машины)
                     if (selectedGroup == null) com.example.myapplication.ui.BackButton()
+                    // Из раздела — та же стрелка, но назад к списку разделов
                     if (selectedGroup != null) {
-                        TextButton(onClick = {
-                            selectedGroup = null
-                            categories = emptyList()
-                            error = null
-                        }) { Text("Назад") }
+                        IconButton(onClick = { closeGroup() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
+                        }
                     }
                 }
             )
@@ -131,7 +170,10 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
 
             if (selectedGroup == null) {
-                OutlinedTextField(
+                // Быстрого подбора для машины нет: каталог так ответил или прислал пустое дерево
+                val noTree = treeUnavailable || (treeLoaded && root?.children.isNullOrEmpty())
+
+                if (!noTree) OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     label = { Text("Что ищем? Например, колодки") },
@@ -182,7 +224,19 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
                     result
                 }
 
-                LazyColumn(Modifier.fillMaxSize()) {
+                if (noTree) {
+                    com.example.myapplication.ui.EmptyState(
+                        "Для этой машины быстрый подбор недоступен",
+                        action = "Открыть все узлы",
+                        onAction = { openAllUnits() }
+                    )
+                } else if (treeLoaded && displayItems.isEmpty() && searchQuery.isNotBlank()) {
+                    com.example.myapplication.ui.EmptyState(
+                        "Ничего не нашлось. Попробуйте другое слово или откройте все узлы",
+                        action = "Открыть все узлы",
+                        onAction = { openAllUnits() }
+                    )
+                } else LazyColumn(Modifier.fillMaxSize()) {
                     itemsIndexed(displayItems, key = { index, item ->
                         // Индекс в списке гарантирует уникальность, даже если один и тот же
                         // узел встречается в дереве под разными родителями (частый случай
@@ -214,17 +268,7 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
                                             expandedIds + gid
                                         }
                                     } else {
-                                        loading = true
-                                        error = null
-                                        scope.launch {
-                                            runCatching { repo.listQuickDetail(ctx, gid, all = true) }
-                                                .onSuccess {
-                                                    categories = it
-                                                    selectedGroup = node
-                                                }
-                                                .onFailure { error = laximoUserMessage(it) }
-                                            loading = false
-                                        }
+                                        openGroup(node, gid)
                                     }
                                 }
                                 .padding(start = (level * 16).dp)

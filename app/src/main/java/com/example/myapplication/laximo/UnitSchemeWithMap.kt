@@ -1,6 +1,7 @@
 package com.example.myapplication.laximo
 
 import androidx.compose.animation.core.animate
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -14,7 +15,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,7 +31,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -57,6 +62,7 @@ import kotlin.math.roundToInt
  *
  * Важно: Координаты Laximo (x1..y2) считаются в системе координат исходного изображения.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun UnitSchemeWithMap(
     imageUrl: String?,
@@ -72,12 +78,23 @@ fun UnitSchemeWithMap(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
 
+    // Не выше 45% экрана: на небольшом телефоне под схемой должен быть виден список деталей
+    val schemeHeight = min(420f, LocalConfiguration.current.screenHeightDp * 0.45f).dp
+
     var scale by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
 
+    // Сдвиг не дальше краёв увеличенной картинки: без приближения она стоит на месте
+    fun clampPan(p: Offset, s: Float): Offset {
+        val maxX = boxSize.width * (s - 1f).coerceAtLeast(0f) / 2f
+        val maxY = boxSize.height * (s - 1f).coerceAtLeast(0f) / 2f
+        return Offset(p.x.coerceIn(-maxX, maxX), p.y.coerceIn(-maxY, maxY))
+    }
+
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
-        scale = (scale * zoomChange).coerceIn(1f, 4.5f)
-        pan += panChange
+        val newScale = (scale * zoomChange).coerceIn(1f, 4.5f)
+        scale = newScale
+        pan = clampPan(pan + panChange, newScale)
     }
 
     // Исходные размеры изображения (от Coil или по координатам)
@@ -125,15 +142,17 @@ fun UnitSchemeWithMap(
                 (dstW / 2f - centerX) * targetScale,
                 (dstH / 2f - centerY) * targetScale
             )
-            animateTransform(targetScale, targetPan)
+            animateTransform(targetScale, clampPan(targetPan, targetScale))
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(420.dp)
+            .height(schemeHeight)
             .clip(RectangleShape)
+            // Белая подложка: схемы с прозрачным фоном в тёмной теме не читаются
+            .background(Color.White)
             .onSizeChanged { boxSize = it }
             .pointerInput(Unit) {
                 detectTapGestures(onDoubleTap = { scope.launch { animateTransform(1f, Offset.Zero) } })
@@ -141,14 +160,22 @@ fun UnitSchemeWithMap(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
-                    onInteractingChange(true)
+                    // Список под схемой замирает, только когда схему двигают: она приближена или на ней два пальца.
+                    // Обычное касание без приближения — вертикальный жест уходит списку.
+                    var interacting = scale > 1.01f
+                    if (interacting) onInteractingChange(true)
                     do {
                         val event = awaitPointerEvent()
+                        if (!interacting && event.changes.count { it.pressed } >= 2) {
+                            interacting = true
+                            onInteractingChange(true)
+                        }
                     } while (event.changes.any { it.pressed })
-                    onInteractingChange(false)
+                    if (interacting) onInteractingChange(false)
                 }
             }
-            .transformable(transformState)
+            // Одним пальцем двигаем только приближенную схему; без приближения жест не перехватываем
+            .transformable(transformState, canPan = { scale > 1.01f })
     ) {
         Box(
             modifier = Modifier
@@ -181,7 +208,7 @@ fun UnitSchemeWithMap(
             val dstW = boxSize.width.toFloat()
             val dstH = boxSize.height.toFloat()
             val fitScale = min(dstW / srcW, dstH / srcH)
-            
+
             // Смещения для центрирования изображения (ContentScale.Fit)
             val offsetX = (dstW - srcW * fitScale) / 2f
             val offsetY = (dstH - srcH * fitScale) / 2f
@@ -192,16 +219,16 @@ fun UnitSchemeWithMap(
                 if (code.isBlank()) return@forEach
 
                 val isSelected = !selectedCode.isNullOrBlank() && code == selectedCode
-                
+
                 // Преобразование координат из Laximo в экранные
                 val l = item.x1 * fitScale + offsetX
                 val t = item.y1 * fitScale + offsetY
                 val r = item.x2 * fitScale + offsetX
                 val b = item.y2 * fitScale + offsetY
-                
+
                 val wPx = (r - l).coerceAtLeast(1f)
                 val hPx = (b - t).coerceAtLeast(1f)
-                
+
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(l.roundToInt(), t.roundToInt()) }
@@ -219,7 +246,7 @@ fun UnitSchemeWithMap(
 
                 itemsByCode.forEach { (code, items) ->
                     val isSelected = !selectedCode.isNullOrBlank() && code == selectedCode
-                    
+
                     // Средняя точка всех вхождений кода
                     val avgX = items.map { (it.x1 + it.x2) / 2f }.average().toFloat()
                     val avgY = items.map { (it.y1 + it.y2) / 2f }.average().toFloat()
@@ -230,18 +257,11 @@ fun UnitSchemeWithMap(
                     NumberBadge(
                         text = code,
                         selected = isSelected,
-                        modifier = Modifier
-                            .offset {
-                                // Сдвигаем на 12.dp (размер badge / 2), чтобы центр badge совпал с (cx, cy)
-                                IntOffset(cx.roundToInt(), cy.roundToInt())
-                            }
-                            .graphicsLayer {
-                                // Читаем scale лениво, в фазе отрисовки — иначе весь список
-                                // номеров пересобирался бы заново на каждом кадре пинч-зума.
-                                val s = (1f / scale).coerceIn(0.6f, 1f)
-                                scaleX = s
-                                scaleY = s
-                            }
+                        // Читаем scale лениво, в фазе отрисовки — иначе весь список
+                        // номеров пересобирался бы заново на каждом кадре пинч-зума.
+                        badgeScale = { (1f / scale).coerceIn(0.6f, 1f) },
+                        // Точка (cx, cy); по центру её ставит сам значок — ширина у него разная
+                        modifier = Modifier.offset { IntOffset(cx.roundToInt(), cy.roundToInt()) }
                     )
                 }
             }
@@ -250,22 +270,36 @@ fun UnitSchemeWithMap(
 }
 
 @Composable
-private fun NumberBadge(text: String, selected: Boolean, modifier: Modifier = Modifier) {
+private fun NumberBadge(text: String, selected: Boolean, badgeScale: () -> Float, modifier: Modifier = Modifier) {
     val bg = if (selected) Color(0xFFF08A24) else Color(0xAA1C3A6E)
     Box(
         modifier = modifier
-            // Сдвигаем чуть больше влево и вверх (-14dp вместо -12dp), 
-            // так как пользователь просил "чуть левее и вверх"
-            .offset((-14).dp, (-14).dp)
-            .size(24.dp)
-            .background(bg, CircleShape),
+            // Центр значка — в заданной точке, чуть левее и выше (как просили: на 2dp)
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+                val shift = 2.dp.roundToPx()
+                layout(placeable.width, placeable.height) {
+                    placeable.place(-placeable.width / 2 - shift, -placeable.height / 2 - shift)
+                }
+            }
+            .graphicsLayer {
+                val s = badgeScale()
+                scaleX = s
+                scaleY = s
+            }
+            // «Пилюля»: номера из 4–6 знаков не обрезаются
+            .widthIn(min = 24.dp)
+            .height(24.dp)
+            .background(bg, CircleShape)
+            .padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = text,
             color = Color.White,
             style = MaterialTheme.typography.labelSmall,
-            maxLines = 1
+            maxLines = 1,
+            softWrap = false
         )
     }
 }

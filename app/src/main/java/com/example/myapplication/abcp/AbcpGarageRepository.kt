@@ -54,9 +54,10 @@ class AbcpGarageRepository(
             return arr.mapNotNull { el ->
                 val o = el.asJsonObject
 
+                // Пустое поле пропускаем: у машины, сохранённой по кузову или госномеру, "vin": ""
                 val vin = listOf("vin", "VIN", "frame", "body", "chassis", "vehicleRegPlate")
                     .firstNotNullOfOrNull { key ->
-                        o.get(key)?.takeIf { it.isJsonPrimitive }?.asString
+                        o.get(key)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
                     }
                     ?.trim()
                     .orEmpty()
