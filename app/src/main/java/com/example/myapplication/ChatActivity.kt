@@ -22,6 +22,10 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -55,6 +59,9 @@ class ChatActivity : ComponentActivity() {
     private var failed by mutableStateOf(false)
     private var native by mutableStateOf<Boolean?>(null)
 
+    /** Фон страницы веб-чата (#RRGGBB): в тёмной теме — фон темы; ставится до создания WebView */
+    private var webBg = LIGHT_BG
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +74,8 @@ class ChatActivity : ComponentActivity() {
         }
 
         val web by lazy { WebView(this).apply {
+            // Свой фон и у самого WebView — без белой вспышки в тёмной теме, пока страница грузится
+            runCatching { setBackgroundColor(android.graphics.Color.parseColor(webBg)) }
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             CookieManager.getInstance().setAcceptCookie(true)
@@ -92,7 +101,7 @@ class ChatActivity : ComponentActivity() {
                     loading = false
                     // Старые WebView без DOCUMENT_START_SCRIPT — хотя бы стили
                     if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                        view.evaluateJavascript(STYLE_JS, null)
+                        view.evaluateJavascript(styleJs(webBg), null)
                     }
                 }
 
@@ -128,6 +137,9 @@ class ChatActivity : ComponentActivity() {
 
         setContent {
             AvtodrugTheme {
+                // Тёмная тема — фон веб-чата из темы (раньше всегда был светлый); светлая — прежний
+                webBg = if (androidx.compose.foundation.isSystemInDarkTheme())
+                    String.format("#%06X", 0xFFFFFF and MaterialTheme.colorScheme.background.toArgb()) else LIGHT_BG
                 var callMenu by remember { mutableStateOf(false) }
                 Scaffold(
                     topBar = {
@@ -135,14 +147,22 @@ class ChatActivity : ComponentActivity() {
                             navigationIcon = { com.example.myapplication.ui.BackButton() },
                             title = {
                                 Column {
-                                    Text("Чат с менеджером")
-                                    Text(StoreInfo.hours, style = MaterialTheme.typography.bodySmall)
+                                    // Одна строка с многоточием: на узком экране кнопки справа не должны ломать шапку
+                                    Text("Чат с менеджером", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        StoreInfo.hours, style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                             },
                             actions = {
-                                TextButton(onClick = {
-                                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(StoreInfo.maxChatUrl))) }
-                                }) { Text("MAX") }
+                                TextButton(
+                                    onClick = {
+                                        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(StoreInfo.maxChatUrl))) }
+                                    },
+                                    // Для озвучки экрана: «MAX» само по себе непонятно
+                                    modifier = Modifier.semantics { contentDescription = "Написать в MAX" }
+                                ) { Text("MAX") }
                                 Box {
                                     IconButton(onClick = { callMenu = true }) { Icon(Icons.Default.Call, "Позвонить") }
                                     DropdownMenu(expanded = callMenu, onDismissRequest = { callMenu = false }) {
@@ -185,7 +205,7 @@ class ChatActivity : ComponentActivity() {
     private fun startScript(): String {
         val session = SessionManager(this)
         val user = session.userJson()?.let { runCatching { Gson().fromJson(it, UserInfoDto::class.java) }.getOrNull() }
-        val sb = StringBuilder(STYLE_JS)
+        val sb = StringBuilder(styleJs(webBg))
         if (session.isLoggedIn() && user != null) {
             val register = JSONObject().apply {
                 // Виджет принимает только name, lastName, email, www, gender, position — телефона тут нет
@@ -247,22 +267,32 @@ class ChatActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        visible = true
         // Чат открыт — уведомление «Менеджер ответил» снимаем (7002 — id из showChatNotification в abcp/OrderStatusWatch.kt)
         runCatching { androidx.core.app.NotificationManagerCompat.from(this).cancel(7002) }
     }
 
     override fun onPause() {
         super.onPause()
+        visible = false
         CookieManager.getInstance().flush() // не потерять сессию чата
     }
 
     companion object {
-        /** Страница Битрикса в стиле приложения: без их шапки (есть наша), без обоев, фон как в приложении. */
-        private val STYLE_JS = """
+        /** Чат сейчас на экране — уведомление «Менеджер ответил» не нужно (push/Push.kt) */
+        @Volatile
+        var visible = false
+            private set
+
+        /** Фон веб-чата в светлой теме */
+        private const val LIGHT_BG = "#F3F5F9"
+
+        /** Страница Битрикса в стиле приложения: без их шапки (есть наша), без обоев, фон bg (#RRGGBB) — как в приложении. */
+        private fun styleJs(bg: String) = """
             (function () {
               var css = '.bx-livechat-head-wrap{display:none!important}' +
-                '.bx-livechat-body{background:#F3F5F9!important;background-image:none!important}' +
-                'body,.bx-livechat-wrapper,.bx-livechat-box{background:#F3F5F9!important}' +
+                '.bx-livechat-body{background:$bg!important;background-image:none!important}' +
+                'body,.bx-livechat-wrapper,.bx-livechat-box{background:$bg!important}' +
                 '.bottom-cloud,.left-cloud,.right-cloud{display:none!important}';
               function add() {
                 if (document.getElementById('avtodrug-style')) return;

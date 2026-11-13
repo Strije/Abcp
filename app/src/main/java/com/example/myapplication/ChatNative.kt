@@ -27,10 +27,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** unsure — отправка оборвалась без ответа сервера: сообщение могло дойти. */
+/**
+ * unsure — отправка оборвалась без ответа сервера: сообщение могло дойти.
+ * clientId — метка своего сообщения (у серверных пусто): повторная отправка идёт с той же меткой,
+ * и сервер по ней не создаёт дубль.
+ */
 data class ChatMessage(
     val id: Long, val dir: String, val text: String, val author: String, val ts: Long,
-    val failed: Boolean = false, val unsure: Boolean = false
+    val failed: Boolean = false, val unsure: Boolean = false, val clientId: String = ""
 )
 
 /** Столько символов принимает сервер (ChatIn.text в app/main.py). */
@@ -121,13 +125,17 @@ fun NativeChat(modifier: Modifier = Modifier) {
         if (text.isBlank() || pending != null) return
         val known = messages.filter { it.id > 0 }.maxOfOrNull { it.id } ?: 0L
         val now = System.currentTimeMillis()
-        val local = ChatMessage(-now, "in", text, "", now / 1000)
+        // Повтор «неотправленного» — с прежней меткой: если то сообщение всё же дошло, сервер вернёт его же номер
+        val clientId = retryOf?.clientId?.takeIf { it.isNotBlank() } ?: java.util.UUID.randomUUID().toString()
+        val local = ChatMessage(-now, "in", text, "", now / 1000, clientId = clientId)
         messages = sortChat(messages.filter { it.id != retryOf?.id } + local)
         pending = local to known
         scope.launch {
-            val ok = runCatching { server.chatSend(text) }
+            val ok = runCatching { server.chatSend(text, clientId = clientId) }
             val id = ok.getOrNull()
             if (id != null) {
+                // Повтор мог вернуть номер копии, которую прятали после отказа, — теперь она настоящая
+                hidden = hidden - id
                 messages = confirmSent(messages, local, id)
                 Analytics.event("chat_send")
             } else {

@@ -158,9 +158,12 @@ class VinSearchActivity : ComponentActivity() {
                                 1 -> { vinText = codes[0].value; onSearchClick() }
                                 else -> scanChoices = codes
                             }
-                        } catch (e: Exception) {
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            // Throwable: нехватка памяти на огромном снимке — не Exception
                             com.example.myapplication.Analytics.error("Подбор → распознавание фото", e)
-                            error = "Не удалось распознать фото: ${e.message ?: e.javaClass.simpleName}"
+                            error = "Не удалось распознать фото. Попробуйте снять ещё раз или введите номер вручную."
                         } finally {
                             scanning = false
                         }
@@ -238,20 +241,35 @@ class VinSearchActivity : ComponentActivity() {
                                     DropdownMenu(expanded = scanMenu, onDismissRequest = { scanMenu = false }) {
                                         DropdownMenuItem(
                                             text = { Text("Сфотографировать VIN, СТС или номер") },
-                                            onClick = { scanMenu = false; takePhoto.launch(photoUri) }
+                                            onClick = {
+                                                scanMenu = false
+                                                // Приложения камеры на телефоне может не быть — launch тогда бросает исключение
+                                                try {
+                                                    takePhoto.launch(photoUri)
+                                                } catch (e: android.content.ActivityNotFoundException) {
+                                                    error = "Не нашлось приложения камеры. Выберите фото из галереи или введите номер вручную."
+                                                }
+                                            }
                                         )
                                         DropdownMenuItem(
                                             text = { Text("Выбрать фото из галереи") },
-                                            onClick = { scanMenu = false; pickPhoto.launch("image/*") }
+                                            onClick = {
+                                                scanMenu = false
+                                                try {
+                                                    pickPhoto.launch("image/*")
+                                                } catch (e: android.content.ActivityNotFoundException) {
+                                                    error = "Не нашлось приложения для выбора фото. Введите номер вручную."
+                                                }
+                                            }
                                         )
                                     }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
-                        OneTimeHint("vin_photo", "Нажмите 📷 в поле — и сфотографируйте табличку VIN, СТС или номер машины. Вводить руками не нужно.")
+                        // Одна подсказка про фото (раньше была ещё разовая карточка с тем же текстом)
                         Text(
-                            "Можно сфотографировать табличку VIN, СТС или номер машины — распознаем сами",
+                            "Нажмите 📷 в поле и сфотографируйте табличку VIN, СТС или номер машины — распознаем сами",
                             style = MaterialTheme.typography.bodySmall
                         )
 
@@ -387,9 +405,11 @@ class VinSearchActivity : ComponentActivity() {
 
 
 /** Текст с фото через ML Kit (модель встроена в приложение — работает без интернета и Google-сервисов). */
-suspend fun recognizeText(ctx: android.content.Context, uri: android.net.Uri): String =
-    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-        val image = com.google.mlkit.vision.common.InputImage.fromFilePath(ctx, uri)
+suspend fun recognizeText(ctx: android.content.Context, uri: android.net.Uri): String {
+    // Уменьшенный снимок, декодирование не на главном потоке (см. loadScanPhoto в ScanCodes.kt)
+    val photo = loadScanPhoto(ctx, uri)
+    return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        val image = com.google.mlkit.vision.common.InputImage.fromBitmap(photo.bitmap, photo.rotation)
         val client = com.google.mlkit.vision.text.TextRecognition.getClient(
             com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS
         )
@@ -397,3 +417,4 @@ suspend fun recognizeText(ctx: android.content.Context, uri: android.net.Uri): S
             .addOnSuccessListener { cont.resumeWith(Result.success(it.text)); client.close() }
             .addOnFailureListener { cont.resumeWith(Result.failure(it)); client.close() }
     }
+}

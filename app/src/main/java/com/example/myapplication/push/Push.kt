@@ -28,6 +28,8 @@ object Push {
     private const val TAG = "PUSH"
     private const val PREFS = "push"
     private const val TOKEN = "token"
+    /** Токен, который не удалось удалить с сервера при выходе (не было сети) — удаляем при следующем случае */
+    private const val PENDING_DELETE = "pending_delete"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
@@ -36,6 +38,7 @@ object Push {
      */
     fun register(ctx: Context) {
         val app = ctx.applicationContext
+        retryUnregister(app)
         val noRuStore = {
             Fcm.token { f -> if (f != null) scope.launch { send(app, "fcm:$f", null) } else OrderStatusWatch.schedule(app) }
         }
@@ -53,7 +56,15 @@ object Push {
         if (!SessionManager(ctx).isLoggedIn()) return
         runCatching { AppServer(ctx).pushToken(token, fcm) }
             .onSuccess { enabled ->
-                ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(TOKEN, token).apply()
+                val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                val pending = p.getString(PENDING_DELETE, null)
+                // Этот же токен ждал удаления после выхода, а теперь зарегистрирован заново (вошёл другой клиент) —
+                // удалять его нельзя, просто снимаем пометку
+                val edit = p.edit().putString(TOKEN, token)
+                if (pending == token) edit.remove(PENDING_DELETE)
+                edit.apply()
+                // Ждал удаления другой токен (он успел смениться) — сеть есть, удаляем
+                if (pending != null && pending != token) deletePending(ctx)
                 // Сервер шлёт push — своя проверка реже, как страховка; дублей нет: общие отметки показанного
                 OrderStatusWatch.schedule(ctx, pushWorks = enabled)
             }
@@ -62,11 +73,38 @@ object Push {
 
     /** При выходе: сервер забывает устройство, чтобы уведомления прошлого клиента сюда не шли. */
     fun unregister(ctx: Context) {
-        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val token = p.getString(TOKEN, null) ?: return
-        p.edit().clear().apply()
         val app = ctx.applicationContext
-        scope.launch { runCatching { AppServer(app).pushTokenDelete(token) } }
+        val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val token = p.getString(TOKEN, null) ?: p.getString(PENDING_DELETE, null) ?: return
+        // Запоминаем токен до ответа сервера: нет сети — удаление повторится (retryUnregister, следующая регистрация)
+        p.edit().clear().putString(PENDING_DELETE, token).apply()
+        scope.launch { deletePending(app) }
+    }
+
+    /**
+     * Повтор удаления токена, не удавшегося при выходе: иначе сервер продолжит слать сюда уведомления прежнего
+     * клиента. Вызывается при запуске; пока клиент в аккаунте, ничего не делает — тогда решает регистрация (send).
+     */
+    fun retryUnregister(ctx: Context) {
+        val app = ctx.applicationContext
+        if (SessionManager(app).isLoggedIn()) return
+        if (app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(PENDING_DELETE, null) == null) return
+        scope.launch { deletePending(app) }
+    }
+
+    private suspend fun deletePending(ctx: Context) {
+        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val token = p.getString(PENDING_DELETE, null) ?: return
+        // Тот же токен уже зарегистрирован заново — он принадлежит новому клиенту, удалять нельзя
+        if (token == p.getString(TOKEN, null)) {
+            p.edit().remove(PENDING_DELETE).apply()
+            return
+        }
+        runCatching { AppServer(ctx).pushTokenDelete(token) }.onSuccess {
+            if (p.getString(PENDING_DELETE, null) == token) p.edit().remove(PENDING_DELETE).apply()
+            // Пока шёл запрос, этот токен успели зарегистрировать на нового клиента — возвращаем его серверу
+            if (p.getString(TOKEN, null) == token) register(ctx)
+        }
     }
 
     /** Push от сервера: показать уведомление и записать в ленту, как при обычной проверке. */
@@ -103,6 +141,8 @@ object Push {
         val loggedIn = SessionManager(ctx).isLoggedIn()
         if (data["type"] == "chat") {
             if (!loggedIn) return
+            // Чат на экране — ответ и так появится в переписке (её опрос — раз в 5 секунд)
+            if (com.example.myapplication.ChatActivity.visible) return
             com.example.myapplication.abcp.showChatNotification(ctx, data["title"] ?: "Менеджер ответил", data["body"].orEmpty(), data["link"])
             return
         }

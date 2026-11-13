@@ -32,26 +32,32 @@ class LaximoRepository(private val client: LaximoClient) {
         return if (plate != null) findVehicleByPlate(plate) else findVehicle(query)
     }
 
-    suspend fun listCategories(ctx: LaximoVehicleContext): List<LaximoCategory> = withContext(Dispatchers.IO) {
+    /**
+     * Разделы каталога одного уровня: parentId = null — корень (categoryId = -1), иначе подразделы этого раздела
+     * (в ctx.ssd тогда — SSD раздела).
+     */
+    suspend fun listCategories(ctx: LaximoVehicleContext, parentId: String? = null): List<LaximoCategory> = withContext(Dispatchers.IO) {
         val raw = client.post(
             "listCategories",
             mapOf(
                 "catalog" to ctx.catalog,
                 "ssd" to ctx.ssd,
                 "vehicleId" to ctx.vehicleId,
-                "categoryId" to "-1"
+                "categoryId" to (parentId ?: "-1")
             )
         )
         val arr = JsonParser.parseString(raw).asJsonArray
-        arr.map { el ->
+        val all = arr.map { el ->
             val o = el.asJsonObject
             LaximoCategory(
                 categoryId = o.stringOrNullAny("categoryId", "id") ?: "",
                 name = o.stringOrNullAny("name") ?: "Без названия",
                 ssd = o.stringOrNullAny("ssd") ?: ctx.ssd,
-                childrens = o.booleanOrFalse("childrens")
+                childrens = o.booleanOrFalse("childrens"),
+                parentId = o.stringOrNullAny("parentCategoryId")
             )
         }
+        categoriesOfLevel(all, parentId)
     }
 
     suspend fun listUnits(ctx: LaximoVehicleContext, category: LaximoCategory): List<LaximoUnit> = withContext(Dispatchers.IO) {
@@ -226,6 +232,24 @@ class LaximoRepository(private val client: LaximoClient) {
         }.orEmpty()
         return LaximoQuickGroupNode(name = name, quickGroupId = qid, children = children, synonyms = syn)
     }
+}
+
+/**
+ * Разделы одного уровня из ответа listCategories. У части каталогов (GM) Laximo на любой запрос отдаёт
+ * весь плоский список с родителями — оставляем только детей нужного раздела (parentId = null — корневые).
+ */
+internal fun categoriesOfLevel(all: List<LaximoCategory>, parentId: String?): List<LaximoCategory> {
+    fun isRoot(c: LaximoCategory) = c.parentId.isNullOrBlank() || c.parentId == "0" || c.parentId == "-1"
+    if (parentId == null) {
+        // Родители не указаны понятным образом — показываем всё, что пришло
+        return all.filter(::isRoot).ifEmpty { all }
+    }
+    // Сам раздел среди своих детей — иначе переход шёл бы по кругу
+    val others = all.filter { it.categoryId != parentId }
+    val marked = others.filter { it.parentId == parentId }
+    if (marked.isNotEmpty()) return marked
+    // Родитель не указан ни у кого — каталог прислал только детей этого раздела; указан, но другой — детей нет
+    return if (others.all { it.parentId.isNullOrBlank() }) others else emptyList()
 }
 
 private fun parseVehicleContexts(raw: String): List<LaximoVehicleContext> {

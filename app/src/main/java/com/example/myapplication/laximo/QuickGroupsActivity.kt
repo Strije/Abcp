@@ -43,20 +43,26 @@ class QuickGroupsActivity : ComponentActivity() {
 
         val ctx = LaximoVehicleContext(catalog = catalog, vehicleId = vehicleId, ssd = ssd)
         // Машина — в заголовке, чтобы было видно, для чего подбираем
-        val car = "${intent.getStringExtra("brand").orEmpty()} ${intent.getStringExtra("name").orEmpty()}".trim()
-        CurrentCar.brand = intent.getStringExtra("brand").orEmpty()
+        val brand = intent.getStringExtra("brand").orEmpty()
+        val carName = intent.getStringExtra("name").orEmpty()
+        CurrentCar.brand = brand
 
         setContent {
-            com.example.myapplication.ui.theme.AvtodrugTheme { QuickGroupsScreen(ctx, repo, car, intent.getStringExtra("query").orEmpty()) }
+            com.example.myapplication.ui.theme.AvtodrugTheme {
+                QuickGroupsScreen(ctx, repo, brand, carName, intent.getStringExtra("query").orEmpty())
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository, car: String, initialQuery: String = "") {
+private fun QuickGroupsScreen(
+    ctx: LaximoVehicleContext, repo: LaximoRepository, brand: String, carName: String, initialQuery: String = ""
+) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val car = "$brand $carName".trim()
 
     var root by remember { mutableStateOf<LaximoQuickGroupNode?>(null) }
     var selectedGroup by remember { mutableStateOf<LaximoQuickGroupNode?>(null) }
@@ -107,6 +113,9 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
             putExtra("unitId", unit.unitId)
             putExtra("unitName", unit.name)
             putExtra("imageUrl", resolveLaximoImageUrl(unit.largeImageUrl ?: unit.imageUrl, LaximoImageSize.SOURCE))
+            // Машина — по цепочке экранов: статическая CurrentCar после выгрузки процесса пустая
+            putExtra("brand", brand)
+            putExtra("name", carName)
         }
         context.startActivity(i)
     }
@@ -117,6 +126,8 @@ private fun QuickGroupsScreen(ctx: LaximoVehicleContext, repo: LaximoRepository,
             putExtra("catalog", ctx.catalog)
             putExtra("vehicleId", ctx.vehicleId)
             putExtra("ssd", ctx.ssd)
+            putExtra("brand", brand)
+            putExtra("name", carName)
         }
         context.startActivity(i)
     }

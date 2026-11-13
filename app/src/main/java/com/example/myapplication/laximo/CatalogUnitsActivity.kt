@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.ImageLoader
 import coil.compose.SubcomposeAsyncImage
@@ -45,6 +46,10 @@ class CatalogUnitsActivity : ComponentActivity() {
         val ssd = intent.getStringExtra("ssd").orEmpty() // SSD категории!
         val categoryId = intent.getStringExtra("categoryId").orEmpty()
         val categoryName = intent.getStringExtra("categoryName").orEmpty()
+        // Машина — подзаголовком и дальше на экран узла (бренд нужен кнопке «Цены»)
+        val brand = intent.getStringExtra("brand").orEmpty()
+        val carName = intent.getStringExtra("name").orEmpty()
+        val car = "$brand $carName".trim()
 
         val ctx = LaximoVehicleContext(catalog = catalog, vehicleId = vehicleId, ssd = ssd)
         val category = LaximoCategory(
@@ -93,7 +98,14 @@ class CatalogUnitsActivity : ComponentActivity() {
                 }
 
                 Scaffold(
-                    topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = { Text(categoryName.ifBlank { "Узлы" }) }) }
+                    topBar = { TopAppBar(navigationIcon = { com.example.myapplication.ui.BackButton() }, title = {
+                        Column {
+                            Text(categoryName.ifBlank { "Узлы" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (car.isNotBlank()) Text(
+                                car, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }) }
                 ) { padding ->
                     Box(Modifier.fillMaxSize().padding(padding)) {
                         when {
@@ -132,6 +144,8 @@ class CatalogUnitsActivity : ComponentActivity() {
 
                                                     // Уже "починенный" адрес схемы в исходном размере
                                                     i.putExtra("imageUrl", fullUrl)
+                                                    i.putExtra("brand", brand)
+                                                    i.putExtra("name", carName)
 
                                                     startActivity(i)
                                                 }

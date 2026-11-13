@@ -104,6 +104,16 @@ fun GarageScreen() {
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // Обновить не вышло, а список уже показан — говорим об этом, а не молчим
+                error?.let { msg ->
+                    item {
+                        Text(
+                            "$msg Показан прежний список — потяните вниз, чтобы обновить.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
                 item { com.example.myapplication.OneTimeHint("garage_star", "Нажмите ☆ у машины — она станет «Моей машиной» на главной, и запчасти для неё будут в одно касание.") }
                 items(list.sortedByDescending { it.vin == favorite }) { car ->
                     val isFav = car.vin == favorite

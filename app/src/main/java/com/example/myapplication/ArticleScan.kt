@@ -28,9 +28,19 @@ fun extractArticleCandidates(text: String, barcodes: List<String> = emptyList())
     return (barcodes.filter { it.length in 4..24 } + ranked).distinctBy { it.uppercase().replace(" ", "") }.take(8)
 }
 
-suspend fun scanBarcodes(ctx: Context, uri: Uri): List<String> = suspendCancellableCoroutine { cont ->
-    val scanner = BarcodeScanning.getClient()
-    scanner.process(InputImage.fromFilePath(ctx, uri))
-        .addOnSuccessListener { list -> cont.resumeWith(Result.success(list.mapNotNull { it.rawValue?.trim() })); scanner.close() }
-        .addOnFailureListener { cont.resumeWith(Result.success(emptyList())); scanner.close() }
+suspend fun scanBarcodes(ctx: Context, uri: Uri): List<String> {
+    // Уменьшенный снимок (см. loadScanPhoto): полный на 50–108 Мп не помещается в память. Не прочитался — штрихкодов нет
+    val photo = try {
+        loadScanPhoto(ctx, uri)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        return emptyList()
+    }
+    return suspendCancellableCoroutine { cont ->
+        val scanner = BarcodeScanning.getClient()
+        scanner.process(InputImage.fromBitmap(photo.bitmap, photo.rotation))
+            .addOnSuccessListener { list -> cont.resumeWith(Result.success(list.mapNotNull { it.rawValue?.trim() })); scanner.close() }
+            .addOnFailureListener { cont.resumeWith(Result.success(emptyList())); scanner.close() }
+    }
 }

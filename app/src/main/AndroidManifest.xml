@@ -86,7 +86,7 @@
             android:value="order_status" />
         <meta-data
             android:name="ru.rustore.sdk.pushclient.default_notification_icon"
-            android:resource="@mipmap/ic_launcher" />
+            android:resource="@drawable/ic_notification" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

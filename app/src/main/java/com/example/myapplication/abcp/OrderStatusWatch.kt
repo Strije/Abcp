@@ -85,6 +85,19 @@ fun takeUnshown(shown: Map<String, Long>, changed: List<PositionStatus>, now: Lo
     return fresh to kept
 }
 
+/**
+ * Статус, после которого позиция больше не меняется (выдано, отказ, возврат, отмена).
+ * По названию: в снимке хранятся только названия статусов. Незнакомый статус считаем незавершённым.
+ */
+fun isClosedStatus(status: String): Boolean {
+    val s = status.trim().lowercase()
+    return listOf("выдан", "отказ", "возврат", "отмен", "аннулир").any { it in s }
+}
+
+/** Есть ли в снимке (позиция → статус) хоть одна незавершённая позиция. Снимка ещё нет (null) — считаем, что есть. */
+fun hasActiveOrders(snapshot: Map<String, String>?): Boolean =
+    snapshot == null || snapshot.values.any { !isClosedStatus(it) }
+
 /** Запись ленты: когда, какой заказ, какая позиция, новый статус. */
 data class FeedItem(val time: Long, val order: String, val title: String, val status: String)
 
@@ -102,6 +115,11 @@ object OrderStatusWatch {
     /** Не чаще раза в 5 минут — бережём ABCP (открыли-закрыли приложение десять раз подряд — один запрос) */
     const val MIN_INTERVAL_MS = 5L * 60 * 1000
     private const val NEWS_ID = 7003
+    /** Как запланирована проверка: работает ли push и какой период стоит сейчас (минуты) */
+    private const val PUSH_WORKS = "push_works"
+    private const val PERIOD_MIN = "period_min"
+    /** Незавершённых заказов нет — проверяем редко */
+    private const val IDLE_PERIOD_MIN = 6L * 60
 
     private val mutex = Mutex()   // один запрос orders?format=p за раз
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -111,10 +129,49 @@ object OrderStatusWatch {
      * (Xiaomi усыпляет RuStore); push нет — раз в 20 минут. UPDATE — поменять период у уже запланированной.
      */
     fun schedule(ctx: Context, pushWorks: Boolean = false) {
-        val req = PeriodicWorkRequestBuilder<OrderStatusWorker>(if (pushWorks) 30L else 20L, TimeUnit.MINUTES)
+        val app = ctx.applicationContext
+        val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val minutes = periodMinutes(app, pushWorks)
+        p.edit().putBoolean(PUSH_WORKS, pushWorks).putLong(PERIOD_MIN, minutes).apply()
+        val req = PeriodicWorkRequestBuilder<OrderStatusWorker>(minutes, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-        WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, req)
+        WorkManager.getInstance(app).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, req)
+    }
+
+    /**
+     * Период проверки, минуты. По последнему снимку нет ни одного незавершённого заказа — раз в 6 часов
+     * (иначе проверка шла бы у всех каждые 20–30 минут бессрочно); снимка ещё нет или он устарел — обычный.
+     */
+    private fun periodMinutes(ctx: Context, pushWorks: Boolean): Long {
+        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val snapshot = load(ctx).takeIf { p.getBoolean(FRESH, false) }
+        return if (!hasActiveOrders(snapshot)) IDLE_PERIOD_MIN else if (pushWorks) 30L else 20L
+    }
+
+    /**
+     * После проверки: появился незавершённый заказ — возвращаем обычный период, все завершены — ставим редкий.
+     * Работает, только если проверка уже запланирована (после входа её планирует Push.register).
+     */
+    private fun reschedule(ctx: Context) {
+        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val planned = p.getLong(PERIOD_MIN, 0)
+        if (planned <= 0) return
+        val pushWorks = p.getBoolean(PUSH_WORKS, false)
+        if (periodMinutes(ctx, pushWorks) != planned) schedule(ctx, pushWorks)
+    }
+
+    /**
+     * Заказ только что оформлен: возвращаем обычный период проверки, не дожидаясь следующей сверки
+     * (для экрана оформления; без вызова период вернётся при первой же сверке — при открытии главного экрана).
+     */
+    fun onOrderPlaced(ctx: Context) {
+        val app = ctx.applicationContext
+        val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (p.getLong(PERIOD_MIN, 0) != IDLE_PERIOD_MIN) return
+        // Снимок устарел: в нём нет нового заказа — следующая сверка запомнит его заново
+        p.edit().putBoolean(FRESH, false).apply()
+        schedule(app, p.getBoolean(PUSH_WORKS, false))
     }
 
     /** Отмечает изменения как показанные; возвращает те, что ещё не показывали. Общий для push и проверки. */
@@ -148,6 +205,7 @@ object OrderStatusWatch {
         val previous = load(app).takeIf { p.getBoolean(FRESH, false) }
         save(app, now)
         p.edit().putBoolean(FRESH, true).apply()
+        runCatching { reschedule(app) }
         // Первый раз — только запоминаем, чтобы не завалить уведомлениями по старым заказам
         if (previous == null) return@withLock emptyMap()
 
@@ -212,7 +270,7 @@ object OrderStatusWatch {
         val lines = changed.take(8).joinToString("\n") { "№ ${it.order}: ${it.title} — ${it.status}" } +
             (if (changed.size > 8) "\n…и ещё ${changed.size - 8}" else "")
         val n = NotificationCompat.Builder(ctx, CHANNEL)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Есть новости по заказам")
             .setContentText(if (changed.size == 1) "№ ${changed[0].order}: ${changed[0].status}" else "Изменились статусы: ${changed.size} поз.")
             .setStyle(NotificationCompat.BigTextStyle().bigText(lines))
@@ -271,9 +329,11 @@ fun showOrderNotification(
     ) return
     OrderStatusWatch.ensureChannel(ctx)
 
-    val intent = linkIntent(ctx, link) ?: if (order != null)
-        Intent(ctx, OrderDetailsActivity::class.java).putExtra(OrderDetailsActivity.EXTRA_ORDER_NUMBER, order)
-    else Intent(ctx, com.example.myapplication.MainActivity::class.java)
+    // Заказ открываем через общую точку входа для ссылок: она кладёт под заказ главный экран и проверяет вход
+    // (раньше экран заказа открывался напрямую — «назад» вела на рабочий стол, гость видел пустой экран)
+    val intent = linkIntent(ctx, link)
+        ?: order?.let { linkIntent(ctx, "${com.example.myapplication.DeepLink.SCHEME}://order/$it") }
+        ?: Intent(ctx, com.example.myapplication.MainActivity::class.java)
     val open = PendingIntent.getActivity(
         ctx, (order ?: "push").hashCode() + (link?.hashCode() ?: 0),
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -288,7 +348,7 @@ fun showOrderNotification(
     val lines = customText ?: changed.joinToString("\n") { "${it.title} — ${it.status}" }
 
     val n = NotificationCompat.Builder(ctx, OrderStatusWatch.CHANNEL)
-        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(title)
         .setContentText(customText ?: if (changed.size == 1) first?.title else "${changed.size} поз.")
         .setStyle(NotificationCompat.BigTextStyle().bigText(lines))
@@ -326,7 +386,7 @@ fun showPromoNotification(ctx: Context, title: String, text: String, link: Strin
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
     val n = NotificationCompat.Builder(ctx, PROMO_CHANNEL)
-        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(title)
         .setContentText(text)
         .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -369,7 +429,7 @@ fun showChatNotification(ctx: Context, title: String, text: String, link: String
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
     val n = NotificationCompat.Builder(ctx, "chat")
-        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(title)
         .setContentText(text)
         .setStyle(NotificationCompat.BigTextStyle().bigText(text))

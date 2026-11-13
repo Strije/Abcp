@@ -13,7 +13,9 @@ data class LaximoCategory(
     val categoryId: String,
     val name: String,
     val ssd: String,
-    val childrens: Boolean
+    val childrens: Boolean,
+    /** Родительский раздел, если каталог его прислал (у корневых — пусто или «0») */
+    val parentId: String? = null
 )
 
 data class LaximoUnit(

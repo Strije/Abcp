@@ -46,8 +46,24 @@ object News {
 
     data class Item(val url: String, val html: String)
 
+    /** Сколько живёт загруженный список: при каждом возврате на главную заново не запрашиваем */
+    private const val CACHE_MS = 15L * 60 * 1000
+
+    /** Последний загруженный список и когда он загружен (в памяти, до выгрузки приложения) */
+    @Volatile private var cache: Pair<Long, List<Item>>? = null
+
+    /** Последний загруженный список, даже устаревший: показываем сразу, чтобы блок не «прыгал». */
+    fun last(): List<Item> = cache?.second.orEmpty()
+
+    /** Список свежий (моложе 15 минут) — запрашивать заново не нужно. */
+    fun isFresh(now: Long = System.currentTimeMillis()): Boolean =
+        cache?.let { now - it.first in 0 until CACHE_MS } == true
+
     suspend fun load(): List<Item> = coroutineScope {
-        pages.map { url -> async { loadOne(url) } }.awaitAll().filterNotNull()
+        val items = pages.map { url -> async { loadOne(url) } }.awaitAll().filterNotNull()
+        // Пустой ответ не запоминаем: это может быть обрыв связи — в следующий раз попробуем ещё
+        if (items.isNotEmpty()) cache = System.currentTimeMillis() to items
+        items
     }
 
     /** Одна страница новости; null — нет сети или новость туда не положена. */
@@ -97,8 +113,14 @@ private fun newsWebView(ctx: Context, html: String, dark: Boolean, interactive: 
 @Composable
 fun NewsCarousel() {
     val ctx = LocalContext.current
-    var items by remember { mutableStateOf<List<News.Item>>(emptyList()) }
-    LaunchedEffect(Unit) { items = runCatching { News.load() }.getOrDefault(emptyList()) }
+    // Сразу — из памяти; запрос — только если списку больше 15 минут (не удался — остаётся прежний)
+    var items by remember { mutableStateOf(News.last()) }
+    LaunchedEffect(Unit) {
+        if (!News.isFresh()) {
+            val fresh = runCatching { News.load() }.getOrDefault(emptyList())
+            if (fresh.isNotEmpty() || items.isEmpty()) items = fresh
+        }
+    }
     if (items.isEmpty()) return
     val dark = androidx.compose.foundation.isSystemInDarkTheme()
 

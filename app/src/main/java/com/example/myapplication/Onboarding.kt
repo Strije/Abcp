@@ -12,8 +12,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +33,10 @@ object Tips {
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("tips", Context.MODE_PRIVATE)
     fun onboardingDone(ctx: Context) = prefs(ctx).getBoolean("onboarding", false)
     fun setOnboardingDone(ctx: Context) = prefs(ctx).edit().putBoolean("onboarding", true).apply()
+    /** На обучении нажали «Начать без уведомлений» — сразу после входа разрешение повторно не спрашиваем */
+    fun notificationsDeclined(ctx: Context) = prefs(ctx).getBoolean("notifications_declined", false)
+    fun setNotificationsDeclined(ctx: Context, declined: Boolean) =
+        prefs(ctx).edit().putBoolean("notifications_declined", declined).apply()
     fun seen(ctx: Context, key: String) = prefs(ctx).getBoolean("hint_$key", false)
     fun markSeen(ctx: Context, key: String) = prefs(ctx).edit().putBoolean("hint_$key", true).apply()
 }
@@ -61,7 +67,8 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         HorizontalPager(state = pager, modifier = Modifier.weight(1f)) { i ->
             val s = SLIDES[i]
             Column(
-                Modifier.fillMaxSize(),
+                // Крупный шрифт: текст слайда не обрезается, а прокручивается (короткий — по-прежнему по центру)
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -93,14 +100,20 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 when {
                     !last -> scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED ->
+                        ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED -> {
+                        Tips.setNotificationsDeclined(ctx, false) // передумал — спрашиваем
                         askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
                     else -> finish()
                 }
             },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text(if (last) "Включить уведомления и начать" else "Далее") }
-        if (last) TextButton(onClick = { finish() }, modifier = Modifier.fillMaxWidth()) { Text("Начать без уведомлений") }
+        if (last) TextButton(
+            // Отказ запоминаем: главный экран не должен тут же спросить разрешение ещё раз
+            onClick = { Tips.setNotificationsDeclined(ctx, true); finish() },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Начать без уведомлений") }
     }
 }
 

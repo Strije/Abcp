@@ -10,7 +10,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -84,6 +88,11 @@ fun UnitSchemeWithMap(
     var scale by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
 
+    // Загрузка картинки: идёт / готово / ошибка; retry — номер попытки («Повторить» грузит заново)
+    var imageLoading by remember(imageUrl) { mutableStateOf(true) }
+    var imageFailed by remember(imageUrl) { mutableStateOf(false) }
+    var retry by remember(imageUrl) { mutableIntStateOf(0) }
+
     // Сдвиг не дальше краёв увеличенной картинки: без приближения она стоит на месте
     fun clampPan(p: Offset, s: Float): Offset {
         val maxX = boxSize.width * (s - 1f).coerceAtLeast(0f) / 2f
@@ -120,13 +129,13 @@ fun UnitSchemeWithMap(
 
     LaunchedEffect(selectedCode, boxSize) {
         if (!selectedCode.isNullOrBlank() && boxSize.width > 0 && boxSize.height > 0) {
-            val itemsWithCode = mapItems.filter { it.code == selectedCode }
-            if (itemsWithCode.isEmpty()) return@LaunchedEffect
+            // Номер бывает на схеме в нескольких местах — приближаем первое (середина между ними — чужая деталь)
+            val zone = mapItems.firstOrNull { it.code == selectedCode } ?: return@LaunchedEffect
 
-            val minX = itemsWithCode.minOf { it.x1 }
-            val maxX = itemsWithCode.maxOf { it.x2 }
-            val minY = itemsWithCode.minOf { it.y1 }
-            val maxY = itemsWithCode.maxOf { it.y2 }
+            val minX = zone.x1
+            val maxX = zone.x2
+            val minY = zone.y1
+            val maxY = zone.y2
 
             val dstW = boxSize.width.toFloat()
             val dstH = boxSize.height.toFloat()
@@ -187,22 +196,37 @@ fun UnitSchemeWithMap(
                     scaleY = scale
                 }
         ) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(imageUrl)
-                    .size(Size.ORIGINAL)
-                    .build(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-                onSuccess = { state ->
-                    val d = state.result.drawable
-                    if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
-                        imageSize = IntSize(d.intrinsicWidth, d.intrinsicHeight)
+            // key(retry): «Повторить» создаёт картинку заново — и она грузится ещё раз
+            key(retry) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(imageUrl)
+                        .size(Size.ORIGINAL)
+                        .build(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                    onLoading = {
+                        imageLoading = true
+                        imageFailed = false
+                    },
+                    onSuccess = { state ->
+                        val d = state.result.drawable
+                        if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                            imageSize = IntSize(d.intrinsicWidth, d.intrinsicHeight)
+                        }
+                        imageLoading = false
+                        imageFailed = false
+                    },
+                    onError = {
+                        imageLoading = false
+                        imageFailed = true
                     }
-                }
-            )
+                )
+            }
 
+            // Номера и зоны — только поверх загруженной схемы
+            if (imageLoading || imageFailed) return@Box
             if (boxSize.width <= 0 || boxSize.height <= 0) return@Box
 
             val dstW = boxSize.width.toFloat()
@@ -240,19 +264,14 @@ fun UnitSchemeWithMap(
 
             // 2. Номера
             if (showNumbers) {
-                val itemsByCode = remember(mapItems) {
-                    mapItems.filter { !it.code.isNullOrBlank() }.groupBy { it.code!! }
-                }
-
-                itemsByCode.forEach { (code, items) ->
+                // Значок на каждой зоне: один номер бывает на схеме в нескольких местах
+                mapItems.forEach { item ->
+                    val code = item.code.orEmpty()
+                    if (code.isBlank()) return@forEach
                     val isSelected = !selectedCode.isNullOrBlank() && code == selectedCode
 
-                    // Средняя точка всех вхождений кода
-                    val avgX = items.map { (it.x1 + it.x2) / 2f }.average().toFloat()
-                    val avgY = items.map { (it.y1 + it.y2) / 2f }.average().toFloat()
-
-                    val cx = avgX * fitScale + offsetX
-                    val cy = avgY * fitScale + offsetY
+                    val cx = (item.x1 + item.x2) / 2f * fitScale + offsetX
+                    val cy = (item.y1 + item.y2) / 2f * fitScale + offsetY
 
                     NumberBadge(
                         text = code,
@@ -264,6 +283,26 @@ fun UnitSchemeWithMap(
                         modifier = Modifier.offset { IntOffset(cx.roundToInt(), cy.roundToInt()) }
                     )
                 }
+            }
+        }
+
+        // Состояние загрузки — поверх схемы, вне слоя приближения
+        if (imageLoading && !imageFailed) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center))
+        }
+        if (imageFailed) {
+            Column(
+                modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Подложка всегда белая — цвет текста задаём сами, а не из темы
+                Text("Не удалось загрузить схему", color = Color(0xFF1B1F27))
+                Button(onClick = {
+                    imageFailed = false
+                    imageLoading = true
+                    retry++
+                }) { Text("Повторить") }
             }
         }
     }
