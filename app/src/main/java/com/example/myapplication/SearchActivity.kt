@@ -19,6 +19,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.example.myapplication.ui.ErrorState
+import com.example.myapplication.ui.WaitingState
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,7 +33,6 @@ import com.example.myapplication.abcp.BrandHit
 import com.example.myapplication.abcp.CartIconButton
 import com.example.myapplication.abcp.OffersActivity
 import com.example.myapplication.abcp.autoPickBrand
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -72,6 +73,13 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     // У скольких поставщиков проверенные бренды — подпись в списке и порядок (больше поставщиков — выше)
     var suppliers by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     fun stopPicking() { picking?.cancel(); picking = null }
+    // Идущий поиск: новый запрос, правка номера и ✕ его отменяют — иначе поздний ответ по старому номеру
+    // затирал список и сам открывал выдачу не по тому номеру (аудит 13.11)
+    var searching by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun stopSearch() { searching?.cancel(); searching = null; loading = false }
+    // Сами открываем выдачу, только пока человек на этом экране: ушёл в корзину — поверх ничего не выскакивает
+    val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
+    fun onScreen() = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
 
     LaunchedEffect(Unit) { if (!shop.isGuest) history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
 
@@ -112,12 +120,14 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
         val n = query.trim()
         if (n.isBlank()) return
         stopPicking()
+        stopSearch()
         keyboard?.hide()
         focus.clearFocus()
         tips = emptyList()
         loading = true
         error = null
-        scope.launch {
+        searching = scope.launch {
+            val me = coroutineContext[kotlinx.coroutines.Job]
             try {
                 // Бренды в наличии — наверху списка
                 val found = shop.brands(n).sortedByDescending { it.available }
@@ -128,29 +138,35 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                 // Что ищут, а у нас нет — список для закупки
                 if (found.isEmpty()) com.example.myapplication.Analytics.event("search_empty", mapOf("number" to n))
                 val auto = autoPickBrand(found, preferredBrand)
-                if (auto != null) openOffers(ctx, auto)
+                if (auto != null) { if (onScreen()) openOffers(ctx, auto) }
                 else if (found.size > 1) picking = scope.launch {
                     try {
                         val votes = shop.dominantBrand(found)
                         suppliers = votes.suppliers
                         val best = votes.pick
                         // Клиент успел нажать бренд сам — ничего не открываем поверх
-                        if (best != null && isActive) {
+                        if (best != null && isActive && onScreen()) {
                             com.example.myapplication.Analytics.event("brand_autopick", mapOf("brand" to best.brand))
                             openOffers(ctx, best, picked = true)
                         }
                     } finally { if (picking == coroutineContext[kotlinx.coroutines.Job]) picking = null }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // отменили сами (новый поиск, ✕, уход с экрана) — не ошибка
             } catch (e: Exception) {
                 com.example.myapplication.Analytics.error("Поиск → бренды", e)
                 error = e.message ?: "Не удалось выполнить поиск. Проверьте интернет."
             } finally {
-                loading = false
+                // Только свой: отменённый поиск не должен гасить индикатор нового
+                if (searching == me) { searching = null; loading = false }
             }
         }
     }
 
-    LaunchedEffect(Unit) { if (prefillNumber.isNotBlank()) search() }
+    // Один раз: система выгрузила приложение в фоне (бюджетные телефоны) — при возврате «назад» с выдачи экран
+    // создаётся заново и без этой отметки снова искал бы и снова бросал в ту же выдачу
+    var autoSearched by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) { if (prefillNumber.isNotBlank() && !autoSearched) { autoSearched = true; search() } }
 
     // Подсказки при вводе (search/tips) отключены: на тарифе ABCP их 100 в сутки на весь магазин —
     // сгорели бы за полчаса. Вместо них — «Вы искали» и выбор бренда (search/brands, 150 тыс. в сутки).
@@ -170,12 +186,12 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
         ) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it; brands = null; stopPicking() },
+                onValueChange = { query = it; brands = null; error = null; stopPicking(); stopSearch() },
                 label = { Text("Артикул или OEM-номер") },
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = {
-                    if (query.isNotEmpty()) IconButton(onClick = { query = ""; brands = null; error = null }) {
+                    if (query.isNotEmpty()) IconButton(onClick = { query = ""; brands = null; error = null; stopPicking(); stopSearch() }) {
                         Icon(Icons.Default.Close, "Очистить")
                     } else Box {
                         IconButton(onClick = { scanMenu = true }, enabled = !scanning) {
@@ -187,10 +203,15 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
                         }
                     }
                 },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { search() }),
                 modifier = Modifier.fillMaxWidth()
             )
+
+            // Клавишу «Поиск» на клавиатуре находят не все (особенно после вставки номера из буфера)
+            if (query.isNotBlank() && brands == null && !loading && error == null) {
+                Button(onClick = { search() }, modifier = Modifier.fillMaxWidth()) { Text("Найти") }
+            }
 
             if (query.isBlank()) OneTimeHint("label_photo", "Нет номера под рукой? Нажмите 📷 и сфотографируйте упаковку детали — найдём по штрихкоду или надписи.")
             candidates?.let { list ->
@@ -210,9 +231,7 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
             }
 
             when {
-                loading -> Box(Modifier.fillMaxWidth().padding(24.dp)) {
-                    CircularProgressIndicator(Modifier.align(Alignment.Center))
-                }
+                loading -> WaitingState(first = "Ищем номер…", onCancel = { stopSearch() })
                 error != null -> ErrorState(error!!, onRetry = { search() })
                 brands != null && brands!!.isEmpty() -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("По номеру «${query.trim()}» ничего не найдено. Проверьте номер или спросите менеджера — подберём.")

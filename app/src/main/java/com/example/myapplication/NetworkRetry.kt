@@ -19,6 +19,10 @@ suspend fun <T> performRequestWithRetry(
             return request()
         } catch (e: CancellationException) {
             throw e
+        } catch (e: java.io.InterruptedIOException) {
+            // Таймаут: сервер запрос получил и думает (ABCP с онлайн-складами — до минуты). Повтор начнёт ожидание
+            // заново и ответа не дождётся никогда — отдаём ошибку сразу (аудит 13.11: 3 × 30 с и «слишком долго»)
+            throw e
         } catch (e: IOException) {
             lastError = e
             if (!currentCoroutineContext().isActive) throw e

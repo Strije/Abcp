@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -93,6 +94,10 @@ class OffersActivity : ComponentActivity() {
                 var warrantyShown by remember { mutableStateOf<BrandWarranty?>(null) }
                 var starsShown by remember { mutableStateOf<Int?>(null) }
                 var newSearch by remember { mutableStateOf<Offer?>(null) }
+                // Идёт basket/add: повторное нажатие удвоило бы количество (ABCP складывает) — блокируем и показываем полоску
+                var adding by remember { mutableStateOf(false) }
+                // Что не так с добавлением (текст) и точно ли товара нет в корзине (false — связь оборвалась, мог лечь)
+                var cartProblem by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
                 LaunchedEffect(Unit) { warranties = Warranties.load() }
                 fun warrantyOf(o: Offer) = warranties[Warranties.key(o.brand)]
 
@@ -126,7 +131,8 @@ class OffersActivity : ComponentActivity() {
 
                 val fix = cleanNumber(number)
                 val (own, analogs) = offers.partition {
-                    it.numberFix.equals(fix, ignoreCase = true) && it.brand.equals(brand, ignoreCase = true)
+                    // Бренд — через синонимы: в списке «MANN-FILTER», в предложении «MANN» — это тот же номер, а не аналог
+                    it.numberFix.equals(fix, ignoreCase = true) && offerBrandKey(it.brand) == offerBrandKey(brand)
                 }
                 val cmp = sort.comparator()
                 // Одна выдача: искомый номер закреплён сверху, ниже аналоги. Сортировка и фильтры — на весь список.
@@ -215,9 +221,17 @@ class OffersActivity : ComponentActivity() {
                             }
                         }
                         // «Показать все варианты» — старый список остаётся, сверху полоска загрузки
-                        if (loading && offers.isNotEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        if ((loading && offers.isNotEmpty()) || adding) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        // Плашка с «Повторить» исчезает через 10 с, а кнопки «Показать все варианты» уже нет — оставляем строку
+                        if (!loading && error != null && offers.isNotEmpty()) Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Не всё загрузилось", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { reload++ }) { Text("Повторить") }
+                        }
                         when {
-                            loading && offers.isEmpty() -> Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
+                            loading && offers.isEmpty() -> com.example.myapplication.ui.WaitingState(first = "Загружаем цены…")
                             error != null && offers.isEmpty() -> com.example.myapplication.ui.ErrorState(error!!, onRetry = { reload++ })
                             ownGroups.isEmpty() && analogGroups.isEmpty() -> Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text(
@@ -229,6 +243,9 @@ class OffersActivity : ComponentActivity() {
                                     }
                                 )
                                 if (!showAll) OutlinedButton(onClick = { showAll = true }) { Text("Показать все варианты") }
+                                if (term == null && !onlyWarranty && !onlyConfirmed) Button(onClick = {
+                                    startActivity(android.content.Intent(this@OffersActivity, com.example.myapplication.ChatActivity::class.java))
+                                }) { Text("Спросить менеджера") }
                                 if (advices.isNotEmpty()) AdvicesBlock(advices)
                             }
                             else -> LazyColumn(
@@ -239,8 +256,8 @@ class OffersActivity : ComponentActivity() {
                                 // Искомый номер — закреплён сверху
                                 if (ownGroups.isNotEmpty()) {
                                     item(key = "h_own") { SectionTitle("Вы искали") }
-                                    items(ownGroups, key = { "o_" + it.first().brand + it.first().numberFix }) { list ->
-                                        ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { picked = it },
+                                    items(ownGroups, key = { "o_" + it.first().brand + "|" + it.first().numberFix }) { list ->
+                                        ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { if (!adding) picked = it },
                                             onWarranty = { warrantyShown = it }, onStars = { starsShown = it }, onNumber = { newSearch = it })
                                     }
                                 } else if (own.isNotEmpty() || term != null) {
@@ -261,8 +278,8 @@ class OffersActivity : ComponentActivity() {
                                         val n = analogGroups.sumOf { it.size }
                                         SectionTitle("Аналоги · ${analogGroups.size} арт., $n предл.")
                                     }
-                                    items(analogGroups, key = { "a_" + it.first().brand + it.first().numberFix }) { list ->
-                                        ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { picked = it },
+                                    items(analogGroups, key = { "a_" + it.first().brand + "|" + it.first().numberFix }) { list ->
+                                        ArticleCard(list, warrantyOf(list.first()), onImage = { viewer = it }, onPick = { if (!adding) picked = it },
                                             onWarranty = { warrantyShown = it }, onStars = { starsShown = it }, onNumber = { newSearch = it })
                                     }
                                 }
@@ -344,24 +361,54 @@ class OffersActivity : ComponentActivity() {
                                 startActivity(android.content.Intent(this@OffersActivity, com.example.myapplication.MainActivity::class.java))
                                 return@AddToCartSheet
                             }
+                            if (adding) return@AddToCartSheet
+                            adding = true
                             scope.launch {
                                 try {
                                     shop.addToBasket(o, qty)
+                                    adding = false
                                     com.example.myapplication.Analytics.event("add_to_cart", mapOf("brand" to o.brand, "number" to o.number, "qty" to qty, "in_store" to o.inStore))
                                     com.example.myapplication.Analytics.ecomAddToCart(
                                         com.example.myapplication.Analytics.Item(o.brand, o.number, o.description, o.price, qty)
                                     )
-                                    CartState.refresh(shop)
+                                    // Счётчик корзины — отдельно: «Добавлено» показываем сразу, не дожидаясь ещё двух запросов
+                                    scope.launch { runCatching { CartState.refresh(shop) } }
                                     val r = snackbar.showSnackbar("Добавлено в корзину", actionLabel = "Перейти", duration = SnackbarDuration.Short)
                                     if (r == SnackbarResult.ActionPerformed) startActivity(android.content.Intent(this@OffersActivity, CartActivity::class.java))
                                 } catch (e: kotlinx.coroutines.CancellationException) {
                                     throw e // ушли с экрана, пока висела плашка «Добавлено» — товар уже в корзине, это не ошибка
                                 } catch (e: Exception) {
                                     com.example.myapplication.Analytics.error("Выдача → в корзину", e)
-                                    Toast.makeText(this@OffersActivity, e.message ?: "Ошибка", Toast.LENGTH_LONG).show()
+                                    // ABCP ответил отказом — товара в корзине точно нет. Иначе (обрыв, таймаут) запрос мог дойти
+                                    val refused = e is BasketRejected || e is NoApiAccess
+                                    cartProblem = (e.message ?: "Не удалось добавить в корзину.") to refused
+                                } finally {
+                                    adding = false
                                 }
                             }
                         }
+                    )
+                }
+
+                // Диалог, а не всплывающая строка: Android 12+ обрезает её до двух строк, и подсказка «что делать» терялась
+                cartProblem?.let { (text, refused) ->
+                    AlertDialog(
+                        onDismissRequest = { cartProblem = null },
+                        title = { Text(if (refused) "Не добавлено в корзину" else "Проверьте корзину") },
+                        text = {
+                            Text(
+                                if (refused) text else text + "\n\nСвязь прервалась, и товар мог уже попасть в корзину. " +
+                                    "Загляните в неё, прежде чем добавлять ещё раз, — иначе количество удвоится."
+                            )
+                        },
+                        confirmButton = {
+                            if (refused) TextButton(onClick = { cartProblem = null }) { Text("Понятно") }
+                            else TextButton(onClick = {
+                                cartProblem = null
+                                startActivity(android.content.Intent(this@OffersActivity, CartActivity::class.java))
+                            }) { Text("Открыть корзину") }
+                        },
+                        dismissButton = { if (!refused) TextButton(onClick = { cartProblem = null }) { Text("Закрыть") } }
                     )
                 }
 
@@ -433,9 +480,10 @@ private fun ArticleCard(
             if (list.size > 3) {
                 Button(
                     onClick = { expanded = !expanded },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC52E), contentColor = Color.White),
+                    // Тёмный текст: белый на жёлтом не читался
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC52E), contentColor = Color(0xFF1B1B1B)),
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 ) {
                     Text(if (expanded) "Свернуть" else "Показать ещё", fontWeight = FontWeight.Bold)
                     if (!expanded) {
@@ -453,7 +501,11 @@ private fun ArticleCard(
 @Composable
 private fun OfferRow(o: Offer, onClick: () -> Unit) {
     // Цвет поставщика из ABCP — фоном; тёмный текст на нём читается (цвета у магазина светлые)
-    val bg = parseAbcpColor(o.supplierColor) ?: MaterialTheme.colorScheme.surfaceVariant
+    val supplier = parseAbcpColor(o.supplierColor)
+    val bg = supplier ?: MaterialTheme.colorScheme.surfaceVariant
+    // Без цвета поставщика фон берётся из темы — и текст тоже, иначе в тёмной теме тёмное на тёмном
+    val ink = if (supplier != null) Color(0xFF1B1B1B) else MaterialTheme.colorScheme.onSurface
+    val inkSoft = if (supplier != null) Color(0xFF5F6368) else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(bg).clickable(onClick = onClick)
             .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
@@ -461,19 +513,19 @@ private fun OfferRow(o: Offer, onClick: () -> Unit) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(o.deliveryText(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF1B1B1B), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             SupplierIcons(o)
         }
-        Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF1B1B1B))
+        Text(formatRub(o.price), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = ink)
         Text(
             if (o.availability > 0) "${o.availability} шт." else "",
-            style = MaterialTheme.typography.labelSmall, color = Color(0xFF5F6368),
+            style = MaterialTheme.typography.labelSmall, color = inkSoft,
             modifier = Modifier.widthIn(min = 44.dp).padding(horizontal = 8.dp)
         )
         Box(
             Modifier.size(38.dp).background(Color(0xFFFFC52E), RoundedCornerShape(6.dp)).clickable(onClick = onClick),
             contentAlignment = Alignment.Center
-        ) { Icon(Icons.Default.ShoppingCart, "В корзину", tint = Color.White, modifier = Modifier.size(20.dp)) }
+        ) { Icon(Icons.Default.ShoppingCart, "В корзину", tint = Color(0xFF1B1B1B), modifier = Modifier.size(20.dp)) }
     }
 }
 
@@ -588,7 +640,8 @@ private fun AddToCartSheet(offer: Offer, onImage: (List<String>) -> Unit, onDism
     var qty by remember { mutableIntStateOf(step) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            // Прокрутка: при крупном шрифте и длинном описании кнопка «В корзину» уезжала за край экрана
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -602,7 +655,8 @@ private fun AddToCartSheet(offer: Offer, onImage: (List<String>) -> Unit, onDism
                 }
                 Column {
                     Text("${offer.brand} ${offer.number}", style = MaterialTheme.typography.titleLarge)
-                    if (offer.description.isNotBlank()) Text(offer.description, style = MaterialTheme.typography.bodyMedium)
+                    if (offer.description.isNotBlank()) Text(offer.description, style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
             Text("${formatRub(offer.price)} · ${offer.deliveryText()}", style = MaterialTheme.typography.titleMedium)

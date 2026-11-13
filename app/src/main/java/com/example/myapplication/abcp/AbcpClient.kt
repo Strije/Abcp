@@ -10,8 +10,7 @@ import java.util.concurrent.TimeUnit
 
 object ApiClient {
 
-    // Поставь СВОЙ baseUrl (важно: должен заканчиваться на /)
-    // Например: https://id25202.public.api.abcp.ru/
+    // Адрес API магазина в ABCP (должен заканчиваться на /)
     private const val BASE_URL = "https://id25202.public.api.abcp.ru/"
 
     private val loggingInterceptor by lazy {
@@ -26,10 +25,14 @@ object ApiClient {
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .callTimeout(30, TimeUnit.SECONDS)
+            // Поиск с онлайн-складами поставщиков ABCP отдаёт за 7–64 с (замер 10.11) — 30 с обрывали его всегда
+            .callTimeout(75, TimeUnit.SECONDS)
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(75, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            // OkHttp сам повторяет запрос при обрыве соединения — для basket/add это двойное количество.
+            // Чтение повторяет performRequestWithRetry
+            .retryOnConnectionFailure(false)
             .addInterceptor(loggingInterceptor)
             .build()
     }

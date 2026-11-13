@@ -244,8 +244,9 @@ class AppServer(ctx: Context) {
         // и запрос по такому «мёртвому» соединению висел до Read timed out
         private val http = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .callTimeout(40, TimeUnit.SECONDS)
+            // Гостевые цены сервер берёт у ABCP с онлайн-складами — это до минуты (как и у вошедшего клиента)
+            .readTimeout(75, TimeUnit.SECONDS)
+            .callTimeout(80, TimeUnit.SECONDS)
             .connectionPool(okhttp3.ConnectionPool(4, 30, TimeUnit.SECONDS))
             .build()
     }

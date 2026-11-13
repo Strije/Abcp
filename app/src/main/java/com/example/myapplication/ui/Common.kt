@@ -30,6 +30,33 @@ fun ErrorState(message: String, modifier: Modifier = Modifier, onRetry: (() -> U
     }
 }
 
+/**
+ * Долгое ожидание (поиск у поставщиков идёт до минуты): полоска, подпись, которая меняется со временем — видно,
+ * что приложение не зависло, — и «Отменить». Доли готовности нет: ABCP отвечает одним куском в самом конце.
+ */
+@Composable
+fun WaitingState(modifier: Modifier = Modifier, first: String = "Ищем…", onCancel: (() -> Unit)? = null) {
+    var seconds by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1000); seconds++ } }
+    Column(
+        modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        Text(waitingText(seconds, first), textAlign = TextAlign.Center)
+        if (onCancel != null && seconds >= 8) TextButton(onClick = onCancel) { Text("Отменить") }
+    }
+}
+
+/** Что писать под полоской на какой секунде ожидания. */
+internal fun waitingText(seconds: Int, first: String = "Ищем…"): String = when {
+    seconds < 4 -> first
+    seconds < 15 -> "Спрашиваем поставщиков…"
+    seconds < 40 -> "Некоторые поставщики отвечают до минуты — ждём их цены…"
+    else -> "Почти готово. Поставщики отвечают дольше обычного…"
+}
+
 /** Пустой список: текст по центру и необязательное действие. Прокручивается — чтобы работал «потянуть вниз». */
 @Composable
 fun EmptyState(text: String, action: String? = null, onAction: (() -> Unit)? = null) {
