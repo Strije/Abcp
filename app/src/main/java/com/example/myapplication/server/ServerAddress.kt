@@ -32,7 +32,8 @@ object ServerAddress {
     private const val PREFS = "server_address" // не abcp_session: выход из аккаунта адрес не сбрасывает
     private const val KEY = "url"
     private const val CHECKED = "checked"
-    private const val EVERY = 6 * 3_600_000L
+    // Раз в час: на той же странице лежат и настройки (телефоны, график, объявление) — правка должна доходить быстро
+    private const val EVERY = 3_600_000L
     const val CONFIG_URL = "https://avtodrug92.ru/api"
     private const val NONCE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -66,7 +67,11 @@ object ServerAddress {
             try {
                 val now = current
                 val page = fetch(CONFIG_URL)
-                if (page != null) prefs.edit().putLong(CHECKED, System.currentTimeMillis()).apply()
+                if (page != null) {
+                    prefs.edit().putLong(CHECKED, System.currentTimeMillis()).apply()
+                    // Кроме адреса сервера на странице — строки настроек «ключ=значение» (PageConfig.kt)
+                    runCatching { com.example.myapplication.AppConfig.applyPage(page) }
+                }
                 val next = page?.let { parse(it) }
                 var moved = false
                 if (next != null && next != now && isAlive(next)) {

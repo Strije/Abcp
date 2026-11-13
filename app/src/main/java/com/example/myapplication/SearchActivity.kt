@@ -81,7 +81,10 @@ fun SearchScreen(prefillNumber: String = "", preferredBrand: String? = null) {
     val lifecycle = androidx.compose.ui.platform.LocalLifecycleOwner.current.lifecycle
     fun onScreen() = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
 
+    // История — из ABCP раз в 30 минут (общий кэш), а не при каждом показе экрана
     LaunchedEffect(Unit) { if (!shop.isGuest) history = runCatching { shop.history() }.getOrDefault(emptyList()).take(20) }
+    // Вернулись с выдачи — новый поиск уже дописан в кэш, показываем без запроса
+    com.example.myapplication.ui.OnResume { if (!shop.isGuest) shop.cachedHistory()?.let { history = it.take(20) } }
 
     // «Фото упаковки»: штрихкоды и напечатанный текст → варианты артикула на выбор
     var scanMenu by remember { mutableStateOf(false) }

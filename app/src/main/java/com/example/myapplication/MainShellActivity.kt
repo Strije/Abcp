@@ -88,7 +88,7 @@ class MainShellActivity : ComponentActivity() {
             startActivity(Intent(this, MainActivity::class.java)); finish(); return
         }
         // Фоновая проверка статусов заказов + разрешение на уведомления (Android 13+) — только для вошедших
-        // Статусы заказов: push RuStore/Google через наш сервер + своя проверка (20 мин без push, 30 — с push)
+        // Статусы заказов: push RuStore/Google через наш сервер + своя проверка (20 мин без push, 2 часа — с push)
         if (!guest) com.example.myapplication.push.Push.register(this)
         // Вышли без сети — токен на сервере остался: дотираем, иначе гостю придут уведомления прежнего клиента
         else com.example.myapplication.push.Push.retryUnregister(this)
@@ -220,6 +220,8 @@ fun clearClientData(ctx: Context) {
     OrderStatusWatch.stop(app)
     AppServer.clearCache()
     MemoryCache.clear()
+    // Гараж: список в памяти и его копия на диске (избранная машина — отдельное хранилище, чистится ниже)
+    com.example.myapplication.abcp.GarageCache.clear(app)
     ApiAccess.reset()
     CartState.count = 0
     AbcpShop.guestPrices = false
@@ -320,7 +322,7 @@ private fun HomeScreen(
         // Баланс отдельно от пополнения; данные — с нашего сервера (в клиентском API ABCP их нет)
         finance?.let { f ->
             val value = f.balance - f.debt // долг по заказам — со знаком минус, как на счёте
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Tile(
                     title = "Баланс ${formatRub(value)}",
                     subtitle = when {
@@ -329,29 +331,31 @@ private fun HomeScreen(
                         else -> "Задолженности нет"
                     },
                     icon = Icons.Default.AccountBox,
-                    modifier = Modifier.weight(1f).height(104.dp)
+                    modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 104.dp)
                 ) { onOpenTab(HomeTab.Orders) }
                 Tile(
                     title = "Пополнить",
                     subtitle = "Оплата картой или СБП",
                     icon = Icons.Default.Add,
                     accent = true,
-                    modifier = Modifier.weight(1f).height(104.dp)
+                    modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 104.dp)
                 ) { showTopup = true }
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Tile("Подбор по авто", "VIN · кузов · госномер", Icons.Default.Search, modifier = Modifier.weight(1f).height(110.dp)) {
+        // Высота ряда — по самой высокой плитке: при жёсткой высоте у «Спросить менеджера» (заголовок в две строки)
+        // обрезалась подпись, а при крупном шрифте — и заголовок (телефон 13.11)
+        Row(Modifier.height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Tile("Подбор по авто", "VIN · кузов · госномер", Icons.Default.Search, modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 110.dp)) {
                 ctx.startActivity(Intent(ctx, VinSearchActivity::class.java))
             }
-            Tile("Спросить менеджера", "Подберём по VIN или фото", Icons.Default.Send, modifier = Modifier.weight(1f).height(110.dp)) {
+            Tile("Спросить менеджера", "Подберём по VIN или фото", Icons.Default.Send, modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 110.dp)) {
                 ctx.startActivity(Intent(ctx, ChatActivity::class.java))
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Tile("Мои заказы", "Статусы и долг", Icons.Default.List, modifier = Modifier.weight(1f).height(96.dp)) { onOpenTab(HomeTab.Orders) }
-            Tile("Корзина", if (CartState.count > 0) "${CartState.count} поз." else "Пусто", Icons.Default.ShoppingCart, modifier = Modifier.weight(1f).height(96.dp)) { onOpenTab(HomeTab.Cart) }
+        Row(Modifier.height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Tile("Мои заказы", "Статусы и долг", Icons.Default.List, modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 96.dp)) { onOpenTab(HomeTab.Orders) }
+            Tile("Корзина", if (CartState.count > 0) "${CartState.count} поз." else "Пусто", Icons.Default.ShoppingCart, modifier = Modifier.weight(1f).fillMaxHeight().heightIn(min = 96.dp)) { onOpenTab(HomeTab.Cart) }
         }
 
         Text("Наши магазины · ${StoreInfo.city}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -529,11 +533,12 @@ private fun Tile(
     Card(modifier.clickable(onClick = onClick), colors = colors, shape = MaterialTheme.shapes.large) {
         Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.SpaceBetween) {
             Icon(icon, null, tint = if (accent) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(8.dp))  // плитка растёт по тексту — значок не должен прилипать к заголовку
             Column {
                 // «Спросить менеджера» в одну строку обрезалось до «Спросить» (телефон 10.11): заголовок — до двух строк
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 2,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
         }
@@ -608,12 +613,10 @@ private fun MyCarCard(onOpenGarage: () -> Unit) {
     val ctx = LocalContext.current
     fun pick(list: List<com.example.myapplication.abcp.GarageCar>?) =
         list?.let { com.example.myapplication.abcp.GarageFavorite.sorted(ctx, it) }?.firstOrNull()
-    var car by remember { mutableStateOf(pick(com.example.myapplication.abcp.MemoryCache.garage)) }
+    // Сразу — из памяти или с диска; в ABCP loadGarage идёт не чаще раза в 10 минут (и после изменения гаража)
+    var car by remember { mutableStateOf(pick(com.example.myapplication.abcp.GarageCache.peek(ctx))) }
     LaunchedEffect(Unit) {
-        runCatching { loadGarage(ctx) }.getOrNull()?.let {
-            com.example.myapplication.abcp.MemoryCache.garage = it
-            car = pick(it)
-        }
+        runCatching { loadGarage(ctx) }.getOrNull()?.let { car = pick(it) }
     }
     val c = car ?: return
     fun open(query: String?) {

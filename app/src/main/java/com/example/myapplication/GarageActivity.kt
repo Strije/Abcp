@@ -19,15 +19,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.myapplication.abcp.AbcpGarageRepository
+import com.example.myapplication.abcp.GarageCache
 import com.example.myapplication.abcp.GarageCar
-import com.example.myapplication.abcp.MemoryCache
 import com.example.myapplication.ui.EmptyState
 import com.example.myapplication.ui.OnResume
 import com.example.myapplication.ui.RefreshableContent
 import com.example.myapplication.ui.theme.AvtodrugTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class GarageActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,7 +40,8 @@ fun GarageScreen() {
     val ctx = LocalContext.current
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    var cars by remember { mutableStateOf(MemoryCache.garage) }
+    // Прошлый список (из памяти или с диска) показываем сразу
+    var cars by remember { mutableStateOf(GarageCache.peek(ctx)) }
     var reload by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var favorite by remember { mutableStateOf(com.example.myapplication.abcp.GarageFavorite.get(ctx)) }
@@ -53,7 +51,7 @@ fun GarageScreen() {
         loading = true
         error = null
         try {
-            cars = loadGarage(ctx).also { MemoryCache.garage = it }
+            cars = loadGarage(ctx)
         } catch (e: Exception) {
             com.example.myapplication.Analytics.error("Гараж → загрузка", e)
             error = "Не удалось загрузить гараж. Проверьте интернет."
@@ -61,7 +59,7 @@ fun GarageScreen() {
             loading = false
         }
     }
-    // Вернулись из подбора, где могли добавить машину, — перечитать
+    // Вернулись из подбора, где могли добавить машину: добавление сбрасывает кэш, иначе в сеть не идём
     OnResume { reload++ }
 
     toDelete?.let { car ->
@@ -71,6 +69,7 @@ fun GarageScreen() {
                 try {
                     com.example.myapplication.abcp.AbcpShop(SessionManager(ctx)).deleteFromGarage(car.id)
                     if (favorite == car.vin) { favorite = null; com.example.myapplication.abcp.GarageFavorite.set(ctx, null) }
+                    GarageCache.invalidate(ctx)
                     reload++
                 } catch (e: Exception) {
                     com.example.myapplication.Analytics.error("Гараж → удалить", e)
@@ -92,7 +91,8 @@ fun GarageScreen() {
     ) { padding ->
         RefreshableContent(
             hasData = cars != null, loading = loading, error = error,
-            onRefresh = { reload++ }, modifier = Modifier.padding(padding)
+            // Потянули вниз — человек хочет свежий список, кэш не в счёт
+            onRefresh = { GarageCache.invalidate(ctx); reload++ }, modifier = Modifier.padding(padding)
         ) {
             val list = cars.orEmpty()
             if (list.isEmpty()) EmptyState(
@@ -157,12 +157,8 @@ private fun DeleteCarDialog(car: GarageCar, onDismiss: () -> Unit, onConfirm: ()
     )
 }
 
-suspend fun loadGarage(ctx: Context): List<GarageCar> {
-    val session = SessionManager(ctx)
-    return withContext(Dispatchers.IO) {
-        AbcpGarageRepository().loadGarage(session.login(), session.passMd5())
-    }
-}
+/** Гараж через общий кэш: в ABCP — не чаще раза в 10 минут и после изменения гаража. */
+suspend fun loadGarage(ctx: Context): List<GarageCar> = GarageCache.load(ctx)
 
 fun openCar(ctx: Context, car: GarageCar) {
     ctx.startActivity(Intent(ctx, VinSearchActivity::class.java).putExtra("prefillVin", car.vin))

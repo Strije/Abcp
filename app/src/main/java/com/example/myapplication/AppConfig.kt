@@ -60,6 +60,7 @@ private val DEFAULT_FLAGS = mapOf("brand_autopick" to true, "vpn_warning" to tru
 object AppConfig {
     private const val PREFS = "app_config" // не abcp_session: выход из аккаунта настройки не сбрасывает
     private const val KEY = "json"
+    private const val KEY_PAGE = "page"
     private const val EVERY = 30 * 60_000L
 
     private var app: Context? = null
@@ -67,14 +68,40 @@ object AppConfig {
     private val running = AtomicBoolean(false)
     @Volatile private var lastTry = 0L
 
+    // Настройки с сервера и строки со страницы магазина avtodrug92.ru/api (страница важнее — см. PageConfig.kt)
+    @Volatile private var serverData = AppConfigData()
+    @Volatile private var pageData: Map<String, String> = emptyMap()
+
     // Состояние Compose: экраны, которые читают настройки, перерисуются сами, когда придёт свежая копия
     private var data by mutableStateOf(AppConfigData())
+
+    private fun rebuild() {
+        data = applyPageConfig(serverData, pageData)
+    }
+
+    /** Страницу магазина прочитали (это делает ServerAddress): применяем её строки настроек и запоминаем их. */
+    fun applyPage(pageText: String) {
+        val map = parsePageConfig(pageText)
+        pageData = map
+        rebuild()
+        runCatching {
+            app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+                ?.putString(KEY_PAGE, com.google.gson.Gson().toJson(map))?.apply()
+        }
+    }
 
     fun init(ctx: Context) {
         val c = ctx.applicationContext
         app = c
-        runCatching { c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null) }.getOrNull()
-            ?.let { parseAppConfig(it) }?.let { data = it }
+        val prefs = runCatching { c.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }.getOrNull()
+        prefs?.getString(KEY, null)?.let { parseAppConfig(it) }?.let { serverData = it }
+        prefs?.getString(KEY_PAGE, null)?.let { saved ->
+            runCatching {
+                JsonParser.parseString(saved).asJsonObject.entrySet()
+                    .filter { it.value.isJsonPrimitive }.associate { it.key to it.value.asString }
+            }.getOrNull()
+        }?.let { pageData = it }
+        rebuild()
         refresh()
     }
 
@@ -89,7 +116,8 @@ object AppConfig {
             try {
                 val text = com.example.myapplication.server.AppServer(ctx).appConfig()
                 val fresh = parseAppConfig(text) ?: return@launch
-                data = fresh
+                serverData = fresh
+                rebuild()
                 ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, text).apply()
             } catch (_: Exception) {
                 // нет сети, 404 (метода ещё нет), мусор в ответе — не страшно

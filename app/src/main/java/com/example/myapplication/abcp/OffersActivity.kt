@@ -109,6 +109,8 @@ class OffersActivity : ComponentActivity() {
                     error = null
                     try {
                         offers = withConfirmations(shop.offers(number, brand, all = showAll))
+                        // «Вы искали» на экране поиска — дописываем сами, без запроса истории у ABCP
+                        if (!shop.isGuest) shop.noteSearched(brand, number, description)
                         // Номер есть, а предложений нет — тоже список «что ищут, а у нас нет»
                         if (offers.isEmpty()) com.example.myapplication.Analytics.event(
                             "offers_empty", mapOf("brand" to brand, "number" to number, "all" to showAll)

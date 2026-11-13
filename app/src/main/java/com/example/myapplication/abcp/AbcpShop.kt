@@ -70,6 +70,9 @@ fun autoPickBrand(found: List<BrandHit>, preferred: String?): BrandHit? {
 
 private fun brandKey(b: String) = b.uppercase().filter { it.isLetterOrDigit() }
 
+/** Одна строка истории поиска: бренд + номер без пробелов и регистра */
+private fun historyKey(h: BrandHit): String = cleanNumber(h.brand) + cleanNumber(h.number)
+
 /** Сколько других брендов в списке упоминают этот бренд в описании («ан. MAHLE OC90» → голос за MAHLE). */
 internal fun brandMentions(h: BrandHit, found: List<BrandHit>): Int {
     // «Mahle/Knecht» в описаниях пишут по частям: «ан. MAHLE OC90», «OC90_ KNECHT» (телефон 10.11: упоминаний было 0)
@@ -243,6 +246,8 @@ class AbcpShop(private val session: SessionManager) {
         @Volatile private var statusCache: Pair<Long, Set<String>>? = null
         /** Поиск вошедшего клиента ушёл на гостевые цены (нет доступа к API) — показать пометку над выдачей */
         @Volatile var guestPrices = false
+        /** Запрос получил 103 «нет прав». Назначает App: так этот файл не зависит от экрана заявки на доступ */
+        @Volatile var onNoAccess: (() -> Unit)? = null
     }
 
     private val api = ApiClient.create()
@@ -263,7 +268,8 @@ class AbcpShop(private val session: SessionManager) {
      * сервер, как без входа. Корзина заработает, когда менеджер включит доступ ([guestPrices] — для пометки на экране).
      */
     private suspend fun orGuest(guest: suspend () -> JsonElement, own: suspend () -> JsonElement): JsonElement = try {
-        own()
+        // Свой поиск прошёл — доступ уже включили: пометку «цены гостя» снимаем, не дожидаясь проверки прав
+        own().also { guestPrices = false }
     } catch (e: NoApiAccess) {
         guestPrices = true
         guest()
@@ -336,14 +342,52 @@ class AbcpShop(private val session: SessionManager) {
             if (fin == "1" || fin.equals("true", ignoreCase = true)) o.str("id") else null
         }.toSet()
 
-    /** Что клиент искал раньше — без повторов, свежие сверху */
-    suspend fun history(): List<BrandHit> =
-        items(call { api.searchHistory(login, psw) }).mapNotNull { it.toBrandHit() }
-            .distinctBy { cleanNumber(it.brand) + cleanNumber(it.number) }
+    /**
+     * Что клиент искал раньше — без повторов, свежие сверху. В ABCP — раз в 30 минут (раньше — при каждом показе
+     * поиска); новые поиски между чтениями дописывает [noteSearched].
+     */
+    suspend fun history(): List<BrandHit> {
+        val owner = login
+        MemoryCache.history?.fresh(MemoryCache.HISTORY_TTL_MS, owner)?.let { return it }
+        val list = try {
+            items(call { api.searchHistory(owner, psw) }).mapNotNull { it.toBrandHit() }.distinctBy(::historyKey)
+        } catch (e: NoApiAccess) {
+            // Права ещё не включены — не спрашиваем при каждом показе поиска; включат — кэш сбросит проверка прав
+            emptyList()
+        }
+        MemoryCache.history = Timed(list, owner)
+        return list
+    }
 
-    /** «С этим товаром покупают» */
-    suspend fun advices(brand: String, number: String): List<BrandHit> =
-        items(call { api.advices(login, psw, brand, number) }).mapNotNull { it.toBrandHit() }
+    /** История поиска, если она уже загружена, — показать без запроса (возврат на экран поиска). */
+    fun cachedHistory(): List<BrandHit>? = MemoryCache.history?.takeIf { it.owner == login }?.value
+
+    /**
+     * Клиент открыл выдачу — дописываем её в «Вы искали» сами, без запроса. Историю ещё не читали — ничего не делаем:
+     * ABCP запомнил этот поиск и отдаст его при первом чтении.
+     */
+    fun noteSearched(brand: String, number: String, description: String) {
+        val owner = login
+        val old = MemoryCache.history?.takeIf { it.owner == owner } ?: return
+        if (brand.isBlank() || number.isBlank()) return
+        val list = (listOf(BrandHit(brand, number, description)) + old.value).distinctBy(::historyKey)
+        // Время загрузки прежнее: раз в 30 минут история всё равно сверяется с ABCP
+        MemoryCache.history = Timed(list, owner, old.at)
+    }
+
+    /** «С этим товаром покупают» — статистика магазина меняется медленно: по бренду и номеру помним 30 минут */
+    suspend fun advices(brand: String, number: String): List<BrandHit> {
+        val key = offerBrandKey(brand) + "|" + cleanNumber(number)
+        MemoryCache.advices[key]?.fresh(MemoryCache.ADVICES_TTL_MS)?.let { return it }
+        val list = try {
+            // «No results» — тоже ответ: запоминаем пустой список, а не спрашиваем заново
+            emptyIfNoResults { items(call { api.advices(login, psw, brand, number) }).mapNotNull { it.toBrandHit() } }
+        } catch (e: NoApiAccess) {
+            emptyList()
+        }
+        MemoryCache.putAdvices(key, list)
+        return list
+    }
 
     /**
      * Все позиции из всех корзин. Если в магазине включена мультикорзина, без basketId ABCP отдаёт
@@ -566,11 +610,20 @@ class AbcpShop(private val session: SessionManager) {
     suspend fun checkoutOptions(basket: List<BasketItem>): CheckoutOptions {
         val minH = basket.minOfOrNull { it.deadlineHours } ?: 0
         val maxH = basket.maxOfOrNull { maxOf(it.deadlineHours, it.deadlineHoursMax) } ?: 0
+        // Справочники меняются редко — 30 минут из памяти: повторный заход на оформление — один запрос (даты)
+        val owner = login
+        val lists = MemoryCache.checkoutLists?.fresh(MemoryCache.CHECKOUT_TTL_MS, owner) ?: CheckoutLists(
+            payments = idNames(call { api.paymentMethods(owner, psw) }),
+            shipmentMethods = idNames(call { api.shipmentMethods(owner, psw) }),
+            offices = idNames(call { api.shipmentOffices(owner, psw) }),
+            addresses = idNames(call { api.shipmentAddresses(owner, psw) })
+        ).also { MemoryCache.checkoutLists = Timed(it, owner) }
         return CheckoutOptions(
-            payments = idNames(call { api.paymentMethods(login, psw) }),
-            shipmentMethods = idNames(call { api.shipmentMethods(login, psw) }),
-            offices = idNames(call { api.shipmentOffices(login, psw) }),
-            addresses = idNames(call { api.shipmentAddresses(login, psw) }),
+            payments = lists.payments,
+            shipmentMethods = lists.shipmentMethods,
+            offices = lists.offices,
+            addresses = lists.addresses,
+            // Даты не запоминаем: они зависят от корзины и времени
             dates = items(call { api.shipmentDates(login, psw, minH, maxH) }).mapNotNull {
                 val o = it.asJsonObjectOrNull() ?: return@mapNotNull null
                 val d = o.str("date") ?: return@mapNotNull null
@@ -591,7 +644,11 @@ class AbcpShop(private val session: SessionManager) {
                 lastError = e
             }
         }
-        if (numbers.isEmpty()) throw lastError ?: AbcpException("Заказ не оформлен")
+        if (numbers.isEmpty()) {
+            // Отказ мог быть из-за устаревшего справочника (способ оплаты или адрес убрали) — перечитаем его
+            MemoryCache.checkoutLists = null
+            throw lastError ?: AbcpException("Заказ не оформлен")
+        }
         return numbers
     }
 
@@ -630,7 +687,11 @@ class AbcpShop(private val session: SessionManager) {
         if (!resp.isSuccessful) {
             val raw = resp.errorBody()?.string()
             val text = prettifyAbcpError(raw, resp.code())
-            throw if (abcpErrorCode(raw) == 103) NoApiAccess(text) else AbcpException(text)
+            if (abcpErrorCode(raw) == 103) {
+                runCatching { onNoAccess?.invoke() }
+                throw NoApiAccess(text)
+            }
+            throw AbcpException(text)
         }
         return resp.body() ?: throw AbcpException("Пустой ответ сервера")
     }

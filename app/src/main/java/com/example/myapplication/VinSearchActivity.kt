@@ -52,10 +52,9 @@ class VinSearchActivity : ComponentActivity() {
                 val guest = remember { !SessionManager(ctx).isLoggedIn() }
                 val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
                 // Что уже в гараже — чтобы не предлагать «В мой гараж» повторно
-                var garageKeys by remember { mutableStateOf(com.example.myapplication.abcp.MemoryCache.garage.orEmpty().map { com.example.myapplication.abcp.garageKey(it.vin) }.toSet()) }
+                var garageKeys by remember { mutableStateOf(com.example.myapplication.abcp.GarageCache.peek(ctx).orEmpty().map { com.example.myapplication.abcp.garageKey(it.vin) }.toSet()) }
                 LaunchedEffect(Unit) {
                     if (!guest) runCatching { loadGarage(ctx) }.getOrNull()?.let { list ->
-                        com.example.myapplication.abcp.MemoryCache.garage = list
                         garageKeys = list.map { com.example.myapplication.abcp.garageKey(it.vin) }.toSet()
                     }
                 }
@@ -347,7 +346,8 @@ class VinSearchActivity : ComponentActivity() {
                                                                     .addToGarage("${r.brand.orEmpty()} ${r.name.orEmpty()}".trim(), value, kind)
                                                                 com.example.myapplication.Analytics.event("garage_add", mapOf("kind" to kind))
                                                                 garageKeys = garageKeys + com.example.myapplication.abcp.garageKey(value)
-                                                                com.example.myapplication.abcp.MemoryCache.garage = null
+                                                                // Гараж изменился — главная и вкладка «Гараж» перечитают его один раз
+                                                                com.example.myapplication.abcp.GarageCache.invalidate(ctx)
                                                                 android.widget.Toast.makeText(ctx, "Машина добавлена в гараж", android.widget.Toast.LENGTH_SHORT).show()
                                                             } catch (e: kotlinx.coroutines.CancellationException) {
                                                                 throw e

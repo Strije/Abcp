@@ -98,6 +98,23 @@ fun isClosedStatus(status: String): Boolean {
 fun hasActiveOrders(snapshot: Map<String, String>?): Boolean =
     snapshot == null || snapshot.values.any { !isClosedStatus(it) }
 
+/** Незавершённых заказов нет — проверяем редко */
+internal const val WATCH_IDLE_MIN = 6L * 60
+/** Push работает: статусы присылает сервер, своя проверка — только страховка (push не дошёл, Xiaomi усыпляет RuStore) */
+internal const val WATCH_PUSH_MIN = 2L * 60
+/** Push нет — узнать о статусе можно только своей проверкой */
+internal const val WATCH_NO_PUSH_MIN = 20L
+
+/**
+ * Период фоновой проверки заказов, минуты. Каждая проверка — запрос к ABCP с каждой установки, а лимит общий
+ * на магазин: нет незавершённых заказов — раз в 6 часов; есть и push работает — раз в 2 часа; push нет — раз в 20 минут.
+ */
+fun watchPeriodMinutes(hasActive: Boolean, pushWorks: Boolean): Long = when {
+    !hasActive -> WATCH_IDLE_MIN
+    pushWorks -> WATCH_PUSH_MIN
+    else -> WATCH_NO_PUSH_MIN
+}
+
 /** Запись ленты: когда, какой заказ, какая позиция, новый статус. */
 data class FeedItem(val time: Long, val order: String, val title: String, val status: String)
 
@@ -118,15 +135,13 @@ object OrderStatusWatch {
     /** Как запланирована проверка: работает ли push и какой период стоит сейчас (минуты) */
     private const val PUSH_WORKS = "push_works"
     private const val PERIOD_MIN = "period_min"
-    /** Незавершённых заказов нет — проверяем редко */
-    private const val IDLE_PERIOD_MIN = 6L * 60
 
     private val mutex = Mutex()   // один запрос orders?format=p за раз
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
-     * Своя проверка по расписанию. Push работает — раз в 30 минут, страховка на случай, если push не дошёл
-     * (Xiaomi усыпляет RuStore); push нет — раз в 20 минут. UPDATE — поменять период у уже запланированной.
+     * Своя проверка по расписанию; период — [watchPeriodMinutes]. pushWorks — сервер принял токен устройства
+     * и шлёт push (Push.send). UPDATE — поменять период у уже запланированной.
      */
     fun schedule(ctx: Context, pushWorks: Boolean = false) {
         val app = ctx.applicationContext
@@ -141,12 +156,12 @@ object OrderStatusWatch {
 
     /**
      * Период проверки, минуты. По последнему снимку нет ни одного незавершённого заказа — раз в 6 часов
-     * (иначе проверка шла бы у всех каждые 20–30 минут бессрочно); снимка ещё нет или он устарел — обычный.
+     * (иначе проверка шла бы у всех бессрочно); снимка ещё нет или он устарел — считаем, что заказы есть.
      */
     private fun periodMinutes(ctx: Context, pushWorks: Boolean): Long {
         val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val snapshot = load(ctx).takeIf { p.getBoolean(FRESH, false) }
-        return if (!hasActiveOrders(snapshot)) IDLE_PERIOD_MIN else if (pushWorks) 30L else 20L
+        return watchPeriodMinutes(hasActiveOrders(snapshot), pushWorks)
     }
 
     /**
@@ -168,7 +183,7 @@ object OrderStatusWatch {
     fun onOrderPlaced(ctx: Context) {
         val app = ctx.applicationContext
         val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        if (p.getLong(PERIOD_MIN, 0) != IDLE_PERIOD_MIN) return
+        if (p.getLong(PERIOD_MIN, 0) != WATCH_IDLE_MIN) return
         // Снимок устарел: в нём нет нового заказа — следующая сверка запомнит его заново
         p.edit().putBoolean(FRESH, false).apply()
         schedule(app, p.getBoolean(PUSH_WORKS, false))
@@ -310,6 +325,8 @@ class OrderStatusWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     // Без retry: не дошли до ABCP — следующая проверка по расписанию, лишних запросов не надо
     override suspend fun doWork(): Result {
         OrderStatusWatch.check(applicationContext)?.forEach { (order, list) -> notify(order, list) }
+        // Процесс фоновой проверки живёт недолго — счётчик запросов ABCP пишем на диск сразу
+        AbcpCallCounter.flush()
         return Result.success()
     }
     private fun notify(order: String, changed: List<PositionStatus>) = showOrderNotification(applicationContext, order, changed)

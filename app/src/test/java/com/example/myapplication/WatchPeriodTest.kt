@@ -2,6 +2,7 @@ package com.example.myapplication
 
 import com.example.myapplication.abcp.hasActiveOrders
 import com.example.myapplication.abcp.isClosedStatus
+import com.example.myapplication.abcp.watchPeriodMinutes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -28,6 +29,19 @@ class WatchPeriodTest {
         assertFalse(hasActiveOrders(emptyMap()))
         assertFalse(hasActiveOrders(mapOf("1|a|b|0" to "Выдано", "2|a|b|0" to "Отказ")))
         assertTrue(hasActiveOrders(mapOf("1|a|b|0" to "Выдано", "2|a|b|0" to "В пути")))
+    }
+
+    @Test
+    fun periodByOrdersAndPush() {
+        // Незавершённых заказов нет — раз в 6 часов, с push и без
+        assertEquals(360L, watchPeriodMinutes(hasActive = false, pushWorks = false))
+        assertEquals(360L, watchPeriodMinutes(hasActive = false, pushWorks = true))
+        // Заказы есть, push работает — статусы присылает сервер, своя проверка раз в 2 часа
+        assertEquals(120L, watchPeriodMinutes(hasActive = true, pushWorks = true))
+        // Push нет — как раньше, раз в 20 минут
+        assertEquals(20L, watchPeriodMinutes(hasActive = true, pushWorks = false))
+        // Снимка ещё нет — считаем, что заказы есть
+        assertEquals(20L, watchPeriodMinutes(hasActiveOrders(null), pushWorks = false))
     }
 
     @Test

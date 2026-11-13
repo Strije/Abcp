@@ -8,6 +8,11 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         Analytics.init(this) // вылеты и ошибки — в AppMetrica
+        // Счётчик запросов к ABCP: новый день — отправляем итог прошедшего (после Analytics.init)
+        com.example.myapplication.abcp.AbcpCallCounter.init(this)
+        com.example.myapplication.abcp.AbcpCallCounter.flush()
+        // Запрос получил 103 «нет прав» — карточка заявки на главной должна появиться снова
+        com.example.myapplication.abcp.AbcpShop.onNoAccess = { com.example.myapplication.abcp.ApiAccess.denied(this) }
         Vpn.init(this)
         com.example.myapplication.push.Fcm.init(this) // второй канал push — Google (до регистрации токенов)
         // Каждый открытый экран — событие screen (карта путей в AppMetrica); вкладки главного экрана шлёт он сам
@@ -18,7 +23,8 @@ class App : Application() {
             override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
             override fun onActivityStarted(a: android.app.Activity) {}
             override fun onActivityPaused(a: android.app.Activity) {}
-            override fun onActivityStopped(a: android.app.Activity) {}
+            // Экран ушёл с глаз (в том числе приложение свернули) — счётчик запросов ABCP на диск
+            override fun onActivityStopped(a: android.app.Activity) { com.example.myapplication.abcp.AbcpCallCounter.flush() }
             override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
             override fun onActivityDestroyed(a: android.app.Activity) {}
         })

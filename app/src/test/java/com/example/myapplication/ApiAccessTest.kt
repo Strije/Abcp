@@ -3,6 +3,7 @@ package com.example.myapplication
 import com.example.myapplication.abcp.Probe
 import com.example.myapplication.abcp.accessConfirmed
 import com.example.myapplication.abcp.deniedKeys
+import com.example.myapplication.abcp.probeDue
 import com.example.myapplication.abcp.probeOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +30,17 @@ class ApiAccessTest {
         assertEquals(Probe.Ok, probeOutcome(404, """{"errorCode":301,"errorMessage":"No results"}"""))
         assertEquals(Probe.Unknown, probeOutcome(502, "<html>Bad Gateway</html>"))
         assertEquals(Probe.Unknown, probeOutcome(500, null))
+    }
+
+    @Test
+    fun probesNotOftenThanSixHours() {
+        val hour = 3_600_000L
+        val now = 1_000 * hour
+        assertTrue(probeDue(0, now))                   // ещё не проверяли
+        assertFalse(probeDue(now - 1, now))
+        assertFalse(probeDue(now - 6 * hour + 1, now))
+        assertTrue(probeDue(now - 6 * hour, now))
+        assertTrue(probeDue(now + hour, now))          // часы перевели назад — проверяем
     }
 
     @Test

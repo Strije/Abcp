@@ -12,6 +12,9 @@ import com.example.myapplication.AbcpErrorDto
 import com.example.myapplication.SessionManager
 import com.example.myapplication.server.AppServer
 import com.google.gson.Gson
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import retrofit2.Response
 import java.text.SimpleDateFormat
@@ -32,18 +35,37 @@ object ApiAccess {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("abcp_session", Context.MODE_PRIVATE) // стирается при выходе
 
-    /** Однажды всё работало — дальше не проверяем (права у клиента не отзывают). */
+    /**
+     * Однажды всё работало — дальше не проверяем совсем (флаг снимет только ответ 103, см. [denied]).
+     * Флага нет — пробы (пять запросов к ABCP) сами идут не чаще раза в 6 часов, а между ними карточка
+     * показывается по прошлому итогу. force — кнопка «Проверить» на карточке: проверяет всегда.
+     */
     suspend fun check(ctx: Context, force: Boolean = false) {
         val p = prefs(ctx)
         if (!force && p.getBoolean(OK, false)) { missing = emptyList(); return }
-        val results = runCatching { probe(SessionManager(ctx)) }.getOrNull() ?: return // нет сети — проверим в другой раз
+        if (!force && !probeDue(p.getLong(CHECKED, 0), System.currentTimeMillis())) {
+            val last = p.getString(MISSING, null).orEmpty().split(',').filter { it.isNotBlank() }
+            if (last.isNotEmpty()) {
+                missing = last
+                requestedAt = p.getLong(REQUESTED, 0).takeIf { it > 0 }
+            }
+            return
+        }
+        val session = SessionManager(ctx)
+        val login = session.login()
+        val results = runCatching { probe(session) }.getOrNull() ?: return // нет сети — проверим в другой раз
+        // Пока шли пробы, вышли из аккаунта — следующему клиенту чужие отметки не оставляем
+        if (login.isBlank() || SessionManager(ctx).login() != login) return
+        // Запросы дошли до ABCP — время запоминаем при любом ответе (и при сбое: не добивать исчерпанный лимит)
+        p.edit().putLong(CHECKED, System.currentTimeMillis()).apply()
         val found = deniedKeys(results)
         if (found.isEmpty()) {
             // Сбой ABCP (5xx и т.п.) — не знаем, есть ли права: флаг и карточку не трогаем, проверим в другой раз
             if (!accessConfirmed(results.values)) return
             missing = found
-            p.edit().putBoolean(OK, true).apply()
+            p.edit().putBoolean(OK, true).remove(MISSING).apply()
             AbcpShop.guestPrices = false // доступ включили — дальше свои цены
+            MemoryCache.history = null // пока прав не было, история запоминалась пустой
             // Была заявка — закрываем, менеджеры увидят «доступ работает»
             if (p.getLong(REQUESTED, 0) > 0) {
                 runCatching { AppServer(ctx).accessDone() }
@@ -52,9 +74,28 @@ object ApiAccess {
             }
         } else {
             missing = found
+            p.edit().putString(MISSING, found.joinToString(",")).apply()
             requestedAt = p.getLong(REQUESTED, 0).takeIf { it > 0 }
         }
     }
+
+    /**
+     * Какой-то запрос в приложении получил 103 «нет прав», хотя флаг «всё в порядке» записан (права отозвали или
+     * включены не все): снимаем флаг и время проверки и проверяем заново — карточка заявки появится снова.
+     * Не чаще раза в 6 часов: 103 может идти от метода, которого нет среди проб, и тогда пробы шли бы на каждый отказ.
+     */
+    @Synchronized
+    fun denied(ctx: Context) {
+        val app = ctx.applicationContext
+        val p = prefs(app)
+        if (!p.getBoolean(OK, false)) return // флага нет — карточкой и так управляет проверка раз в 6 часов
+        val now = System.currentTimeMillis()
+        if (!probeDue(p.getLong(DENIED, 0), now)) return
+        p.edit().remove(OK).remove(CHECKED).putLong(DENIED, now).apply()
+        scope.launch { check(app) }
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     suspend fun request(ctx: Context) {
         com.example.myapplication.Analytics.event("access_request", mapOf("missing" to missing.orEmpty().joinToString(",")))
@@ -86,7 +127,19 @@ object ApiAccess {
 
     private const val OK = "api_access_ok"
     private const val REQUESTED = "api_access_requested"
+    /** Когда последний раз шли пробы (рядом с флагом; стирается при выходе вместе с сессией) */
+    private const val CHECKED = "api_access_checked_at"
+    /** Итог последних проб — чего не хватало: по нему карточка показывается между проверками */
+    private const val MISSING = "api_access_missing"
+    /** Когда последний раз флаг снимали по ответу 103 */
+    private const val DENIED = "api_access_denied_at"
 }
+
+/** Пробы прав без флага «всё в порядке» — не чаще раза в 6 часов на устройство. */
+internal const val PROBE_INTERVAL_MS = 6L * 60 * 60 * 1000
+
+/** Пора ли снова проверять права: с прошлой проверки [lastAt] прошло 6 часов (или её не было, или часы перевели назад). */
+internal fun probeDue(lastAt: Long, now: Long): Boolean = now - lastAt !in 0 until PROBE_INTERVAL_MS
 
 /** Итог одной пробы: право есть / права нет / не знаем (сбой сервера). */
 internal enum class Probe { Ok, Denied, Unknown }

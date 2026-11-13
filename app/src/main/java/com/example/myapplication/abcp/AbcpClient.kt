@@ -33,6 +33,8 @@ object ApiClient {
             // OkHttp сам повторяет запрос при обрыве соединения — для basket/add это двойное количество.
             // Чтение повторяет performRequestWithRetry
             .retryOnConnectionFailure(false)
+            // Учёт запросов по методам — видно, на что уходит суточный лимит ABCP
+            .addInterceptor(AbcpCallCounter.interceptor)
             .addInterceptor(loggingInterceptor)
             .build()
     }
