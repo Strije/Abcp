@@ -320,8 +320,13 @@ private fun OrderDetailsContent(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val lead = statusInfo(stage.lead ?: details.status, serverStatuses)
                     // Нажатие — что значит статус и как он менялся
+                    // Позиции в разных статусах: общий статус ABCP («Готово к выдаче») обманывал бы — часть ещё едет
+                    // (телефон 13.11, заказ из 9 позиций). Тогда пишем статус самой «отстающей» позиции.
+                    val partlyReady = stage.stage in 1..3 && stage.ready > 0
                     StatusButton(
-                        details.status?.takeIf { it.isNotBlank() } ?: stage.lead ?: "Заказ в работе", details.statusColor
+                        if (partlyReady) stage.lead ?: "Заказ в работе"
+                        else details.status?.takeIf { it.isNotBlank() } ?: stage.lead ?: "Заказ в работе",
+                        if (partlyReady) null else details.statusColor
                     ) { onStatus(null) }
                     if (stage.stage == 0) {
                         // Весь заказ в отказе или возврате — шкала этапов ни к чему
@@ -340,6 +345,13 @@ private fun OrderDetailsContent(
                             lead.hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    if (partlyReady) Text(
+                        "Уже можно забрать: ${stage.ready} из ${stage.active} ${plural(stage.active, "позиции", "позиций", "позиций")}",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
                     orderWarnings(stage).forEach { w ->
                         Text(
                             w, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium,

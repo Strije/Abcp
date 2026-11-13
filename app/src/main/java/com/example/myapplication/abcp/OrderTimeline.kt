@@ -189,7 +189,9 @@ data class OrderStage(
     val actions: List<String>,
     val refused: Int,
     val active: Int,
-    val total: Int
+    val total: Int,
+    /** Сколько позиций уже лежит в магазине, пока остальные едут (заказ из нескольких позиций готовится частями) */
+    val ready: Int = 0
 )
 
 /**
@@ -217,7 +219,8 @@ fun orderStage(positionStatuses: List<String>, fromServer: Map<String, StatusInf
         actions = active.filter { it.second.kind == KIND_ACTION }.map { it.first }.distinct(),
         refused = all.count { it.second.kind == KIND_STOP && isSupplierRefusal(it.first) },
         active = active.size,
-        total = all.size
+        total = all.size,
+        ready = active.count { it.second.stage == 4 }
     )
 }
 

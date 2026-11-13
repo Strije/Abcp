@@ -258,4 +258,15 @@ class OrderTimelineTest {
         assertNull(expectedRange("2026-11-13 13:42:10", null, null))
         assertNull(expectedRange("вчера", "24", null))
     }
+
+    @Test
+    fun partlyReadyOrderCountsReadyPositions() {
+        // Телефон 13.11: заказ из 9 позиций, 3 уже в магазине, 6 едут — этап «В пути», а забрать можно 3
+        val s = orderStage(List(3) { "Готово к выдаче" } + List(6) { "В пути (товар заказан)" })
+        assertEquals(3, s.stage)
+        assertEquals(3, s.ready)
+        assertEquals(9, s.active)
+        // Всё готово — это уже этап 4, «частично» не пишем
+        assertEquals(4, orderStage(listOf("Готово к выдаче", "Готово к выдаче")).stage)
+    }
 }
